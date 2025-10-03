@@ -39,6 +39,7 @@ BASE_BRANCH=""
 MANIFEST_FILE=""
 FORCE_DEPLOY=false
 DRY_RUN=false
+CREATE_GIT_TAG=false
 INTERACTIVE_MODE=false
 VERBOSE=false
 QUIET=false
@@ -76,6 +77,7 @@ OPTIONS:
     -v, --verbose              Enable verbose output
     -q, --quiet                Suppress non-essential output
     -i, --interactive          Enable interactive mode for deployments
+    -gt, --git-tag             Create a git tag upon successful deployment
     --tag-prefix <prefix>       Tag prefix override (default: auto-detected from branch or ${TAG_PREFIX})
     --deployment-dir <dir>      Deployment directory (default: ${DEPLOYMENT_DIR})
 
@@ -168,6 +170,10 @@ parse_args() {
                 INTERACTIVE_MODE=true
                 shift
                 ;;
+            -gt|--git-tag)
+                CREATE_GIT_TAG=true
+                shift
+                ;;
             -h|--help)
                 usage
                 exit 0
@@ -231,6 +237,10 @@ main() {
     fi
     if [ "$QUIET" = true ]; then
         export CGEAA_QUIET=true
+    fi
+
+    if [ "$CREATE_GIT_TAG" = true ]; then
+        export CREATE_GIT_TAG=true
     fi
 
     log_info "CGEAA v${CGEAA_VERSION} - Starting ${COMMAND}"

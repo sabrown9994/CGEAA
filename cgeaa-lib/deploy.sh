@@ -87,8 +87,12 @@ execute_deployment() {
     # Perform deployment
     if [ -f "$MANIFEST_FILE" ]; then
         if perform_deployment "$MANIFEST_FILE" "$test_classes"; then
-            # Tag the deployment if successful
-            tag_deployment
+            # Tag the deployment if successful and requested
+            if [ "$CREATE_GIT_TAG" = true ]; then
+                tag_deployment
+            else
+                log_info "Skipping git tag creation as --git-tag flag was not provided."
+            fi
         else
             log_error "Deployment failed!"
             cleanup_temp_files
