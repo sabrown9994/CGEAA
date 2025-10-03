@@ -1,0 +1,251 @@
+#!/bin/bash
+
+# CGEAA - CarGurus Enterprise Applications Automation
+# Salesforce deployment and validation automation suite
+# Version: 1.0.0
+
+set -e
+
+# Script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CGEAA_LIB_DIR="${SCRIPT_DIR}/cgeaa-lib"
+
+# Source utility functions
+source "${CGEAA_LIB_DIR}/utils.sh"
+source "${CGEAA_LIB_DIR}/config.sh"
+source "${CGEAA_LIB_DIR}/orgs.sh"
+source "${CGEAA_LIB_DIR}/branch.sh"
+source "${CGEAA_LIB_DIR}/default-org.sh"
+
+# Version information
+CGEAA_VERSION="1.0.0"
+
+# Default configuration - detect SF CLI default org
+DEFAULT_ORG=$(get_sensible_default_org)
+DEFAULT_TEST_LEVEL="RunLocalTests"
+DEFAULT_TIMEOUT="360"
+DEFAULT_BASE_BRANCH="main"
+
+# Global variables
+COMMAND=""
+TARGET_ORG=""
+TEST_LEVEL=""
+TIMEOUT=""
+BASE_BRANCH=""
+MANIFEST_FILE=""
+FORCE_DEPLOY=false
+DRY_RUN=false
+VERBOSE=false
+QUIET=false
+TAG_PREFIX="CGEAA"
+DEPLOYMENT_DIR="Bedrock"
+
+# Usage information
+usage() {
+    cat << EOF
+CGEAA - CarGurus Enterprise Applications Automation v${CGEAA_VERSION}
+
+USAGE:
+    cgeaa <command> [options]
+
+COMMANDS:
+    validate    Validate changes without deploying
+    deploy      Deploy changes to target org
+    orgs        List available Salesforce org aliases
+    branch      Show current branch and tag information
+    config      Show current configuration
+    help        Show this help message
+    version     Show version information
+
+OPTIONS:
+    -o, --org <org>             Target org alias (default: auto-detected from SF CLI)
+    -t, --test-level <level>    Test level: NoTestRun, RunSpecifiedTests, RunLocalTests, RunAllTestsInOrg (default: ${DEFAULT_TEST_LEVEL})
+    -w, --timeout <seconds>     Deployment timeout in seconds (default: ${DEFAULT_TIMEOUT})
+    -b, --base-branch <branch>  Base branch for comparison (default: ${DEFAULT_BASE_BRANCH})
+    -m, --manifest <file>       Use specific manifest file instead of generating one
+    -f, --force                 Force deployment even if no changes detected
+    -d, --dry-run              Show what would be deployed without actually deploying
+    -v, --verbose              Enable verbose output
+    -q, --quiet                Suppress non-essential output
+    --tag-prefix <prefix>       Tag prefix override (default: auto-detected from branch or ${TAG_PREFIX})
+    --deployment-dir <dir>      Deployment directory (default: ${DEPLOYMENT_DIR})
+
+EXAMPLES:
+    cgeaa validate                                    # Validate changes against default org
+    cgeaa validate -o BRInt -t RunLocalTests          # Validate with specific org and test level
+    cgeaa deploy -o BRStaging -t RunAllTestsInOrg     # Deploy to staging with all tests
+    cgeaa deploy -o Playground -b develop -f          # Force deploy to playground from develop branch
+    cgeaa validate --dry-run -v                       # Show what would be validated (verbose)
+    cgeaa orgs                                        # List all available authenticated orgs
+
+BRANCH-BASED TAGGING:
+    Feature/PGTM-2270 → Tags: PGTM-2270-0001, PGTM-2270-0002, etc.
+    Other branches    → Tags: CGEAA-0001, CGEAA-0002, etc.
+    Use 'cgeaa branch' to view current branch and tag information.
+
+TEST LEVELS:
+    NoTestRun           - No tests run (not recommended for production)
+    RunSpecifiedTests   - Run only specified test classes
+    RunLocalTests       - Run all local tests (default)
+    RunAllTestsInOrg    - Run all tests in the org
+
+EOF
+}
+
+# Version information
+version() {
+    echo "CGEAA v${CGEAA_VERSION}"
+    echo "CarGurus Enterprise Applications Automation"
+}
+
+# Parse command line arguments
+parse_args() {
+    if [ $# -eq 0 ]; then
+        usage
+        exit 1
+    fi
+
+    COMMAND="$1"
+    shift
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -o|--org)
+                TARGET_ORG="$2"
+                shift 2
+                ;;
+            -t|--test-level)
+                TEST_LEVEL="$2"
+                shift 2
+                ;;
+            -w|--timeout)
+                TIMEOUT="$2"
+                shift 2
+                ;;
+            -b|--base-branch)
+                BASE_BRANCH="$2"
+                shift 2
+                ;;
+            -m|--manifest)
+                MANIFEST_FILE="$2"
+                shift 2
+                ;;
+            -f|--force)
+                FORCE_DEPLOY=true
+                shift
+                ;;
+            -d|--dry-run)
+                DRY_RUN=true
+                shift
+                ;;
+            -v|--verbose)
+                VERBOSE=true
+                shift
+                ;;
+            -q|--quiet)
+                QUIET=true
+                shift
+                ;;
+            --tag-prefix)
+                TAG_PREFIX="$2"
+                shift 2
+                ;;
+            --deployment-dir)
+                DEPLOYMENT_DIR="$2"
+                shift 2
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                usage
+                exit 1
+                ;;
+        esac
+    done
+
+    # Set defaults if not provided
+    TARGET_ORG="${TARGET_ORG:-$DEFAULT_ORG}"
+    TEST_LEVEL="${TEST_LEVEL:-$DEFAULT_TEST_LEVEL}"
+    TIMEOUT="${TIMEOUT:-$DEFAULT_TIMEOUT}"
+    BASE_BRANCH="${BASE_BRANCH:-$DEFAULT_BASE_BRANCH}"
+}
+
+# Validate command
+validate_command() {
+    case "$COMMAND" in
+        validate|deploy)
+            ;;
+        orgs)
+            list_orgs
+            exit 0
+            ;;
+        branch)
+            show_branch_info
+            exit 0
+            ;;
+        config)
+            show_config
+            exit 0
+            ;;
+        help)
+            usage
+            exit 0
+            ;;
+        version)
+            version
+            exit 0
+            ;;
+        *)
+            log_error "Invalid command: $COMMAND"
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+# Main execution function
+main() {
+    parse_args "$@"
+    validate_command
+
+    # Set logging levels
+    if [ "$VERBOSE" = true ]; then
+        export CGEAA_VERBOSE=true
+    fi
+    if [ "$QUIET" = true ]; then
+        export CGEAA_QUIET=true
+    fi
+
+    log_info "CGEAA v${CGEAA_VERSION} - Starting ${COMMAND}"
+    log_info "Target Org: ${TARGET_ORG}"
+    log_info "Test Level: ${TEST_LEVEL}"
+    log_info "Base Branch: ${BASE_BRANCH}"
+
+    # Change to deployment directory
+    if [ ! -d "$DEPLOYMENT_DIR" ]; then
+        log_error "Deployment directory not found: $DEPLOYMENT_DIR"
+        exit 1
+    fi
+
+    cd "$DEPLOYMENT_DIR"
+
+    # Execute command
+    case "$COMMAND" in
+        validate)
+            source "${CGEAA_LIB_DIR}/validate.sh"
+            execute_validation
+            ;;
+        deploy)
+            source "${CGEAA_LIB_DIR}/deploy.sh"
+            execute_deployment
+            ;;
+    esac
+
+    log_success "${COMMAND} completed successfully!"
+}
+
+# Execute main function with all arguments
+main "$@"
