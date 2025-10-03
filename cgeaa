@@ -44,7 +44,7 @@ INTERACTIVE_MODE=false
 VERBOSE=false
 QUIET=false
 TAG_PREFIX="CGEAA"
-DEPLOYMENT_DIR="Bedrock"
+DEPLOYMENT_DIR="."
 
 # Usage information
 usage() {
@@ -79,7 +79,7 @@ OPTIONS:
     -i, --interactive          Enable interactive mode for deployments
     -gt, --git-tag             Create a git tag upon successful deployment
     --tag-prefix <prefix>       Tag prefix override (default: auto-detected from branch or ${TAG_PREFIX})
-    --deployment-dir <dir>      Deployment directory (default: ${DEPLOYMENT_DIR})
+    --deployment-dir <dir>      Deployment directory (default: current directory)
 
 EXAMPLES:
     cgeaa validate                                    # Validate changes against default org
@@ -162,6 +162,7 @@ parse_args() {
             --tag-prefix)
                 TAG_PREFIX="$2"
                 shift 2
+                ;;
             --deployment-dir)
                 DEPLOYMENT_DIR="$2"
                 shift 2
@@ -177,7 +178,7 @@ parse_args() {
             -h|--help)
                 usage
                 exit 0
-{{ ... }}
+                ;;
             *)
                 log_error "Unknown option: $1"
                 usage

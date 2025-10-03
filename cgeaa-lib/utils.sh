@@ -175,8 +175,9 @@ get_changed_files() {
 }
 
 # Filter files for Salesforce force-app directory
+# Supports both 'force-app/' and 'Bedrock/force-app/' (or any parent directory)
 filter_force_app_files() {
-    grep '^force-app/' || true
+    grep -E '(^|/)force-app/' || true
 }
 
 # Generate package manifest

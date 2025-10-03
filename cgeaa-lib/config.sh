@@ -13,7 +13,7 @@ DEFAULT_TEST_LEVEL="RunLocalTests"
 DEFAULT_TIMEOUT="360"
 DEFAULT_BASE_BRANCH="main"
 DEFAULT_TAG_PREFIX="CGEAA"
-DEFAULT_DEPLOYMENT_DIR="Bedrock"
+DEFAULT_DEPLOYMENT_DIR="."
 DEFAULT_AUTO_CLEANUP="true"
 DEFAULT_ENABLE_NOTIFICATIONS="false"
 DEFAULT_MAX_DEPLOY_WAIT="3600"
@@ -197,7 +197,27 @@ validate_config() {
     return 0
 }
 
-# Show current configuration
+# Add or update a config value in a file
+add_or_update_config() {
+    local key="$1"
+    local value="$2"
+    local file="$3"
+
+    if [ ! -f "$file" ]; then
+        echo "$key=$value" > "$file"
+        return
+    fi
+
+    if grep -q "^$key=" "$file"; then
+        # Key exists, update it
+        sed -i '' "s,^$key=.*,$key=$value,g" "$file"
+    else
+        # Key does not exist, add it
+        echo "$key=$value" >> "$file"
+    fi
+}
+
+# Show the current configuration
 show_config() {
     echo
     log_info "=== CGEAA Configuration ==="

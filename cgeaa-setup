@@ -47,10 +47,11 @@ perform_global_install() {
     # 3. Create a temporary modified cgeaa script
     log_info "Configuring cgeaa script for global use..."
     TEMP_CGEAA_SCRIPT=$(mktemp)
-    # Create a version of the script that points to the global lib dir
-    sed 's|CGEAA_LIB_DIR=.*|CGEAA_LIB_DIR="/usr/local/share/cgeaa/cgeaa-lib"|' "${SCRIPT_DIR}/cgeaa" > "$TEMP_CGEAA_SCRIPT"
-    # Also remove the SCRIPT_DIR definition as it's no longer needed in the global script
-    sed -i '' '/SCRIPT_DIR/d' "$TEMP_CGEAA_SCRIPT"
+    # By targeting specific line numbers, we can precisely modify the script for global installation.
+    # This is the most reliable way to avoid regex errors.
+    # 1. Delete line 10 (SCRIPT_DIR=...)
+    # 2. Replace line 11 (CGEAA_LIB_DIR=...) with the global path.
+    sed -e '10d' -e '11s|.*|CGEAA_LIB_DIR="/usr/local/share/cgeaa/cgeaa-lib"|' "${SCRIPT_DIR}/cgeaa" > "$TEMP_CGEAA_SCRIPT"
 
     # 4. Copy the modified script to /usr/local/bin
     log_info "Copying cgeaa to /usr/local/bin..."
@@ -59,7 +60,7 @@ perform_global_install() {
 
     # 5. Make it executable
     log_info "Setting execution permissions..."
-    sudo chmod +x /usr/local/bin/cgeaa
+    sudo chmod 755 /usr/local/bin/cgeaa
 
     # 6. Save source repo path for updates
     log_info "Saving source repository path for future updates..."
@@ -99,9 +100,10 @@ fi
 echo "Setting up CGEAA environment..."
 echo
 
-# Make sure cgeaa script is executable
+# Make sure core scripts are executable
 chmod +x cgeaa
-echo "✓ Made cgeaa script executable"
+chmod +x cgeaa-uninstall
+echo "✓ Made core scripts executable"
 
 # Create global config directory
 GLOBAL_CONFIG_DIR="$HOME/.cgeaa"
