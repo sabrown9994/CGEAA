@@ -16,20 +16,78 @@ source "${CGEAA_LIB_DIR}/config.sh"
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
+RED='\033[0;31m'
 NC='\033[0m'
 
 echo -e "${BLUE}"
 cat << 'EOF'
-   ______ _____ ______ ___          
-  / ____// ____// ____//   |   /\    
- / /    / / __ / __/  / /| |  /  \   
-/ /___ / /_/ // /___ / ___ | / /\ \  
-\____/ \____//_____//_/  |_|/_/  \_\ 
+   ______ _____ ______ ___
+  / ____// ____// ____//   |   /\
+ / /    / / __ / __/  / /| |  /  \
+/ /___ / /_/ // /___ / ___ | / /\ \
+\____/ \____//_____//_/  |_|/_/  \_\
 
 CarGurus Enterprise Applications Automation
 Setup & Configuration
 EOF
 echo -e "${NC}"
+
+# --- Installation Function ---
+perform_global_install() {
+    log_step "Performing Global Installation"
+
+    # 1. Create global library directory
+    log_info "Creating library directory at /usr/local/share/cgeaa..."
+    sudo mkdir -p /usr/local/share/cgeaa
+
+    # 2. Copy library files
+    log_info "Copying cgeaa-lib contents..."
+    sudo cp -r "${SCRIPT_DIR}/cgeaa-lib" /usr/local/share/cgeaa/
+
+    # 3. Create a temporary modified cgeaa script
+    log_info "Configuring cgeaa script for global use..."
+    TEMP_CGEAA_SCRIPT=$(mktemp)
+    # Create a version of the script that points to the global lib dir
+    sed 's|CGEAA_LIB_DIR=.*|CGEAA_LIB_DIR="/usr/local/share/cgeaa/cgeaa-lib"|' "${SCRIPT_DIR}/cgeaa" > "$TEMP_CGEAA_SCRIPT"
+    # Also remove the SCRIPT_DIR definition as it's no longer needed in the global script
+    sed -i '' '/SCRIPT_DIR/d' "$TEMP_CGEAA_SCRIPT"
+
+    # 4. Copy the modified script to /usr/local/bin
+    log_info "Copying cgeaa to /usr/local/bin..."
+    sudo cp "$TEMP_CGEAA_SCRIPT" /usr/local/bin/cgeaa
+    rm "$TEMP_CGEAA_SCRIPT"
+
+    # 5. Make it executable
+    log_info "Setting execution permissions..."
+    sudo chmod +x /usr/local/bin/cgeaa
+
+    # 6. Save source repo path for updates
+    log_info "Saving source repository path for future updates..."
+    add_or_update_config "source_repo_path" "$SCRIPT_DIR" "$GLOBAL_CONFIG_FILE"
+
+    log_success "Global installation complete!"
+}
+
+install_globally() {
+    echo
+    echo -e "${YELLOW}--- Global Installation ---${NC}"
+    read -p "Do you want to install 'cgeaa' globally to /usr/local/bin? (y/n) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Skipping global installation."
+        echo
+        echo -e "${YELLOW}Optional: Add CGEAA to your PATH${NC}"
+        echo "To use 'cgeaa' from anywhere, add this line to your ~/.bashrc or ~/.zshrc:"
+        echo "export PATH=\"$SCRIPT_DIR:\$PATH\""
+        return
+    fi
+
+    perform_global_install
+    echo "You can now run 'cgeaa' from any directory. Open a new terminal to start."
+}
+
+
+# --- Main Setup Logic ---
 
 # Check if we're in the right directory
 if [ ! -f "cgeaa" ]; then
@@ -77,26 +135,22 @@ else
     echo "✓ Project configuration file already exists"
 fi
 
-# Add cgea to PATH suggestion
-echo
-echo -e "${YELLOW}Optional: Add CGEAA to your PATH${NC}"
-echo "To use 'cgeaa' from anywhere, add this line to your ~/.bashrc or ~/.zshrc:"
-echo "export PATH=\"$SCRIPT_DIR:\$PATH\""
-echo
+# --- Run Installation ---
+install_globally
 
 # Check dependencies
+echo
 echo "Checking dependencies..."
 check_dependencies
 echo "✓ All dependencies are available"
 
 # Test basic functionality
 echo
-echo "Testing CGEAA installation..."
-if ./cgeaa version > /dev/null 2>&1; then
+echo "Testing CGEAA..."
+if cgeaa version > /dev/null 2>&1; then
     echo "✓ CGEAA is working correctly"
 else
-    echo -e "${RED}✗ CGEAA test failed${NC}"
-    exit 1
+    echo -e "${RED}✗ CGEAA test failed. If you chose global install, try opening a new terminal.${NC}"
 fi
 
 echo
@@ -111,7 +165,6 @@ echo "2. Authenticate to your Salesforce orgs:"
 echo "   sf auth web login --alias targetOrg"
 echo
 echo "3. Try running CGEAA:"
-echo "   ./cgeaa validate --dry-run"
-echo "   ./cgeaa deploy --dry-run"
+echo "   cgeaa validate --dry-run"
 echo
-echo "For help, run: ./cgeaa help"
+echo "For help, run: cgeaa help"

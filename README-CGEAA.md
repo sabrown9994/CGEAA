@@ -14,6 +14,10 @@ CGEAA (CarGurus Enterprise Applications Automation) is a powerful command-line t
 - **Automated Change Detection**: Uses git diff to identify modified Salesforce components
 - **Intelligent Test Selection**: Automatically finds relevant test classes using coverage analysis
 - **Flexible Deployment Options**: Support for validation-only or full deployment operations
+- **Interactive Mode**: Guided prompts for `validate` and `deploy` commands.
+- **Branch-Based Rollback**: Safely revert changes from a feature branch.
+- **Org Management**: Quickly open Salesforce orgs in a browser.
+- **Self-Updating**: Keep the tool up-to-date with a simple `update` command.
 - **Comprehensive Logging**: Verbose, quiet, and debug logging modes
 - **Configuration Management**: Global and project-specific configuration files
 - **Dry Run Mode**: Preview operations without executing them
@@ -59,6 +63,12 @@ sf auth web login --alias Playground
 
 # Deploy to integration sandbox (auto-detects story from branch)
 ./cgeaa deploy -o BRInt
+
+# Open an org in the browser
+./cgeaa open -o BRInt
+
+# Run a deployment interactively
+./cgeaa deploy --interactive
 
 # Deploy to staging with all tests
 ./cgeaa deploy -o BRStaging -t RunAllTestsInOrg
@@ -138,6 +148,9 @@ parallel_jobs=1
 - `config` - Show current configuration
 - `help` - Show help message
 - `version` - Show version information
+- `open` - Open a Salesforce org in your browser
+- `rollback` - Revert changes from the current branch on an org
+- `update` - Update CGEAA to the latest version
 
 ### Options
 
@@ -154,6 +167,7 @@ parallel_jobs=1
 | `-q, --quiet` | Suppress non-essential output | `false` |
 | `--tag-prefix <prefix>` | Tag prefix for deployment tracking | `CGEAA` |
 | `--deployment-dir <dir>` | Deployment directory | `Bedrock` |
+| `-i, --interactive` | Enable interactive mode for `validate` and `deploy` | `false` |
 
 ### Test Levels
 
@@ -250,6 +264,12 @@ PGTM-2270-2, PGTM-2270-0010, PGTM-2270-0011
 
 # Deploy changes since specific branch
 ./cgeaa deploy -b develop -o BRStaging
+
+# Roll back changes from the current branch on the staging org
+./cgeaa rollback -o BRStaging
+
+# Update the CGEAA tool itself
+./cgeaa update
 ```
 
 ### Workflow Integration
@@ -317,6 +337,38 @@ Multiple logging levels are supported:
 - **ERROR**: Critical errors requiring attention
 - **DEBUG**: Detailed debugging information (verbose mode)
 - **STEP**: Major operation steps
+
+## Advanced Features
+
+### Branch-Based Rollback
+
+The `rollback` command provides a safe way to revert changes on an org. It works by:
+1. Identifying all files changed in your current feature branch compared to `main`.
+2. Creating a temporary deployment package containing the `main` version of only those changed files.
+3. Deploying this package to the target org.
+
+This surgically reverts the feature without affecting other components.
+
+```bash
+# From your feature branch, revert the changes on the Staging org
+./cgeaa rollback -o BRStaging
+```
+
+**Note**: This command is disabled on primary branches like `main`, `master`, or `develop` to prevent accidental rollbacks.
+
+### Self-Updating
+
+To ensure you and your team are always using the latest version of CGEAA, you can use the `update` command. This command will:
+1. Navigate to the source git repository for CGEAA.
+2. Pull the latest changes.
+3. Re-run the global installation process.
+
+```bash
+# Update CGEAA to the latest version
+./cgeaa update
+```
+
+**Note**: This feature requires CGEAA to have been installed globally via the `./cgeaa-setup` script, as it needs the source repository path.
 
 ## Troubleshooting
 
