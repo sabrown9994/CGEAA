@@ -17,20 +17,47 @@ execute_rollback() {
         exit 1
     fi
 
-    log_info "Finding files changed in branch '$current_branch' compared to 'main'..."
-    # Get changed files and filter for force-app only (bash 3.2 compatible)
+    # Determine rollback target branch
+    local rollback_branch="$ROLLBACK_BRANCH"
+    
+    if [ -z "$rollback_branch" ]; then
+        # Prompt user for target branch to rollback to
+        echo
+        log_info "Current branch: $current_branch"
+        echo
+        
+        read -p "Enter the branch to rollback to (default: main): " rollback_branch
+        rollback_branch="${rollback_branch:-main}"
+    else
+        log_info "Rollback target branch: $rollback_branch (specified via --rollback-to)"
+    fi
+    
+    # Verify the branch exists
+    if ! git rev-parse --verify "$rollback_branch" >/dev/null 2>&1; then
+        log_error "Branch '$rollback_branch' does not exist."
+        exit 1
+    fi
+    
+    # Get the base branch to compare against (typically main)
+    local base_branch="${BASE_BRANCH:-main}"
+    
+    log_info "Finding files changed in '$current_branch' compared to '$base_branch' (including uncommitted changes)..."
+    log_info "These files will be deployed from '$rollback_branch' version."
+    
+    # Get changed files from base branch to working directory (includes uncommitted changes)
+    # Uses same logic as get_changed_files in utils.sh
     local changed_files=()
     while IFS= read -r line; do
         changed_files+=("$line")
-    done < <(git diff --name-only main...HEAD | grep -E '(^|/)force-app/')
+    done < <(git diff --name-only ${base_branch} | grep -E '(^|/)force-app/')
 
     if [ ${#changed_files[@]} -eq 0 ]; then
-        log_warning "No file changes detected between '$current_branch' and 'main'. Nothing to roll back."
+        log_warning "No file changes detected between '$current_branch' and '$base_branch'. Nothing to roll back."
         exit 0
     fi
 
-    log_warning "This will revert all changes made in this branch on the org '$TARGET_ORG'."
-    log_info "The following files will be reverted to their version in 'main':"
+    log_warning "This will deploy the '$rollback_branch' version of your changed files to '$TARGET_ORG'."
+    log_info "Files changed in '$current_branch' (will be reverted to '$rollback_branch' version):"
     for file in "${changed_files[@]}"; do
         echo "  - $file"
     done
@@ -48,7 +75,7 @@ execute_rollback() {
     temp_dir=$(mktemp -d)
     trap 'rm -rf -- "$temp_dir"' EXIT
 
-    log_info "Staging reverted files in a temporary directory: $temp_dir"
+    log_info "Staging reverted files from '$rollback_branch' in a temporary directory: $temp_dir"
     for file in "${changed_files[@]}"; do
         # Strip any parent directory prefix (e.g., Bedrock/) to get relative path from force-app
         local target_path="$file"
@@ -59,8 +86,8 @@ execute_rollback() {
         
         # Ensure the directory structure exists in the temp folder
         mkdir -p "$temp_dir/$(dirname "$target_path")"
-        # Copy the version from main into the temp folder (using original path for git show)
-        git show "main:$file" > "$temp_dir/$target_path"
+        # Copy the version from rollback_branch into the temp folder (using original path for git show)
+        git show "${rollback_branch}:$file" > "$temp_dir/$target_path"
     done
 
     log_info "Generating package.xml for rollback..."

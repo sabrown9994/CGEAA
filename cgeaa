@@ -41,6 +41,7 @@ TEST_LEVEL=""
 TEST_CLASSES=""
 TIMEOUT=""
 BASE_BRANCH=""
+ROLLBACK_BRANCH=""
 MANIFEST_FILE=""
 FORCE_DEPLOY=false
 DRY_RUN=false
@@ -77,6 +78,7 @@ OPTIONS:
     --tests <classes>           Comma-separated test class names (required for RunSpecifiedTests)
     -w, --timeout <seconds>     Deployment timeout in seconds (default: ${DEFAULT_TIMEOUT})
     -b, --base-branch <branch>  Base branch for comparison (default: ${DEFAULT_BASE_BRANCH})
+    --rollback-to <branch>      Target branch for rollback (default: main, interactive prompt if not specified)
     -m, --manifest <file>       Use specific manifest file instead of generating one
     -f, --force                 Force deployment even if no changes detected
     -d, --dry-run              Show what would be deployed without actually deploying
@@ -96,7 +98,8 @@ EXAMPLES:
     cgeaa validate --dry-run -v                       # Show what would be validated (verbose)
     cgeaa orgs                                        # List all available authenticated orgs
     cgeaa open -o BRInt                               # Open the BRInt org in a browser
-    cgeaa rollback -o BRStaging                       # Roll back the last deployment on BRStaging
+    cgeaa rollback -o BRStaging                       # Roll back changes (interactive prompt for target branch)
+    cgeaa rollback -o BRStaging --rollback-to develop # Roll back to develop branch
 
 BRANCH-BASED TAGGING:
     Feature/PGTM-2270 → Tags: PGTM-2270-0001, PGTM-2270-0002, etc.
@@ -148,6 +151,10 @@ parse_args() {
                 ;;
             -b|--base-branch)
                 BASE_BRANCH="$2"
+                shift 2
+                ;;
+            --rollback-to)
+                ROLLBACK_BRANCH="$2"
                 shift 2
                 ;;
             -m|--manifest)

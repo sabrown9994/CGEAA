@@ -161,6 +161,7 @@ parallel_jobs=1
 | `--tests <classes>` | Comma-separated test class names (required for `RunSpecifiedTests`) | Auto-detected |
 | `-w, --timeout <seconds>` | Deployment timeout | `360` |
 | `-b, --base-branch <branch>` | Base branch for comparison | `main` |
+| `--rollback-to <branch>` | Target branch for rollback | `main` (interactive prompt if not specified) |
 | `-m, --manifest <file>` | Use specific manifest file | Auto-generated |
 | `-f, --force` | Force deployment even if no changes | `false` |
 | `-d, --dry-run` | Show what would be deployed | `false` |
@@ -279,8 +280,11 @@ PGTM-2270-2, PGTM-2270-0010, PGTM-2270-0011
 # Validate without running tests (using dry-run deployment)
 ./cgeaa validate -t NoTestRun -o BRInt
 
-# Roll back changes from the current branch on the staging org
+# Roll back changes from the current branch on the staging org (interactive prompt for target branch)
 ./cgeaa rollback -o BRStaging
+
+# Roll back to a specific branch without prompting
+./cgeaa rollback -o BRStaging --rollback-to develop
 
 # Update the CGEAA tool itself
 ./cgeaa update
@@ -357,21 +361,42 @@ Multiple logging levels are supported:
 ### Branch-Based Rollback
 
 The `rollback` command provides a safe way to revert changes on an org. It works by:
-1. Identifying all files changed in your current feature branch compared to `main`.
-2. Creating a temporary deployment package containing the `main` version of only those changed files.
-3. Deploying this package to the target org.
+1. Identifying all files changed in your current feature branch compared to the base branch (default: `main`).
+2. Prompting you to select which branch to rollback to (or use `--rollback-to` to specify).
+3. Creating a temporary deployment package containing the rollback target's version of only those changed files.
+4. Deploying this package to the target org.
 
-This surgically reverts the feature without affecting other components.
+This ensures only YOUR feature branch changes are reverted, leaving other work untouched. The file list is calculated from your changes vs `main`, but the file contents come from the rollback target branch.
 
 ```bash
-# From your feature branch, revert the changes on the Staging org
+# From your feature branch, revert the changes on the Staging org (interactive prompt)
 ./cgeaa rollback -o BRStaging
+
+# Rollback to a specific branch without prompting
+./cgeaa rollback -o BRStaging --rollback-to develop
+
+# Rollback to main branch
+./cgeaa rollback -o BRStaging --rollback-to main
+
+# Use a different base branch for comparison (calculate changed files from develop instead of main)
+./cgeaa rollback -o BRStaging --rollback-to main -b develop
+
+# Dry run to see what would be rolled back
+./cgeaa rollback -o BRStaging --rollback-to main --dry-run
 ```
+
+**Example Scenario:**
+- You're on `Feature/ABC-123` which branched from `main`
+- You modified 5 files in your feature branch
+- You want to rollback to `develop` (which has different changes than `main`)
+- The tool will:
+  1. Calculate which 5 files YOU changed (comparing to `main`)
+  2. Get the `develop` version of those 5 files
+  3. Deploy only those 5 files from `develop`
 
 **Note**: This command is disabled on primary branches like `main`, `master`, or `develop` to prevent accidental rollbacks.
 
 ### Self-Updating
-
 To ensure you and your team are always using the latest version of CGEAA, you can use the `update` command. This command will:
 1. Navigate to the source git repository for CGEAA.
 2. Pull the latest changes.
