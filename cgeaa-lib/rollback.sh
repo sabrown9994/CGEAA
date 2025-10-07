@@ -18,7 +18,11 @@ execute_rollback() {
     fi
 
     log_info "Finding files changed in branch '$current_branch' compared to 'main'..."
-    mapfile -t changed_files < <(git diff --name-only main...HEAD)
+    # Get changed files and filter for force-app only (bash 3.2 compatible)
+    local changed_files=()
+    while IFS= read -r line; do
+        changed_files+=("$line")
+    done < <(git diff --name-only main...HEAD | grep -E '(^|/)force-app/')
 
     if [ ${#changed_files[@]} -eq 0 ]; then
         log_warning "No file changes detected between '$current_branch' and 'main'. Nothing to roll back."
@@ -45,16 +49,19 @@ execute_rollback() {
     trap 'rm -rf -- "$temp_dir"' EXIT
 
     log_info "Staging reverted files in a temporary directory: $temp_dir"
-    local manifest_content=""
     for file in "${changed_files[@]}"; do
+        # Strip any parent directory prefix (e.g., Bedrock/) to get relative path from force-app
+        local target_path="$file"
+        if [[ "$file" == *"/force-app/"* ]]; then
+            target_path="${file##*/force-app/}"
+            target_path="force-app/$target_path"
+        fi
+        
         # Ensure the directory structure exists in the temp folder
-        mkdir -p "$temp_dir/$(dirname "$file")"
-        # Copy the version from main into the temp folder
-        git show "main:$file" > "$temp_dir/$file"
-        manifest_content+="$temp_dir/$file\n"
+        mkdir -p "$temp_dir/$(dirname "$target_path")"
+        # Copy the version from main into the temp folder (using original path for git show)
+        git show "main:$file" > "$temp_dir/$target_path"
     done
-
-    echo -e "$manifest_content" > "$temp_dir/manifest.txt"
 
     log_info "Generating package.xml for rollback..."
     sf project generate manifest --source-dir "$temp_dir" --name "RollbackPackage" --output-dir "$temp_dir"
