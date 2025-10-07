@@ -440,13 +440,25 @@ You can customize the tag prefix using `--tag-prefix` or by setting `tag_prefix`
 ### Self-Updating
 To ensure you and your team are always using the latest version of CGEAA, you can use the `update` command. This command will:
 1. Navigate to the source git repository for CGEAA.
-2. Pull the latest changes.
-3. Re-run the global installation process.
+2. Switch to the specified branch (default: `main`).
+3. Pull the latest changes from that branch.
+4. Re-run the global installation process.
 
 ```bash
-# Update CGEAA to the latest version
-./cgeaa update
+# Update CGEAA from main branch (stable)
+cgeaa update
+
+# Update from a beta/testing branch
+cgeaa update -b beta
+
+# Update from develop branch
+cgeaa update -b develop
 ```
+
+**Branch Selection:**
+- Use `-b <branch>` to specify which branch to update from
+- Default is `main` for stable releases
+- Use `beta` or `develop` branches to test new features before they're released
 
 **Note**: This feature requires CGEAA to have been installed globally via the `./cgeaa-setup` script, as it needs the source repository path.
 

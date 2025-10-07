@@ -18,18 +18,21 @@ execute_update() {
     log_info "Navigating to source repository: $source_repo_path"
     cd "$source_repo_path"
 
-    # Ensure we're on main branch for stable updates
+    # Use the specified branch from -b flag, or default to main
+    local target_branch="${BASE_BRANCH:-main}"
+    
+    # Ensure we're on the target branch
     local current_branch=$(git rev-parse --abbrev-ref HEAD)
-    if [ "$current_branch" != "main" ]; then
-        log_warning "Currently on branch '$current_branch', switching to 'main' for update..."
-        if ! git checkout main; then
-            log_error "Failed to switch to main branch. Please resolve any conflicts and try again."
+    if [ "$current_branch" != "$target_branch" ]; then
+        log_warning "Currently on branch '$current_branch', switching to '$target_branch' for update..."
+        if ! git checkout "$target_branch"; then
+            log_error "Failed to switch to '$target_branch' branch. Please resolve any conflicts and try again."
             exit 1
         fi
     fi
 
-    log_info "Pulling latest changes from main branch..."
-    if ! git pull origin main; then
+    log_info "Pulling latest changes from '$target_branch' branch..."
+    if ! git pull origin "$target_branch"; then
         log_error "Failed to pull latest changes from git. Please resolve any conflicts and try again."
         exit 1
     fi

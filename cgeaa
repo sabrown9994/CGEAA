@@ -74,7 +74,7 @@ OPTIONS:
     -t, --test-level <level>    Test level: NoTestRun, RunSpecifiedTests, RunLocalTests, RunAllTestsInOrg (default: ${DEFAULT_TEST_LEVEL})
     --tests <classes>           Comma-separated test class names (required for RunSpecifiedTests)
     -w, --timeout <seconds>     Deployment timeout in seconds (default: ${DEFAULT_TIMEOUT})
-    -b, --base-branch <branch>  Base branch for comparison (default: ${DEFAULT_BASE_BRANCH})
+    -b, --base-branch <branch>  Base branch for comparison (validate/deploy) or update source (update) (default: ${DEFAULT_BASE_BRANCH})
     --rollback-to <branch>      Target branch for rollback (default: main, interactive prompt if not specified)
     -m, --manifest <file>       Use specific manifest file instead of generating one
     -f, --force                 Force deployment even if no changes detected
@@ -97,6 +97,8 @@ EXAMPLES:
     cgeaa open -o BRInt                               # Open the BRInt org in a browser
     cgeaa rollback -o BRStaging                       # Roll back changes (interactive prompt for target branch)
     cgeaa rollback -o BRStaging --rollback-to develop # Roll back to develop branch
+    cgeaa update                                      # Update CGEAA from main branch
+    cgeaa update -b beta                              # Update CGEAA from beta branch (test new features)
 
 BRANCH-BASED TAGGING:
     Feature/PGTM-2270 → Tags: PGTM-2270-0001, PGTM-2270-0002, etc.
