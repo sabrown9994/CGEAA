@@ -5,9 +5,11 @@
 execute_update() {
     log_step "Starting CGEAA Update"
 
-    load_config
+    # Get the source repository path from global config
     local source_repo_path
-    source_repo_path=$(get_config_value "source_repo_path")
+    if [ -f "$GLOBAL_CONFIG_FILE" ]; then
+        source_repo_path=$(grep "^source_repo_path=" "$GLOBAL_CONFIG_FILE" | cut -d'=' -f2)
+    fi
 
     if [[ -z "$source_repo_path" || ! -d "$source_repo_path/.git" ]]; then
         log_error "CGEAA source repository path not found or is not a git repository."
