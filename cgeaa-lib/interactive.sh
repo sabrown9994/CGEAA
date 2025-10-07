@@ -2,13 +2,25 @@
 
 # CGEAA - Interactive Mode Functionality
 
+# Capitalize first letter (bash 3.2 compatible)
+capitalize() {
+    local str="$1"
+    echo "$(tr '[:lower:]' '[:upper:]' <<< "${str:0:1}")${str:1}"
+}
+
 run_interactive_mode() {
     local command_to_run=$1
-    log_step "Starting Interactive ${command_to_run^}"
+    local command_display=$(capitalize "$command_to_run")
+    log_step "Starting Interactive $command_display"
 
     # 1. Select Target Org
     log_info "Fetching available Salesforce orgs..."
-    mapfile -t org_list < <(sf org list --json | jq -r '.result.nonScratchOrgs[] | .alias')
+    # Bash 3.2 compatible array loading
+    local org_list=()
+    while IFS= read -r line; do
+        org_list+=("$line")
+    done < <(sf org list --json | jq -r '.result.nonScratchOrgs[] | .alias')
+    
     if [ ${#org_list[@]} -eq 0 ]; then
         log_error "No authenticated orgs found. Please log in using 'sf auth web login'."
         exit 1
@@ -49,12 +61,12 @@ run_interactive_mode() {
     read -p "Proceed with ${command_to_run}? (y/n) " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        log_info "${command_to_run^} cancelled by user."
+        log_info "$command_display cancelled by user."
         exit 0
     fi
 
     # 4. Execute Command
-    log_step "Executing ${command_to_run^}"
+    log_step "Executing $command_display"
     if [ "$command_to_run" = "deploy" ]; then
         source "${CGEAA_LIB_DIR}/deploy.sh"
         execute_deployment
