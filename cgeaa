@@ -34,6 +34,7 @@ DEFAULT_BASE_BRANCH="main"
 COMMAND=""
 TARGET_ORG=""
 TEST_LEVEL=""
+TEST_CLASSES=""
 TIMEOUT=""
 BASE_BRANCH=""
 MANIFEST_FILE=""
@@ -69,6 +70,7 @@ COMMANDS:
 OPTIONS:
     -o, --org <org>             Target org alias (default: auto-detected from SF CLI)
     -t, --test-level <level>    Test level: NoTestRun, RunSpecifiedTests, RunLocalTests, RunAllTestsInOrg (default: ${DEFAULT_TEST_LEVEL})
+    --tests <classes>           Comma-separated test class names (required for RunSpecifiedTests)
     -w, --timeout <seconds>     Deployment timeout in seconds (default: ${DEFAULT_TIMEOUT})
     -b, --base-branch <branch>  Base branch for comparison (default: ${DEFAULT_BASE_BRANCH})
     -m, --manifest <file>       Use specific manifest file instead of generating one
@@ -84,6 +86,7 @@ OPTIONS:
 EXAMPLES:
     cgeaa validate                                    # Validate changes against default org
     cgeaa validate -o BRInt -t RunLocalTests          # Validate with specific org and test level
+    cgeaa validate -t RunSpecifiedTests --tests "MyTestClass,AnotherTest"  # Validate with specific tests
     cgeaa deploy -o BRStaging -t RunAllTestsInOrg     # Deploy to staging with all tests
     cgeaa deploy -o Playground -b develop -f          # Force deploy to playground from develop branch
     cgeaa validate --dry-run -v                       # Show what would be validated (verbose)
@@ -129,6 +132,10 @@ parse_args() {
                 ;;
             -t|--test-level)
                 TEST_LEVEL="$2"
+                shift 2
+                ;;
+            --tests)
+                TEST_CLASSES="$2"
                 shift 2
                 ;;
             -w|--timeout)

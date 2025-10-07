@@ -170,12 +170,32 @@ perform_validation() {
     log_info "Test Level: $TEST_LEVEL"
     log_info "Timeout: ${TIMEOUT}s"
     
-    # Build SF CLI command
-    local sf_command="sf project deploy validate"
-    sf_command="$sf_command -x $manifest_file"
-    sf_command="$sf_command -l $TEST_LEVEL"
-    sf_command="$sf_command -w $TIMEOUT"
-    sf_command="$sf_command -o $TARGET_ORG"
+    # Build SF CLI command based on test level
+    local sf_command=""
+    
+    if [ "$TEST_LEVEL" = "NoTestRun" ]; then
+        # Use deploy start --dry-run for NoTestRun (validate doesn't support NoTestRun)
+        log_info "Using 'deploy start --dry-run' for NoTestRun test level"
+        sf_command="sf project deploy start --dry-run"
+        sf_command="$sf_command -x $manifest_file"
+        sf_command="$sf_command -w $TIMEOUT"
+        sf_command="$sf_command -o $TARGET_ORG"
+    else
+        # Use deploy validate for all other test levels
+        sf_command="sf project deploy validate"
+        sf_command="$sf_command -x $manifest_file"
+        sf_command="$sf_command -l $TEST_LEVEL"
+        sf_command="$sf_command -w $TIMEOUT"
+        sf_command="$sf_command -o $TARGET_ORG"
+        
+        # Add test classes if specified for RunSpecifiedTests
+        if [ "$TEST_LEVEL" = "RunSpecifiedTests" ] && [ -n "$TEST_CLASSES" ]; then
+            log_info "Test Classes: $TEST_CLASSES"
+            sf_command="$sf_command --tests $TEST_CLASSES"
+        elif [ "$TEST_LEVEL" = "RunSpecifiedTests" ] && [ -z "$TEST_CLASSES" ]; then
+            log_warning "RunSpecifiedTests requires test classes. Use --tests option or the script will attempt to find them automatically."
+        fi
+    fi
     
     if [ "$VERBOSE" = "true" ]; then
         sf_command="$sf_command --verbose"

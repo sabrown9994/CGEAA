@@ -69,10 +69,16 @@ execute_deployment() {
         
         # Find specific test classes if needed
         if [ "$TEST_LEVEL" = "RunSpecifiedTests" ]; then
-            test_classes=$(find_test_classes "$base_ref")
-            if [ -z "$test_classes" ]; then
-                log_warning "No specific test classes found, switching to RunLocalTests"
-                TEST_LEVEL="RunLocalTests"
+            # Use manually specified test classes if provided, otherwise auto-detect
+            if [ -n "$TEST_CLASSES" ]; then
+                test_classes="$TEST_CLASSES"
+                log_info "Using manually specified test classes: $test_classes"
+            else
+                test_classes=$(find_test_classes "$base_ref")
+                if [ -z "$test_classes" ]; then
+                    log_warning "No specific test classes found, switching to RunLocalTests"
+                    TEST_LEVEL="RunLocalTests"
+                fi
             fi
         fi
     fi
