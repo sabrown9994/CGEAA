@@ -18,8 +18,18 @@ execute_update() {
     log_info "Navigating to source repository: $source_repo_path"
     cd "$source_repo_path"
 
-    log_info "Pulling latest changes from git..."
-    if ! git pull; then
+    # Ensure we're on main branch for stable updates
+    local current_branch=$(git rev-parse --abbrev-ref HEAD)
+    if [ "$current_branch" != "main" ]; then
+        log_warning "Currently on branch '$current_branch', switching to 'main' for update..."
+        if ! git checkout main; then
+            log_error "Failed to switch to main branch. Please resolve any conflicts and try again."
+            exit 1
+        fi
+    fi
+
+    log_info "Pulling latest changes from main branch..."
+    if ! git pull origin main; then
         log_error "Failed to pull latest changes from git. Please resolve any conflicts and try again."
         exit 1
     fi
