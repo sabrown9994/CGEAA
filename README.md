@@ -110,7 +110,7 @@ Location: `.cgeaa/config`
 default_org=targetOrg
 
 # Default test level for deployments
-default_test_level=RunLocalTests
+default_test_level=NoTestRun
 
 # Default deployment timeout in seconds
 default_timeout=360
@@ -157,7 +157,8 @@ parallel_jobs=1
 | Option | Description | Default |
 |--------|-------------|---------|
 | `-o, --org <org>` | Target org alias | `targetOrg` |
-| `-t, --test-level <level>` | Test level | `RunLocalTests` |
+| `-t, --test-level <level>` | Test level | `NoTestRun` |
+| `--tests <classes>` | Comma-separated test class names (required for `RunSpecifiedTests`) | Auto-detected |
 | `-w, --timeout <seconds>` | Deployment timeout | `360` |
 | `-b, --base-branch <branch>` | Base branch for comparison | `main` |
 | `-m, --manifest <file>` | Use specific manifest file | Auto-generated |
@@ -171,10 +172,14 @@ parallel_jobs=1
 
 ### Test Levels
 
-- `NoTestRun` - No tests run (not recommended for production)
-- `RunSpecifiedTests` - Run only specified test classes
-- `RunLocalTests` - Run all local tests (default)
+- `NoTestRun` - No tests run (default, useful for quick validations)
+- `RunSpecifiedTests` - Run only specified test classes (use `--tests` to specify, or auto-detect based on changed files)
+- `RunLocalTests` - Run all local tests
 - `RunAllTestsInOrg` - Run all tests in the org
+
+**Note:** When using `RunSpecifiedTests`, you can either:
+- Manually specify test classes with `--tests "TestClass1,TestClass2"`
+- Let CGEAA auto-detect test classes based on changed Apex files (if `--tests` is not provided)
 
 ## Branch-Based Tagging
 
@@ -247,6 +252,9 @@ PGTM-2270-2, PGTM-2270-0010, PGTM-2270-0011
 
 # Deploy to staging with comprehensive testing
 ./cgeaa deploy -o BRStaging -t RunAllTestsInOrg -v
+
+# Validate with specific test classes
+./cgeaa validate -t RunSpecifiedTests --tests "MyTestClass,AnotherTestClass"
 ```
 
 ### Advanced Usage
@@ -264,6 +272,12 @@ PGTM-2270-2, PGTM-2270-0010, PGTM-2270-0011
 
 # Deploy changes since specific branch
 ./cgeaa deploy -b develop -o BRStaging
+
+# Deploy with specific test classes
+./cgeaa deploy -o BRInt -t RunSpecifiedTests --tests "TestClass1,TestClass2,TestClass3"
+
+# Validate without running tests (using dry-run deployment)
+./cgeaa validate -t NoTestRun -o BRInt
 
 # Roll back changes from the current branch on the staging org
 ./cgeaa rollback -o BRStaging

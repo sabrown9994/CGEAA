@@ -9,7 +9,7 @@ PROJECT_CONFIG_FILE=".cgeaa/config"
 
 # Default configuration values
 DEFAULT_ORG="targetOrg"
-DEFAULT_TEST_LEVEL="RunLocalTests"
+DEFAULT_TEST_LEVEL="NoTestRun"
 DEFAULT_TIMEOUT="360"
 DEFAULT_BASE_BRANCH="main"
 DEFAULT_TAG_PREFIX="CGEAA"
@@ -138,7 +138,7 @@ default_org=targetOrg
 
 # Default test level for deployments
 # Options: NoTestRun, RunSpecifiedTests, RunLocalTests, RunAllTestsInOrg
-default_test_level=RunLocalTests
+default_test_level=NoTestRun
 
 # Default deployment timeout in seconds
 default_timeout=360

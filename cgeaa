@@ -24,11 +24,15 @@ source "${CGEAA_LIB_DIR}/update.sh"
 # Version information
 CGEAA_VERSION="1.0.0"
 
-# Default configuration - detect SF CLI default org
-DEFAULT_ORG=$(get_sensible_default_org)
-DEFAULT_TEST_LEVEL="RunLocalTests"
-DEFAULT_TIMEOUT="360"
-DEFAULT_BASE_BRANCH="main"
+# Load defaults from configuration (config.sh sets CONFIG_* variables via init_config)
+# Fall back to SF CLI default org if not configured
+DEFAULT_ORG="${CONFIG_DEFAULT_ORG}"
+if [ -z "$DEFAULT_ORG" ] || [ "$DEFAULT_ORG" = "targetOrg" ]; then
+    DEFAULT_ORG=$(get_sensible_default_org)
+fi
+DEFAULT_TEST_LEVEL="${CONFIG_DEFAULT_TEST_LEVEL:-NoTestRun}"
+DEFAULT_TIMEOUT="${CONFIG_DEFAULT_TIMEOUT:-360}"
+DEFAULT_BASE_BRANCH="${CONFIG_DEFAULT_BASE_BRANCH:-main}"
 
 # Global variables
 COMMAND=""
