@@ -8,7 +8,7 @@ CGEAA (CarGurus Enterprise Applications Automation) is a powerful command-line t
 
 ## Features
 
-- **Branch-Based Tagging**: Automatically extracts story names from Feature branches (e.g., Feature/PGTM-2270 → PGTM-2270-XXXX tags)
+- **Git Tagging**: Optionally create git tags for successful deployments (e.g., Feature/PGTM-2270 → PGTM-2270-0001 tags) using `-gt` flag
 - **Smart Org Management**: Lists and validates authenticated Salesforce CLI org aliases
 - **Mixed Tag Format Support**: Handles both padded (0001) and unpadded (2) tag numbering for backward compatibility
 - **Automated Change Detection**: Uses git diff to identify modified Salesforce components
@@ -72,6 +72,9 @@ sf auth web login --alias Playground
 
 # Deploy to staging with all tests
 ./cgeaa deploy -o BRStaging -t RunAllTestsInOrg
+
+# Deploy and create git tag on success
+./cgeaa deploy -o BRInt -gt
 
 # Force deploy with verbose output
 ./cgeaa deploy -o Playground --force --verbose
@@ -167,9 +170,10 @@ parallel_jobs=1
 | `-d, --dry-run` | Show what would be deployed | `false` |
 | `-v, --verbose` | Enable verbose output | `false` |
 | `-q, --quiet` | Suppress non-essential output | `false` |
+| `-i, --interactive` | Enable interactive mode for `validate` and `deploy` | `false` |
+| `-gt, --git-tag` | Create a git tag upon successful deployment | `false` |
 | `--tag-prefix <prefix>` | Tag prefix for deployment tracking | `CGEAA` |
 | `--deployment-dir <dir>` | Deployment directory | `Bedrock` |
-| `-i, --interactive` | Enable interactive mode for `validate` and `deploy` | `false` |
 
 ### Test Levels
 
@@ -263,6 +267,9 @@ PGTM-2270-2, PGTM-2270-0010, PGTM-2270-0011
 ```bash
 # Deploy from Feature/PGTM-2270 branch to playground
 ./cgeaa deploy -o Playground -v
+
+# Deploy and create git tag on success
+./cgeaa deploy -o Playground -gt
 # Creates tag: PGTM-2270-0001 (or next number)
 
 # Force deploy with custom timeout
@@ -297,11 +304,11 @@ PGTM-2270-2, PGTM-2270-0010, PGTM-2270-0011
 ./cgeaa validate --dry-run -q
 
 # Feature branch deployment to integration sandbox
-./cgeaa deploy -o BRInt
-# Auto-creates tag: PGTM-2270-0001 (from Feature/PGTM-2270)
+./cgeaa deploy -o BRInt -gt
+# Creates tag: PGTM-2270-0001 (from Feature/PGTM-2270)
 
 # Promote to staging after integration testing
-./cgeaa deploy -o BRStaging -t RunAllTestsInOrg
+./cgeaa deploy -o BRStaging -t RunAllTestsInOrg -gt
 # Creates tag: PGTM-2270-0002
 
 # Final validation before production
@@ -395,6 +402,40 @@ This ensures only YOUR feature branch changes are reverted, leaving other work u
   3. Deploy only those 5 files from `develop`
 
 **Note**: This command is disabled on primary branches like `main`, `master`, or `develop` to prevent accidental rollbacks.
+
+### Git Tagging
+
+CGEAA can automatically create git tags for successful deployments using the `-gt` or `--git-tag` flag. This provides deployment tracking and versioning.
+
+**Tag Naming Convention:**
+- **Feature branches** (e.g., `Feature/PGTM-2270`): Tags are prefixed with the story number → `PGTM-2270-0001`, `PGTM-2270-0002`, etc.
+- **Other branches**: Uses the configured tag prefix → `CGEAA-0001`, `CGEAA-0002`, etc.
+
+**Usage:**
+```bash
+# Deploy without creating a tag (default)
+./cgeaa deploy -o BRInt
+
+# Deploy and create a git tag on success
+./cgeaa deploy -o BRInt -gt
+
+# Deploy to staging with tag and push to remote
+./cgeaa deploy -o BRStaging -t RunAllTestsInOrg -gt
+```
+
+**Behavior:**
+- Tags are **only created on successful deployments**
+- Tags are automatically pushed to the remote repository
+- Sequential numbering is maintained per story/prefix
+- Failed deployments do not create tags
+
+**Custom Tag Prefix:**
+You can customize the tag prefix using `--tag-prefix` or by setting `tag_prefix` in your config file:
+```bash
+# Use custom prefix for this deployment
+./cgeaa deploy -o BRInt -gt --tag-prefix "RELEASE"
+# Creates: RELEASE-0001, RELEASE-0002, etc.
+```
 
 ### Self-Updating
 To ensure you and your team are always using the latest version of CGEAA, you can use the `update` command. This command will:
