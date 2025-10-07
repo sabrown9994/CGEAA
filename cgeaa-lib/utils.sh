@@ -167,7 +167,8 @@ get_changed_files() {
     log_debug "Getting changed files since: $base_ref"
     
     if [ -n "$base_ref" ]; then
-        git diff --diff-filter="$filter" --name-only "$base_ref" HEAD
+        # Compare base_ref to working directory (includes committed + staged + unstaged changes)
+        git diff --diff-filter="$filter" --name-only "$base_ref"
     else
         # If no base ref, get all force-app files
         find force-app -type f -name "*.cls" -o -name "*.trigger" -o -name "*.page" -o -name "*.component" -o -name "*-meta.xml" | head -100
@@ -176,8 +177,9 @@ get_changed_files() {
 
 # Filter files for Salesforce force-app directory
 # Supports both 'force-app/' and 'Bedrock/force-app/' (or any parent directory)
+# Strips parent directory prefix (e.g., Bedrock/) so paths start with force-app/
 filter_force_app_files() {
-    grep -E '(^|/)force-app/' || true
+    grep -E '(^|/)force-app/' | sed 's|^.*/\(force-app/.*\)$|\1|' || true
 }
 
 # Generate package manifest
@@ -198,13 +200,44 @@ generate_manifest() {
     done
     
     # Generate manifest using SF CLI
-    echo "$files_list" | sf project generate manifest --from-source-format > /dev/null 2>&1
+    local sf_error=$(mktemp)
+    local temp_dir=$(mktemp -d)
     
-    if [ -f "$manifest_file" ]; then
-        log_success "Manifest generated: $manifest_file"
-        return 0
+    # Convert newline-separated list to space-separated for -p flag
+    local paths=$(echo "$files_list" | tr '\n' ' ')
+    
+    # Use --output-dir to control where manifest is written, --name for the package name
+    if sf project generate manifest -p $paths --output-dir "$temp_dir" --name package 2>"$sf_error"; then
+        # SF CLI writes to package.xml in the output directory
+        local generated_manifest="$temp_dir/package.xml"
+        
+        if [ -f "$generated_manifest" ] && [ -s "$generated_manifest" ]; then
+            # Validate it's valid XML
+            if head -c 1 "$generated_manifest" | grep -q '<'; then
+                mv "$generated_manifest" "$manifest_file"
+                log_success "Manifest generated: $manifest_file"
+                rm -rf "$temp_dir" "$sf_error"
+                return 0
+            else
+                log_error "Generated file does not contain valid XML"
+                log_error "Content: $(cat "$generated_manifest")"
+                rm -rf "$temp_dir" "$sf_error"
+                return 1
+            fi
+        else
+            log_error "Manifest file was not generated at expected location: $generated_manifest"
+            if [ -s "$sf_error" ]; then
+                log_error "SF CLI error: $(cat "$sf_error")"
+            fi
+            rm -rf "$temp_dir" "$sf_error"
+            return 1
+        fi
     else
-        log_error "Failed to generate manifest"
+        log_error "Failed to generate manifest (SF CLI command failed)"
+        if [ -f "$sf_error" ] && [ -s "$sf_error" ]; then
+            log_error "SF CLI error: $(cat "$sf_error")"
+        fi
+        rm -rf "$temp_dir" "$sf_error"
         return 1
     fi
 }
