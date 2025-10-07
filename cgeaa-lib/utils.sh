@@ -203,11 +203,21 @@ generate_manifest() {
     local sf_error=$(mktemp)
     local temp_dir=$(mktemp -d)
     
-    # Convert newline-separated list to space-separated for -p flag
-    local paths=$(echo "$files_list" | tr '\n' ' ')
+    # Save current IFS and set to newline only to handle filenames with spaces
+    local OLD_IFS="$IFS"
+    IFS=$'\n'
+    
+    # Convert to array split on newlines (not spaces)
+    local paths_array=($files_list)
+    
+    log_debug "Generating manifest for ${#paths_array[@]} files"
     
     # Use --output-dir to control where manifest is written, --name for the package name
-    if sf project generate manifest -p $paths --output-dir "$temp_dir" --name package 2>"$sf_error"; then
+    # Keep IFS as newline so paths_array expands without splitting on spaces within filenames
+    if sf project generate manifest -p ${paths_array[*]} --output-dir "$temp_dir" --name package 2>"$sf_error"; then
+        # Restore IFS after successful command
+        IFS="$OLD_IFS"
+        
         # SF CLI writes to package.xml in the output directory
         local generated_manifest="$temp_dir/package.xml"
         
@@ -233,6 +243,8 @@ generate_manifest() {
             return 1
         fi
     else
+        # Restore IFS after failed command
+        IFS="$OLD_IFS"
         log_error "Failed to generate manifest (SF CLI command failed)"
         if [ -f "$sf_error" ] && [ -s "$sf_error" ]; then
             log_error "SF CLI error: $(cat "$sf_error")"
