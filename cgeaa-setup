@@ -1,0 +1,172 @@
+#!/bin/bash
+
+# CGEAA Setup Script
+# Initializes CGEAA configuration and sets up the environment
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CGEAA_LIB_DIR="${SCRIPT_DIR}/cgeaa-lib"
+
+# Source utility functions
+source "${CGEAA_LIB_DIR}/utils.sh"
+source "${CGEAA_LIB_DIR}/config.sh"
+
+# Colors for output
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+echo -e "${BLUE}"
+cat << 'EOF'
+   ______ _____ ______ ___
+  / ____// ____// ____//   |   /\
+ / /    / / __ / __/  / /| |  /  \
+/ /___ / /_/ // /___ / ___ | / /\ \
+\____/ \____//_____//_/  |_|/_/  \_\
+
+CarGurus Enterprise Applications Automation
+Setup & Configuration
+EOF
+echo -e "${NC}"
+
+# --- Installation Function ---
+perform_global_install() {
+    log_step "Performing Global Installation"
+
+    # 1. Create global library directory
+    log_info "Creating library directory at /usr/local/share/cgeaa..."
+    sudo mkdir -p /usr/local/share/cgeaa
+
+    # 2. Copy library files
+    log_info "Copying cgeaa-lib contents..."
+    sudo cp -r "${SCRIPT_DIR}/cgeaa-lib" /usr/local/share/cgeaa/
+
+    # 3. Create a temporary modified cgeaa script
+    log_info "Configuring cgeaa script for global use..."
+    TEMP_CGEAA_SCRIPT=$(mktemp)
+    # By targeting specific line numbers, we can precisely modify the script for global installation.
+    # This is the most reliable way to avoid regex errors.
+    # 1. Delete line 10 (SCRIPT_DIR=...)
+    # 2. Replace line 11 (CGEAA_LIB_DIR=...) with the global path.
+    sed -e '10d' -e '11s|.*|CGEAA_LIB_DIR="/usr/local/share/cgeaa/cgeaa-lib"|' "${SCRIPT_DIR}/cgeaa" > "$TEMP_CGEAA_SCRIPT"
+
+    # 4. Copy the modified script to /usr/local/bin
+    log_info "Copying cgeaa to /usr/local/bin..."
+    sudo cp "$TEMP_CGEAA_SCRIPT" /usr/local/bin/cgeaa
+    rm "$TEMP_CGEAA_SCRIPT"
+
+    # 5. Make it executable
+    log_info "Setting execution permissions..."
+    sudo chmod 755 /usr/local/bin/cgeaa
+
+    # 6. Save source repo path for updates
+    log_info "Saving source repository path for future updates..."
+    add_or_update_config "source_repo_path" "$SCRIPT_DIR" "$GLOBAL_CONFIG_FILE"
+
+    log_success "Global installation complete!"
+}
+
+install_globally() {
+    echo
+    echo -e "${YELLOW}--- Global Installation ---${NC}"
+    read -p "Do you want to install 'cgeaa' globally to /usr/local/bin? (y/n) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Skipping global installation."
+        echo
+        echo -e "${YELLOW}Optional: Add CGEAA to your PATH${NC}"
+        echo "To use 'cgeaa' from anywhere, add this line to your ~/.bashrc or ~/.zshrc:"
+        echo "export PATH=\"$SCRIPT_DIR:\$PATH\""
+        return
+    fi
+
+    perform_global_install
+    echo "You can now run 'cgeaa' from any directory. Open a new terminal to start."
+}
+
+
+# --- Main Setup Logic ---
+
+# Check if we're in the right directory
+if [ ! -f "cgeaa" ]; then
+    echo -e "${RED}Error: cgeaa script not found in current directory${NC}"
+    echo "Please run this setup script from the directory containing the cgeaa script"
+    exit 1
+fi
+
+echo "Setting up CGEAA environment..."
+echo
+
+# Make sure core scripts are executable
+chmod +x cgeaa
+chmod +x cgeaa-uninstall
+echo "✓ Made core scripts executable"
+
+# Create global config directory
+GLOBAL_CONFIG_DIR="$HOME/.cgeaa"
+if [ ! -d "$GLOBAL_CONFIG_DIR" ]; then
+    mkdir -p "$GLOBAL_CONFIG_DIR"
+    echo "✓ Created global config directory: $GLOBAL_CONFIG_DIR"
+fi
+
+# Create global config file if it doesn't exist
+GLOBAL_CONFIG_FILE="$GLOBAL_CONFIG_DIR/config"
+if [ ! -f "$GLOBAL_CONFIG_FILE" ]; then
+    create_sample_config "$GLOBAL_CONFIG_FILE"
+    echo "✓ Created global configuration file"
+else
+    echo "✓ Global configuration file already exists"
+fi
+
+# Create project config directory
+PROJECT_CONFIG_DIR=".cgeaa"
+if [ ! -d "$PROJECT_CONFIG_DIR" ]; then
+    mkdir -p "$PROJECT_CONFIG_DIR"
+    echo "✓ Created project config directory: $PROJECT_CONFIG_DIR"
+fi
+
+# Create project config file if it doesn't exist
+PROJECT_CONFIG_FILE="$PROJECT_CONFIG_DIR/config"
+if [ ! -f "$PROJECT_CONFIG_FILE" ]; then
+    create_sample_config "$PROJECT_CONFIG_FILE"
+    echo "✓ Created project configuration file"
+else
+    echo "✓ Project configuration file already exists"
+fi
+
+# --- Run Installation ---
+install_globally
+
+# Check dependencies
+echo
+echo "Checking dependencies..."
+check_dependencies
+echo "✓ All dependencies are available"
+
+# Test basic functionality
+echo
+echo "Testing CGEAA..."
+if cgeaa version > /dev/null 2>&1; then
+    echo "✓ CGEAA is working correctly"
+else
+    echo -e "${RED}✗ CGEAA test failed. If you chose global install, try opening a new terminal.${NC}"
+fi
+
+echo
+echo -e "${GREEN}CGEAA setup completed successfully!${NC}"
+echo
+echo "Next steps:"
+echo "1. Review and customize the configuration files:"
+echo "   - Global: $GLOBAL_CONFIG_FILE"
+echo "   - Project: $PROJECT_CONFIG_FILE"
+echo
+echo "2. Authenticate to your Salesforce orgs:"
+echo "   sf auth web login --alias targetOrg"
+echo
+echo "3. Try running CGEAA:"
+echo "   cgeaa validate --dry-run"
+echo
+echo "For help, run: cgeaa help"
