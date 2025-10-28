@@ -11,10 +11,11 @@ This integration provides a complete web service for interacting with the **Cong
 1. **CongaComposerAPIService** - Main orchestrator service
 2. **CongaAuthenticationService** - OAuth 2.0 authentication with token caching
 3. **CongaMergeService** - Document generation and status operations
-4. **CongaAPIWrapper** - Request/response DTOs
-5. **CongaAPIException** - Custom exception handling
-6. **CongaAPICalloutMock** - Test mock classes
-7. **CongaComposerAPIService_Test** - Comprehensive test coverage
+4. **CongaDocumentPoller** - Queueable class for asynchronous status polling
+5. **CongaAPIWrapper** - Request/response DTOs
+6. **CongaAPIException** - Custom exception handling
+7. **CongaAPICalloutMock** - Test mock classes
+8. **CongaComposerAPIService_Test** - Comprehensive test coverage
 
 ### Custom Metadata
 
@@ -67,18 +68,19 @@ Confirm with your Conga representative:
 ### Basic Contract Generation
 
 ```apex
-// Generate contract for a Quote
+// Generate contract for a Quote asynchronously
 String quoteId = 'a0X...';
 String templateId = 'YOUR_TEMPLATE_ID';
 String fileName = 'Contract for ' + quoteName;
 
 try {
-    String attachmentId = CongaComposerAPIService.generateContractForQuote(
+    String correlationId = CongaComposerAPIService.generateContractForQuoteAsync(
         quoteId,
         templateId,
         fileName
     );
-    System.debug('Contract generated. Attachment ID: ' + attachmentId);
+    System.debug('Merge request submitted. Correlation ID: ' + correlationId);
+    System.debug('Document will be attached to Quote when ready (async polling)');
 } catch (CongaAPIException e) {
     System.debug('Error: ' + e.getFullErrorMessage());
     // Error is automatically logged to Sentry
@@ -88,7 +90,7 @@ try {
 ### Contract Generation with Query
 
 ```apex
-// Generate contract with related data query
+// Generate contract with related data query asynchronously
 String quoteId = 'a0X...';
 String templateId = 'YOUR_TEMPLATE_ID';
 String queryId = 'YOUR_QUERY_ID';
@@ -96,14 +98,15 @@ String fileName = 'Detailed Contract';
 String outputFormat = 'PDF'; // or 'DOCX', 'XLSX'
 
 try {
-    String attachmentId = CongaComposerAPIService.generateContractForQuote(
+    String correlationId = CongaComposerAPIService.generateContractForQuoteAsync(
         quoteId,
         templateId,
         queryId,
         fileName,
         outputFormat
     );
-    System.debug('Contract generated. Attachment ID: ' + attachmentId);
+    System.debug('Merge request submitted. Correlation ID: ' + correlationId);
+    System.debug('Document will be attached to Quote when ready (async polling)');
 } catch (CongaAPIException e) {
     System.debug('Error: ' + e.getFullErrorMessage());
 }
@@ -127,14 +130,16 @@ public class CongaUtils {
             String fileName = quote.SBQQ__Account__r.Name + ' Contract ' + 
                             quote.SBQQ__StartDate__c.format().toString().replace('/','-');
             
-            // Use new Advantage Platform API
-            String attId = CongaComposerAPIService.generateContractForQuote(
+            // Use new Advantage Platform API (async)
+            String correlationId = CongaComposerAPIService.generateContractForQuoteAsync(
                 quoteId,
                 'YOUR_TEMPLATE_ID',
                 fileName
             );
             
-            attIds.add(attId);
+            // Document will be attached asynchronously
+            // Track via correlationId if needed
+            System.debug('Contract generation started: ' + correlationId);
             
         } catch(Exception e) {
             Sentry.record(e);
@@ -160,12 +165,15 @@ public class CongaUtils {
 3. **Auto-Refresh**: Expired tokens automatically refreshed
 4. **Secure Storage**: Credentials stored in Custom Metadata
 
-### Document Generation Flow
+### Document Generation Flow (Asynchronous)
 
 1. **Submit Request**: POST to `/api/v2/merge/request`
-2. **Poll Status**: GET to `/api/v2/merge/request/{id}` (synchronous polling)
-3. **Download Document**: GET to `/api/v2/merge/request/{id}/download`
-4. **Create Attachment**: Save as Attachment on Quote record
+2. **Return Correlation ID**: Immediately return to caller
+3. **Enqueue Poller**: Start CongaDocumentPoller queueable job
+4. **Async Polling**: Queueable checks status every ~10 seconds (up to 30 attempts)
+5. **Download Document**: GET to `/api/v2/merge/request/{id}/download` when ready
+6. **Create Attachment**: Save as Attachment on Quote record
+7. **Chain Jobs**: Re-enqueues itself until document is ready or max attempts reached
 
 ### Error Handling
 
@@ -194,11 +202,12 @@ Based on Conga Advantage Platform documentation:
 - **Document Generation**: Configurable (default 120 seconds)
 - **Document Download**: Configurable (default 120 seconds)
 
-### Polling Settings
+### Polling Settings (Asynchronous Queueable)
 
 - **Max Poll Attempts**: 30
-- **Poll Interval**: 10 seconds
-- **Total Max Wait Time**: 300 seconds (5 minutes)
+- **Poll Interval**: ~10 seconds between queueable jobs
+- **Total Max Wait Time**: ~300 seconds (5 minutes)
+- **Architecture**: Chained queueable jobs (each attempt is a separate queueable execution)
 
 ## Testing
 
@@ -244,16 +253,17 @@ Expected results:
 
 ### Governor Limits
 
-**Error**: `Too many callouts`
+**Async Architecture Benefits**:
+- Uses queueable jobs to avoid callout limits
+- Each queueable execution has its own governor limits
+- Initial request only uses 2 callouts (auth + merge request)
+- Polling happens in separate queueable executions
+- No risk of hitting 100 callout limit in single transaction
 
-**Notes**:
-- Each document generation uses up to 6 callouts:
-  - 1 for authentication
-  - 1 for merge request
-  - 1-3 for status polling
-  - 1 for download
-- Maximum 100 callouts per transaction
-- Consider batch processing for bulk generation
+**Queueable Limits**:
+- Maximum 50 queueable jobs enqueued per transaction
+- Each polling attempt is a separate queueable job
+- Consider this for bulk document generation scenarios
 
 ## Security Best Practices
 
