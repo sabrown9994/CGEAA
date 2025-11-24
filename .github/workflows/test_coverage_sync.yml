@@ -1,0 +1,211 @@
+# Workflow to maintain test coverage map in GitHub Gist
+name: Test Coverage Map Sync
+
+# Run on schedule (weekly) or manual trigger
+on:
+  workflow_dispatch:
+  schedule:
+    # Run every Sunday at 2 AM UTC
+    - cron: '0 2 * * 0'
+
+jobs:
+  update-coverage-map:
+    runs-on: arc-ent
+    
+    steps:
+      # Write SF auth URL to file
+      - name: Write Token to File
+        run: "echo ${{ secrets.SFDC_INTQA_SABROWN }} > token.txt"
+
+      # Setup Node
+      - name: Setup Node Actions
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Install NPM
+      - name: Install NPM
+        run: "npm install -g latest"
+
+      # Install SF CLI
+      - name: Install Salesforce CLI
+        run: "npm install @salesforce/cli --global"
+
+      # Update SF CLI
+      - name: Update Salesforce CLI
+        run: "npm update --global @salesforce/cli"
+
+      # Auth to org
+      - name: Auth with Org
+        run: "sf auth sfdxurl store -f token.txt -a targetOrg -d"
+
+      # Run all local tests with code coverage
+      - name: Run All Local Tests
+        id: run_tests
+        run: |
+          cd Bedrock/Bedrock
+          echo "Running all local tests with code coverage..."
+          
+          # Run tests and capture output
+          sf apex run test \
+            --target-org targetOrg \
+            --test-level RunLocalTests \
+            --code-coverage \
+            --result-format json \
+            --wait 60 \
+            --output-dir test-results \
+            > test-run-output.log 2>&1 || true
+          
+          # Check if test results exist
+          if [ -f "test-results/test-result.json" ]; then
+            echo "Test results generated successfully"
+            echo "test_success=true" >> $GITHUB_OUTPUT
+          else
+            echo "Test results file not found"
+            echo "test_success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      # Parse test results and build coverage map
+      - name: Build Coverage Map
+        id: build_map
+        run: |
+          cd Bedrock/Bedrock
+          
+          # Create a Node.js script to parse the test results
+          cat > parse-coverage.js << 'EOF'
+          const fs = require('fs');
+          
+          // Read the test results
+          const testResults = JSON.parse(fs.readFileSync('test-results/test-result.json', 'utf8'));
+          
+          // Build coverage map: { "ApexClass": ["TestClass1", "TestClass2", ...] }
+          const coverageMap = {};
+          
+          // Process code coverage results
+          if (testResults.coverage && testResults.coverage.coverage) {
+            testResults.coverage.coverage.forEach(coverage => {
+              const apexClass = coverage.name;
+              
+              // Find all test classes that cover this class
+              const testClasses = new Set();
+              
+              // Look through test results to find which tests executed this class
+              if (testResults.tests) {
+                testResults.tests.forEach(test => {
+                  const testClassName = test.ApexClass?.Name || test.FullName?.split('.')[0];
+                  if (testClassName && coverage.coveredLines && coverage.coveredLines.length > 0) {
+                    testClasses.add(testClassName);
+                  }
+                });
+              }
+              
+              if (testClasses.size > 0) {
+                coverageMap[apexClass] = Array.from(testClasses).sort();
+              }
+            });
+          }
+          
+          console.log('Coverage map built with', Object.keys(coverageMap).length, 'classes');
+          
+          // Write the map to a file
+          fs.writeFileSync('coverage-map.json', JSON.stringify(coverageMap, null, 2));
+          
+          console.log('Coverage map saved to coverage-map.json');
+          EOF
+          
+          # Run the parser
+          node parse-coverage.js
+          
+          # Set output variables
+          if [ -f "coverage-map.json" ]; then
+            CLASS_COUNT=$(jq 'length' coverage-map.json)
+            echo "class_count=$CLASS_COUNT" >> $GITHUB_OUTPUT
+            echo "Coverage map created with $CLASS_COUNT classes"
+          else
+            echo "Failed to create coverage map"
+            exit 1
+          fi
+
+      # Query Salesforce for detailed coverage data
+      - name: Query Detailed Coverage Data
+        id: query_coverage
+        run: |
+          # Query ApexCodeCoverage for detailed mapping
+          echo "Querying Salesforce for detailed coverage data..."
+          
+          # Query for all coverage records
+          sf data query \
+            --query "SELECT ApexClassOrTrigger.Name, ApexTestClass.Name FROM ApexCodeCoverage WHERE ApexClassOrTriggerId != null AND ApexTestClassId != null" \
+            --target-org targetOrg \
+            --result-format json \
+            > coverage-query.json
+          
+          # Parse the query results into a proper map
+          cat > build-final-map.js << 'JSEOF'
+          const fs = require('fs');
+          
+          // Read query results
+          const queryResults = JSON.parse(fs.readFileSync('coverage-query.json', 'utf8'));
+          
+          // Build the coverage map
+          const coverageMap = {};
+          let recordCount = 0;
+          
+          if (queryResults.result && queryResults.result.records) {
+            recordCount = queryResults.result.records.length;
+            
+            queryResults.result.records.forEach(record => {
+              const apexClass = record.ApexClassOrTrigger?.Name;
+              const testClass = record.ApexTestClass?.Name;
+              
+              if (apexClass && testClass) {
+                if (!coverageMap[apexClass]) {
+                  coverageMap[apexClass] = [];
+                }
+                if (!coverageMap[apexClass].includes(testClass)) {
+                  coverageMap[apexClass].push(testClass);
+                }
+              }
+            });
+          }
+          
+          // Sort test classes for each apex class
+          Object.keys(coverageMap).forEach(key => {
+            coverageMap[key].sort();
+          });
+          
+          // Build final map in the requested format
+          const finalMap = {
+            version: "1.0",
+            lastUpdated: new Date().toISOString(),
+            description: "Salesforce Test Coverage Map - Maps Apex classes to their test classes",
+            recordCount: recordCount,
+            coverage: coverageMap
+          };
+          
+          fs.writeFileSync('final-coverage-map.json', JSON.stringify(finalMap, null, 2));
+          console.log('Final coverage map created with', Object.keys(coverageMap).length, 'classes and', recordCount, 'coverage records');
+          JSEOF
+          
+          # Verify the final map was created
+          if [ -f "final-coverage-map.json" ]; then
+            CLASS_COUNT=$(jq '.coverage | length' final-coverage-map.json)
+            RECORD_COUNT=$(jq '.recordCount' final-coverage-map.json)
+            echo "final_class_count=$CLASS_COUNT" >> $GITHUB_OUTPUT
+            echo "record_count=$RECORD_COUNT" >> $GITHUB_OUTPUT
+            echo "Final coverage map created with $CLASS_COUNT classes and $RECORD_COUNT coverage records"
+          else
+            echo "Failed to create final coverage map"
+            exit 1
+          fi
+
+      # Upload coverage map to GitHub Gist
+      - uses: actions/checkout@v3
+      - name: Deploy
+        uses: exuanbo/actions-deploy-gist@v1
+        with:
+            token: ${{ secrets.GIST_TOKEN }}
+            gist_id: 4276fb0054b3a999b256d8bcb9cb742d
+            file_path: final-coverage-map.json
+            file_type: json
