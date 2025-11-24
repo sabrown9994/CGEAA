@@ -13,21 +13,17 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      # Checkout repository to access scripts
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-
       # Write SF auth URL to file
       - name: Write Token to File
         run: "echo ${{ secrets.SFDC_INTQA_SABROWN }} > token.txt"
 
-      # Install SF CLI (using official installer, not npm)
+      # Install NPM
+      - name: Install NPM
+        run: "npm install -g latest"
+
+      # Install SF CLI
       - name: Install Salesforce CLI
-        run: |
-          wget https://developer.salesforce.com/media/salesforce-cli/sf/channels/stable/sf-linux-x64.tar.xz
-          mkdir -p ~/sf
-          tar xJf sf-linux-x64.tar.xz -C ~/sf --strip-components 1
-          echo "$HOME/sf/bin" >> $GITHUB_PATH
+        run: "npm install @salesforce/cli --global"
 
       # Install jq for JSON processing
       - name: Install jq
@@ -47,10 +43,10 @@ jobs:
           sf apex run test \
             --target-org targetOrg \
             --test-level RunLocalTests \
-            --code-coverage \
             --result-format json \
             --wait 25 \
             --concise \
+            -d test-results \
             > test-run-output.log 2>&1 || true
           
           # Check if test results exist
