@@ -49,7 +49,6 @@ jobs:
             --test-level RunLocalTests \
             --code-coverage \
             --result-format json \
-            --output-dir test-results \
             --wait 25 \
             --concise \
             > test-run-output.log 2>&1 || true
