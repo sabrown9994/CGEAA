@@ -245,6 +245,65 @@ process_test_results() {
     fi
 }
 
+# Fetch coverage map from GitHub Gist
+fetch_coverage_map_from_gist() {
+    local gist_url=$(get_config "test_coverage_gist_url")
+    local cache_ttl=$(get_config "coverage_cache_ttl" "86400")
+    local cache_file="$HOME/.cgeaa/coverage-cache.json"
+    local cache_dir=$(dirname "$cache_file")
+    
+    # Check if Gist URL is configured
+    if [ -z "$gist_url" ]; then
+        log_debug "No test_coverage_gist_url configured, will use fallback method"
+        return 1
+    fi
+    
+    # Create cache directory if it doesn't exist
+    mkdir -p "$cache_dir"
+    
+    # Check if cache exists and is still valid
+    if [ -f "$cache_file" ]; then
+        local cache_age=$(($(date +%s) - $(stat -f %m "$cache_file" 2>/dev/null || stat -c %Y "$cache_file" 2>/dev/null || echo 0)))
+        if [ "$cache_age" -lt "$cache_ttl" ]; then
+            log_debug "Using cached coverage map (age: ${cache_age}s, TTL: ${cache_ttl}s)"
+            echo "$cache_file"
+            return 0
+        else
+            log_debug "Cache expired (age: ${cache_age}s, TTL: ${cache_ttl}s), fetching fresh data"
+        fi
+    fi
+    
+    # Fetch from Gist
+    log_debug "Fetching coverage map from Gist: $gist_url"
+    if curl -sf "$gist_url" -o "$cache_file" 2>/dev/null; then
+        log_debug "Coverage map fetched and cached successfully"
+        echo "$cache_file"
+        return 0
+    else
+        log_debug "Failed to fetch coverage map from Gist"
+        # Remove invalid cache file
+        rm -f "$cache_file"
+        return 1
+    fi
+}
+
+# Get test classes for an Apex class from coverage map
+get_tests_from_coverage_map() {
+    local class_name="$1"
+    local coverage_file="$2"
+    
+    if [ ! -f "$coverage_file" ]; then
+        return 1
+    fi
+    
+    if command_exists jq; then
+        jq -r ".coverage[\"$class_name\"] // [] | .[]" "$coverage_file" 2>/dev/null
+    else
+        # Fallback without jq (basic grep)
+        grep -o "\"$class_name\":\[.*\]" "$coverage_file" 2>/dev/null | sed 's/.*\[//;s/\].*//;s/"//g;s/,/ /g'
+    fi
+}
+
 # Show test execution summary
 show_test_summary() {
     local duration="$1"
