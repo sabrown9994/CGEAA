@@ -13,27 +13,25 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
+      # Checkout repository to access scripts
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
       # Write SF auth URL to file
       - name: Write Token to File
         run: "echo ${{ secrets.SFDC_INTQA_SABROWN }} > token.txt"
 
-      # Setup Node
-      - name: Setup Node Actions
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      # Install NPM
-      - name: Install NPM
-        run: "npm install -g latest"
-
-      # Install SF CLI
+      # Install SF CLI (using official installer, not npm)
       - name: Install Salesforce CLI
-        run: "npm install @salesforce/cli --global"
+        run: |
+          wget https://developer.salesforce.com/media/salesforce-cli/sf/channels/stable/sf-linux-x64.tar.xz
+          mkdir -p ~/sf
+          tar xJf sf-linux-x64.tar.xz -C ~/sf --strip-components 1
+          echo "$HOME/sf/bin" >> $GITHUB_PATH
 
-      # Update SF CLI
-      - name: Update Salesforce CLI
-        run: "npm update --global @salesforce/cli"
+      # Install jq for JSON processing
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
       # Auth to org
       - name: Auth with Org
@@ -66,142 +64,64 @@ jobs:
             exit 1
           fi
 
-      # Parse test results and build coverage map
+      # Build coverage map using bash and jq
       - name: Build Coverage Map
         id: build_map
         run: |
+          echo "Querying Salesforce for coverage data..."
           
-          # Create a Node.js script to parse the test results
-          cat > parse-coverage.js << 'EOF'
-          const fs = require('fs');
-          
-          // Read the test results
-          const testResults = JSON.parse(fs.readFileSync('test-results/test-result.json', 'utf8'));
-          
-          // Build coverage map: { "ApexClass": ["TestClass1", "TestClass2", ...] }
-          const coverageMap = {};
-          
-          // Process code coverage results
-          if (testResults.coverage && testResults.coverage.coverage) {
-            testResults.coverage.coverage.forEach(coverage => {
-              const apexClass = coverage.name;
-              
-              // Find all test classes that cover this class
-              const testClasses = new Set();
-              
-              // Look through test results to find which tests executed this class
-              if (testResults.tests) {
-                testResults.tests.forEach(test => {
-                  const testClassName = test.ApexClass?.Name || test.FullName?.split('.')[0];
-                  if (testClassName && coverage.coveredLines && coverage.coveredLines.length > 0) {
-                    testClasses.add(testClassName);
-                  }
-                });
-              }
-              
-              if (testClasses.size > 0) {
-                coverageMap[apexClass] = Array.from(testClasses).sort();
-              }
-            });
-          }
-          
-          console.log('Coverage map built with', Object.keys(coverageMap).length, 'classes');
-          
-          // Write the map to a file
-          fs.writeFileSync('coverage-map.json', JSON.stringify(coverageMap, null, 2));
-          
-          console.log('Coverage map saved to coverage-map.json');
-          EOF
-          
-          # Run the parser
-          node parse-coverage.js
-          
-          # Set output variables
-          if [ -f "coverage-map.json" ]; then
-            CLASS_COUNT=$(jq 'length' coverage-map.json)
-            echo "class_count=$CLASS_COUNT" >> $GITHUB_OUTPUT
-            echo "Coverage map created with $CLASS_COUNT classes"
-          else
-            echo "Failed to create coverage map"
-            exit 1
-          fi
-
-      # Query Salesforce for detailed coverage data
-      - name: Query Detailed Coverage Data
-        id: query_coverage
-        run: |
           # Query ApexCodeCoverage for detailed mapping
-          echo "Querying Salesforce for detailed coverage data..."
+          QUERY="SELECT ApexClassOrTrigger.Name, ApexTestClass.Name FROM ApexCodeCoverage WHERE ApexClassOrTrigger.Name != null AND ApexTestClass.Name != null ORDER BY ApexClassOrTrigger.Name"
           
-          # Query for all coverage records
           sf data query \
-            --query "SELECT ApexClassOrTrigger.Name, ApexTestClass.Name FROM ApexCodeCoverage WHERE ApexClassOrTriggerId != null AND ApexTestClassId != null" \
+            --query "$QUERY" \
             --target-org targetOrg \
-            --result-format json \
+            --use-tooling-api \
+            --json \
             > coverage-query.json
           
-          # Parse the query results into a proper map
-          cat > build-final-map.js << 'JSEOF'
-          const fs = require('fs');
+          # Check if query returned results
+          RECORD_COUNT=$(jq -r '.result.records | length' coverage-query.json 2>/dev/null || echo "0")
           
-          // Read query results
-          const queryResults = JSON.parse(fs.readFileSync('coverage-query.json', 'utf8'));
+          if [ "$RECORD_COUNT" -eq 0 ]; then
+            echo "Warning: No coverage data found"
+            echo "Tests may not have generated coverage data"
+            exit 1
+          fi
           
-          // Build the coverage map
-          const coverageMap = {};
-          let recordCount = 0;
+          echo "Found $RECORD_COUNT coverage records"
           
-          if (queryResults.result && queryResults.result.records) {
-            recordCount = queryResults.result.records.length;
-            
-            queryResults.result.records.forEach(record => {
-              const apexClass = record.ApexClassOrTrigger?.Name;
-              const testClass = record.ApexTestClass?.Name;
-              
-              if (apexClass && testClass) {
-                if (!coverageMap[apexClass]) {
-                  coverageMap[apexClass] = [];
-                }
-                if (!coverageMap[apexClass].includes(testClass)) {
-                  coverageMap[apexClass].push(testClass);
-                }
-              }
-            });
-          }
-          
-          // Sort test classes for each apex class
-          Object.keys(coverageMap).forEach(key => {
-            coverageMap[key].sort();
-          });
-          
-          // Build final map in the requested format
-          const finalMap = {
-            version: "1.0",
-            lastUpdated: new Date().toISOString(),
-            description: "Salesforce Test Coverage Map - Maps Apex classes to their test classes",
-            recordCount: recordCount,
-            coverage: coverageMap
-          };
-          
-          fs.writeFileSync('final-coverage-map.json', JSON.stringify(finalMap, null, 2));
-          console.log('Final coverage map created with', Object.keys(coverageMap).length, 'classes and', recordCount, 'coverage records');
-          JSEOF
+          # Build coverage map using jq
+          jq -r '{
+            "version": "1.0",
+            "lastUpdated": (now | strftime("%Y-%m-%dT%H:%M:%SZ")),
+            "description": "Salesforce Test Coverage Map - Maps Apex classes to their test classes",
+            "recordCount": (.result.records | length),
+            "coverage": (
+              .result.records
+              | group_by(.ApexClassOrTrigger.Name)
+              | map({
+                  key: .[0].ApexClassOrTrigger.Name,
+                  value: (map(.ApexTestClass.Name) | unique | sort)
+                })
+              | from_entries
+            )
+          }' coverage-query.json > final-coverage-map.json
           
           # Verify the final map was created
           if [ -f "final-coverage-map.json" ]; then
             CLASS_COUNT=$(jq '.coverage | length' final-coverage-map.json)
             RECORD_COUNT=$(jq '.recordCount' final-coverage-map.json)
-            echo "final_class_count=$CLASS_COUNT" >> $GITHUB_OUTPUT
+            echo "class_count=$CLASS_COUNT" >> $GITHUB_OUTPUT
             echo "record_count=$RECORD_COUNT" >> $GITHUB_OUTPUT
-            echo "Final coverage map created with $CLASS_COUNT classes and $RECORD_COUNT coverage records"
+            echo "Coverage map created with $CLASS_COUNT classes and $RECORD_COUNT coverage records"
           else
-            echo "Failed to create final coverage map"
+            echo "Failed to create coverage map"
             exit 1
           fi
 
       # Upload coverage map to GitHub Gist
-      - uses: actions/checkout@v3
-      - name: Deploy
+      - name: Deploy to Gist
         uses: exuanbo/actions-deploy-gist@v1
         with:
             token: ${{ secrets.GIST_TOKEN }}
