@@ -13,6 +13,7 @@ CGEAA (CarGurus Enterprise Applications Automation) is a powerful command-line t
 - **Mixed Tag Format Support**: Handles both padded (0001) and unpadded (2) tag numbering for backward compatibility
 - **Automated Change Detection**: Uses git diff to identify modified Salesforce components
 - **Intelligent Test Selection**: Automatically finds relevant test classes using coverage analysis
+- **Asynchronous Test Execution**: Run Apex tests independently with auto-detection of relevant test classes
 - **Flexible Deployment Options**: Support for validation-only or full deployment operations
 - **Interactive Mode**: Guided prompts for `validate` and `deploy` commands.
 - **Branch-Based Rollback**: Safely revert changes from a feature branch.
@@ -75,6 +76,12 @@ sf auth web login --alias Playground
 
 # Force deploy with verbose output
 ./cgeaa deploy -o Playground --force --verbose
+
+# Run tests (auto-detects relevant tests based on changes)
+./cgeaa test -o BRInt
+
+# Run specific tests
+./cgeaa test -o BRStaging -t RunSpecifiedTests --tests "TestClass1,TestClass2"
 ```
 
 ## Installation
@@ -143,6 +150,7 @@ parallel_jobs=1
 
 - `validate` - Validate changes without deploying
 - `deploy` - Deploy changes to target org
+- `test` - Run Apex tests asynchronously with auto-detection
 - `orgs` - List available Salesforce org aliases
 - `branch` - Show current branch and tag information
 - `config` - Show current configuration
@@ -157,7 +165,7 @@ parallel_jobs=1
 | Option | Description | Default |
 |--------|-------------|---------|
 | `-o, --org <org>` | Target org alias | `targetOrg` |
-| `-t, --test-level <level>` | Test level | `RunLocalTests` |
+| `-t, --test-level <level>` | Test level (auto-detects for `test` command if not provided) | `RunLocalTests` |
 | `-w, --timeout <seconds>` | Deployment timeout | `360` |
 | `-b, --base-branch <branch>` | Base branch for comparison | `main` |
 | `-m, --manifest <file>` | Use specific manifest file | Auto-generated |
@@ -169,6 +177,7 @@ parallel_jobs=1
 | `--deployment-dir <dir>` | Deployment directory | `Bedrock` |
 | `-i, --interactive` | Enable interactive mode for `validate` and `deploy` | `false` |
 | `-gt, --git-tag` | Create a git tag upon successful deployment | `false` |
+| `--tests <classes>` | Comma-separated test class names (for `RunSpecifiedTests`) | Auto-detected |
 
 ### Test Levels
 
@@ -176,6 +185,30 @@ parallel_jobs=1
 - `RunSpecifiedTests` - Run only specified test classes
 - `RunLocalTests` - Run all local tests (default)
 - `RunAllTestsInOrg` - Run all tests in the org
+
+### Test Command Auto-Detection
+
+When using `cgeaa test` without the `-t` flag, CGEAA automatically determines which tests to run:
+
+1. **Compare Branches**: Compares current branch against base branch (default: `main`)
+2. **Identify Changes**: Finds all changed Apex classes in your feature branch
+3. **Query Coverage**: Queries the `ApexCodeCoverage` object to find tests that cover changed classes
+4. **Include Modified Tests**: Adds any test classes that were directly modified
+5. **Execute**: Runs all detected tests with `RunSpecifiedTests`, or defaults to `RunLocalTests` if none found
+
+This intelligent detection ensures you only run tests relevant to your changes, saving time while maintaining coverage.
+
+**Example:**
+```bash
+# Auto-detect and run only relevant tests
+./cgeaa test -o BRInt
+
+# With custom base branch
+./cgeaa test -o BRInt -b develop
+
+# See detailed detection process
+./cgeaa test -o BRInt -v
+```
 
 ## Branch-Based Tagging
 
@@ -248,6 +281,15 @@ PGTM-2270-2, PGTM-2270-0010, PGTM-2270-0011
 
 # Deploy to staging with comprehensive testing (no tag)
 ./cgeaa deploy -o BRStaging -t RunAllTestsInOrg -v
+
+# Run tests with auto-detection
+./cgeaa test -o BRInt
+
+# Run all local tests
+./cgeaa test -o BRInt -t RunLocalTests
+
+# Run specific test classes
+./cgeaa test -o BRStaging -t RunSpecifiedTests --tests "TestClass1,TestClass2,TestClass3"
 ```
 
 ### Advanced Usage
@@ -271,6 +313,9 @@ PGTM-2270-2, PGTM-2270-0010, PGTM-2270-0011
 
 # Update the CGEAA tool itself
 ./cgeaa update
+
+# Run tests relevant to your changes
+./cgeaa test -o BRInt -v
 ```
 
 ### Workflow Integration
@@ -289,6 +334,9 @@ PGTM-2270-2, PGTM-2270-0010, PGTM-2270-0011
 
 # Final validation before production
 ./cgeaa validate -o BRStaging --dry-run -v
+
+# Run auto-detected tests before pushing
+./cgeaa test -o BRInt
 ```
 
 ## Architecture
@@ -307,6 +355,12 @@ CGEAA follows a modular architecture with separate components:
 - **`config.sh`** - Configuration management
 - **`validate.sh`** - Validation operations
 - **`deploy.sh`** - Deployment operations
+- **`test.sh`** - Asynchronous test execution with auto-detection
+- **`orgs.sh`** - Org management and authentication
+- **`branch.sh`** - Branch and tag information
+- **`open.sh`** - Browser integration for orgs
+- **`rollback.sh`** - Branch-based rollback operations
+- **`update.sh`** - Self-update functionality
 
 ### Workflow Process
 
@@ -340,6 +394,59 @@ Multiple logging levels are supported:
 - **STEP**: Major operation steps
 
 ## Advanced Features
+
+### Asynchronous Test Execution
+
+The `test` command provides a standalone way to run Apex tests without deployment. It features intelligent auto-detection of relevant tests based on your code changes.
+
+#### How Auto-Detection Works
+
+When you run `cgeaa test` without specifying `-t`, the system:
+1. Compares your current branch to the base branch (default: `main`)
+2. Identifies all changed Apex classes (`.cls` files)
+3. Queries `ApexCodeCoverage` to find tests that provide coverage for those classes
+4. Includes any test classes that were directly modified
+5. Combines and deduplicates the results
+6. Runs all detected tests asynchronously
+
+#### Test Results
+
+Test results are saved to the `test-results/` directory with:
+- Test execution summaries in JSON format
+- Code coverage reports
+- Detailed test outcome information
+
+#### Usage Examples
+
+```bash
+# Auto-detect and run relevant tests
+./cgeaa test -o BRInt
+
+# Run with verbose output to see the detection process
+./cgeaa test -o BRInt -v
+
+# Use a different base branch for comparison
+./cgeaa test -o BRInt -b develop
+
+# Preview what would be executed
+./cgeaa test -o BRInt --dry-run
+
+# Run all local tests (override auto-detection)
+./cgeaa test -o BRInt -t RunLocalTests
+
+# Run specific tests only
+./cgeaa test -o BRInt -t RunSpecifiedTests --tests "Test1,Test2,Test3"
+
+# Run all tests in the org (includes managed packages)
+./cgeaa test -o BRInt -t RunAllTestsInOrg
+```
+
+#### Benefits
+
+- **Time Savings**: Only runs tests relevant to your changes
+- **Fast Feedback**: Asynchronous execution with configurable timeout
+- **Coverage Tracking**: Automatically collects and reports code coverage
+- **Flexible**: Can override auto-detection when needed
 
 ### Branch-Based Rollback
 
@@ -420,6 +527,8 @@ Temporary files created during operations:
 - `changed_classes.txt` - Changed Apex classes
 - `test_classes.txt` - Selected test classes
 - `package.xml` - Generated deployment manifest
+- `test-results/` - Test execution results and code coverage reports
+- `query_result.json` - ApexCodeCoverage query results (temporary)
 
 ## Integration
 
@@ -428,20 +537,26 @@ Temporary files created during operations:
 CGEAA can be integrated into CI/CD pipelines:
 
 ```yaml
-# Example GitHub Actions step
+# Example GitHub Actions workflow
+- name: Run Tests
+  run: |
+    ./cgeaa test -o sandbox -v
+
 - name: Deploy to Sandbox
   run: |
     ./cgeaa deploy -o sandbox -q --git-tag
+  if: success()
 ```
 
 ### Git Hooks
 
-Use CGEAA in git hooks for automated validation:
+Use CGEAA in git hooks for automated validation and testing:
 
 ```bash
 #!/bin/bash
-# pre-push hook
-./cgeaa validate --dry-run -q
+# pre-push hook - run tests before pushing
+./cgeaa test -o BRInt -q || exit 1
+./cgeaa validate --dry-run -q || exit 1
 ```
 
 ## Contributing
