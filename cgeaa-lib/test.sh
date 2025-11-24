@@ -393,50 +393,26 @@ auto_detect_test_classes() {
     
     log_debug "Changed classes: $class_names"
     
-    # Try to get coverage data from Gist first
+    # Query ApexCodeCoverage to find tests that cover the changed classes
     local coverage_tests=""
-    local coverage_map_file=$(fetch_coverage_map_from_gist)
+    local quoted_names=$(echo "$class_names" | sed "s/ /','/g")
+    local coverage_query="SELECT ApexTestClass.Name FROM ApexCodeCoverage WHERE ApexClassOrTrigger.Name IN ('$quoted_names')"
     
-    if [ -n "$coverage_map_file" ] && [ -f "$coverage_map_file" ]; then
-        log_debug "Using coverage map from Gist"
-        
-        # Look up test classes for each changed class
-        for class_name in $class_names; do
-            local tests=$(get_tests_from_coverage_map "$class_name" "$coverage_map_file")
-            if [ -n "$tests" ]; then
-                coverage_tests="$coverage_tests $tests"
-                log_debug "Found tests for $class_name: $tests"
-            fi
-        done
-        
-        coverage_tests=$(echo "$coverage_tests" | xargs)  # Trim whitespace
-        log_debug "Coverage-based tests from Gist: $coverage_tests"
-    else
-        # Fallback to querying ApexCodeCoverage
-        log_debug "Gist unavailable, falling back to ApexCodeCoverage query"
-        
-        local quoted_names=$(echo "$class_names" | sed "s/ /','/g")
-        local coverage_query="SELECT ApexTestClass.Name FROM ApexCodeCoverage WHERE ApexClassOrTrigger.Name IN ('$quoted_names')"
-        
-        log_debug "Querying ApexCodeCoverage for test classes..."
-        
-        if sf data query --query "$coverage_query" --target-org "$TARGET_ORG" --json > query_result.json 2>query_error.txt; then
-            if command_exists jq; then
-                coverage_tests=$(jq -r '.result.records[]?.ApexTestClass.Name // empty' query_result.json 2>/dev/null | sort -u | tr '\n' ' ')
-            else
-                # Fallback parsing without jq
-                coverage_tests=$(grep -o '"Name":"[^"]*"' query_result.json 2>/dev/null | cut -d'"' -f4 | sort -u | tr '\n' ' ')
-            fi
-            log_debug "Coverage-based tests from query: $coverage_tests"
+    log_debug "Querying ApexCodeCoverage for test classes..."
+    
+    if sf data query --query "$coverage_query" --target-org "$TARGET_ORG" --json > query_result.json 2>query_error.txt; then
+        if command_exists jq; then
+            coverage_tests=$(jq -r '.result.records[]?.ApexTestClass.Name // empty' query_result.json 2>/dev/null | sort -u | tr '\n' ' ')
         else
-            log_debug "Coverage query failed or returned no results"
-            if [ -f query_error.txt ]; then
-                log_debug "Query error: $(cat query_error.txt)"
-            fi
+            # Fallback parsing without jq
+            coverage_tests=$(grep -o '"Name":"[^"]*"' query_result.json 2>/dev/null | cut -d'"' -f4 | sort -u | tr '\n' ' ')
         fi
-        
-        # Cleanup query temp files
-        rm -f query_result.json query_error.txt
+        log_debug "Coverage-based tests: $coverage_tests"
+    else
+        log_debug "Coverage query failed or returned no results"
+        if [ -f query_error.txt ]; then
+            log_debug "Query error: $(cat query_error.txt)"
+        fi
     fi
     
     # Also include any test classes that were modified
@@ -460,4 +436,7 @@ auto_detect_test_classes() {
         log_info "No specific test classes found, defaulting to RunLocalTests"
         TEST_LEVEL="RunLocalTests"
     fi
+    
+    # Cleanup temp files
+    rm -f query_result.json query_error.txt
 }
