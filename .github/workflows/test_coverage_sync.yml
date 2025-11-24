@@ -52,6 +52,7 @@ jobs:
             --code-coverage \
             --result-format json \
             --output-dir test-results \
+            --synchronous \
             > test-run-output.log 2>&1 || true
           
           # Check if test results exist
