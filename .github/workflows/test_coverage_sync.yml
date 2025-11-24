@@ -43,7 +43,6 @@ jobs:
       - name: Run All Local Tests
         id: run_tests
         run: |
-          cd Bedrock/Bedrock
           echo "Running all local tests with code coverage..."
           
           # Run tests and capture output
@@ -70,7 +69,6 @@ jobs:
       - name: Build Coverage Map
         id: build_map
         run: |
-          cd Bedrock/Bedrock
           
           # Create a Node.js script to parse the test results
           cat > parse-coverage.js << 'EOF'
