@@ -10,7 +10,7 @@ on:
 
 jobs:
   update-coverage-map:
-    runs-on: arc-ent
+    runs-on: ubuntu-latest
     
     steps:
       # Write SF auth URL to file
