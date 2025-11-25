@@ -45,6 +45,7 @@ jobs:
             --test-level RunLocalTests \
             --result-format json \
             --concise \
+            --synchronous \
             -d test-results \
             > test-run-output.log 2>&1 || true
           
