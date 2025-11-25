@@ -44,13 +44,12 @@ jobs:
             --target-org targetOrg \
             --test-level RunLocalTests \
             --result-format json \
-            --wait 25 \
             --concise \
             -d test-results \
             > test-run-output.log 2>&1 || true
           
-          # Check if test results exist
-          if [ -f "test-results/test-result.json" ]; then
+          # Check if test results exist (handles dynamic filename with org ID)
+          if [ -f test-results/test-result-*.json ]; then
             echo "Test results generated successfully"
             echo "test_success=true" >> $GITHUB_OUTPUT
           else
