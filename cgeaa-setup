@@ -51,7 +51,8 @@ perform_global_install() {
     # This is the most reliable way to avoid regex errors.
     # 1. Delete line 10 (SCRIPT_DIR=...)
     # 2. Replace line 11 (CGEAA_LIB_DIR=...) with the global path.
-    sed -e '10d' -e '11s|.*|CGEAA_LIB_DIR="/usr/local/share/cgeaa/cgeaa-lib"|' "${SCRIPT_DIR}/cgeaa" > "$TEMP_CGEAA_SCRIPT"
+    # Note: Use separate sed commands to avoid line number shifting issues
+    sed -e '10d' "${SCRIPT_DIR}/cgeaa" | sed '10s|.*|CGEAA_LIB_DIR="/usr/local/share/cgeaa/cgeaa-lib"|' > "$TEMP_CGEAA_SCRIPT"
 
     # 4. Copy the modified script to /usr/local/bin
     log_info "Copying cgeaa to /usr/local/bin..."
@@ -139,6 +140,39 @@ fi
 
 # --- Run Installation ---
 install_globally
+
+# --- Configure GitHub Gist URL ---
+echo
+echo -e "${YELLOW}--- GitHub Gist Configuration ---${NC}"
+echo "CGEAA can use a pre-generated test coverage map from GitHub Gist for faster test detection."
+echo "This is optional but recommended for improved performance."
+echo
+read -p "Do you want to configure a GitHub Gist URL now? (y/n) " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+ echo
+ echo "You need the RAW content URL from your GitHub Gist."
+ echo "Example: https://gist.githubusercontent.com/username/abc123/raw/testCoverageMap.json"
+ echo
+ read -p "Enter your Gist URL (or press Enter to skip): " GIST_URL
+ if [ -n "$GIST_URL" ]; then
+ # Add to global config
+ add_or_update_config "test_coverage_gist_url" "$GIST_URL" "$GLOBAL_CONFIG_FILE"
+ echo "✓ Gist URL configured in global config"
+ # Optionally add to project config
+ read -p "Also add to project config? (y/n) " -n 1 -r
+ echo
+ if [[ $REPLY =~ ^[Yy]$ ]]; then
+ add_or_update_config "test_coverage_gist_url" "$GIST_URL" "$PROJECT_CONFIG_FILE"
+ echo "✓ Gist URL configured in project config"
+ fi
+ else
+ echo "Skipping Gist configuration. You can add it later by editing your config file."
+ fi
+else
+ echo "Skipping Gist configuration. You can add it later by editing your config file."
+fi
+
 
 # Check dependencies
 echo
