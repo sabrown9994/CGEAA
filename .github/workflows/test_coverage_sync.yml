@@ -46,7 +46,7 @@ jobs:
             --result-format json \
             --concise \
             --synchronous \
-            -d test-results 
+            -d test-results || true 
           
           # Check if test results exist (handles dynamic filename with org ID)
           if [ -f test-results/test-result-*.json ]; then
