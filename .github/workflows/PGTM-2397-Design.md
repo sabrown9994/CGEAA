@@ -33,24 +33,87 @@ Your system experiences a race condition when quotes are auto-approved:
 - **Default:** `false`
 - **Purpose:** Tracks whether the quote has been successfully calculated while in "Pending Pre-Sale Approval" status
 
-### Phase 2: Modify Approval Entry Criteria
+### Phase 1.5: Set Status Before Approval Submission
 
-**Update Approval Chain Entry Criteria:**
-- Add condition: `Calculated_Before_Approval__c == true`
-- This prevents approval from triggering until calculation completes
-- Approval can only proceed after QCP_Bedrock.js marks the field as checked
+**Update QuoteExtController.onSubmit():**
+- Before calling `SBAA.ApprovalAPI.submit()`, set quote status to 'Pending Pre-Sale Approval'
+- This triggers the CPQ calculator BEFORE the approval chain submission
+- Ensures calculator completes and sets flag before approval can proceed
 
-### Phase 3: Update QCP_Bedrock.js
+```apex
+public PageReference onSubmit() {
+    try {
+        if (quoteId != null) {
+            // PGTM-2397: Set status to trigger calculator before approval submission
+            SBQQ__Quote__c quote = new SBQQ__Quote__c(Id = quoteId);
+            quote.SBQQ__Status__c = 'Pending Pre-Sale Approval';
+            update quote;
+            
+            // Now submit to approval chain
+            SBAA.ApprovalAPI.submit(quoteId, SBAA__Approval__c.Quote__c);
+        }
+    } catch (Exception e) {
+        ApexPages.addMessage(new ApexPages.Message(ApexPages.Severity.ERROR, 'There was an error saving your quote: '+e.getMessage()));
+        SBAA.ApprovalAPI.recall(quoteId, SBAA__Approval__c.Quote__c);
+        return null;
+    }
+    return new PageReference('/' + quoteId);
+}
+```
+
+### Phase 2: Update QCP_Bedrock.js to Set Flag
 
 **In `onAfterCalculate()` function:**
 - After all calculations complete successfully
 - Check if quote status is `'Pending Pre-Sale Approval'`
 - Set `Calculated_Before_Approval__c = true` on the quote
-- This signals to the approval chain that calculation is complete
+- This signals that calculation is complete
 
 **Error Handling:**
 - If quote is already `'Approved'` or beyond, throw existing error (don't suppress it)
-- Only suppress/handle the error if quote is in `'Pending Pre-Sale Approval'` status
+- Only set the flag if quote is in `'Pending Pre-Sale Approval'` status
+
+### Phase 3: Auto-Submit Quote on Calculation Complete
+
+**Create new Apex method: `submitQuoteForApprovalOnCalculationComplete()`**
+
+This method will be called from a Quote trigger when `Calculated_Before_Approval__c` changes from false → true:
+
+```apex
+public static void submitQuoteForApprovalOnCalculationComplete(List<SBQQ__Quote__c> newList, Map<Id, SBQQ__Quote__c> oldMap) {
+    List<SBQQ__Quote__c> quotesToSubmit = new List<SBQQ__Quote__c>();
+    
+    for (SBQQ__Quote__c quote : newList) {
+        SBQQ__Quote__c oldQuote = oldMap.get(quote.Id);
+        
+        // Check if flag just changed from false to true
+        if (!oldQuote.Calculated_Before_Approval__c && 
+            quote.Calculated_Before_Approval__c &&
+            quote.SBQQ__Status__c == 'Pending Pre-Sale Approval') {
+            quotesToSubmit.add(quote);
+        }
+    }
+    
+    if (!quotesToSubmit.isEmpty()) {
+        submitQuotesForApproval(quotesToSubmit);
+    }
+}
+
+private static void submitQuotesForApproval(List<SBQQ__Quote__c> quotes) {
+    for (SBQQ__Quote__c quote : quotes) {
+        // Use Salesforce Advanced Approval API to submit
+        sbaa.ApprovalProcessSubmitter.submitApprovalProcess(
+            new sbaa.ApprovalProcessSubmitter.SubmitRequest(quote.Id, 'Pre_Sale_Approval')
+        );
+        System.debug('Quote ' + quote.Id + ' submitted for Pre-Sale Approval after calculation');
+    }
+}
+```
+
+**Add to `afterUpdate()` in CPQQuoteTriggerHandler:**
+```apex
+CPQQuoteTriggerFunctions.submitQuoteForApprovalOnCalculationComplete(newList, oldMap);
+```
 
 ### Phase 4: Handle Rejection Workflow
 
@@ -127,25 +190,26 @@ public static void resetCalculationFlagOnRejection(List<SBQQ__Quote__c> newList,
 CPQQuoteTriggerFunctions.resetCalculationFlagOnRejection(newList, oldMap);
 ```
 
-### 4. Approval Chain Entry Criteria
+### 4. No Changes to Approval Chain Entry Criteria
 
-**Add to Advanced Approval entry criteria:**
-```
-SBQQ__Status__c = 'Pending Pre-Sale Approval' 
-AND Calculated_Before_Approval__c = true
-```
+The approval chain entry criteria remain unchanged. The quote is now submitted programmatically via Apex after calculation completes, so the approval chain will receive the submission request at that time.
 
 ---
 
 ## Sequence Diagram
 
 ```
-User submits quote for approval
+User clicks "Submit for Approval" button
     ↓
-Quote status → 'Pending Pre-Sale Approval'
+QuoteApprovalView navigates to /apex/SubmitQuote
+    ↓
+QuoteExtController.onSubmit() executes
+    ↓
+[STEP 1] Set Quote status → 'Pending Pre-Sale Approval'
     ↓
 CPQ Trigger fires → QuoteCalculatorOperation enqueued
     ↓
+[ASYNC - Calculator API runs in background]
 Calculator API calls QCP_Bedrock.onAfterCalculate()
     ↓
 QCP_Bedrock completes calculations
@@ -154,7 +218,13 @@ QCP_Bedrock sets Calculated_Before_Approval__c = true
     ↓
 Quote saved with flag = true
     ↓
-Approval Chain entry criteria now satisfied
+Quote Trigger fires (afterUpdate)
+    ↓
+submitQuoteForApprovalOnCalculationComplete() detects flag change
+    ↓
+Apex calls sbaa.ApprovalProcessSubmitter.submitApprovalProcess()
+    ↓
+Quote submitted to Pre-Sale Approval chain
     ↓
 Approval chain auto-approves (if applicable)
     ↓
@@ -221,15 +291,27 @@ Quote status → 'Approved'
 
 ## Implementation Checklist
 
+### Code Changes (✅ Completed)
+- [x] Update QCP_Bedrock.js `onAfterCalculate()` to set flag when status is 'Pending Pre-Sale Approval'
+- [x] Add `submitQuoteForApprovalOnCalculationComplete()` method to CPQQuoteTriggerFunctions
+- [x] Add `submitQuotesForApproval()` helper method to CPQQuoteTriggerFunctions
+- [x] Add call to submit method in CPQQuoteTriggerHandler.afterUpdate()
+- [x] Add `resetCalculationFlagOnRejection()` method to CPQQuoteTriggerFunctions
+- [x] Add call to reset method in CPQQuoteTriggerHandler.beforeUpdate()
+- [x] Update QuoteExtController.onSubmit() to set status before approval submission
+
+### Configuration (⏳ Pending)
 - [ ] Create `Calculated_Before_Approval__c` checkbox field on Quote object
-- [ ] Update QCP_Bedrock.js `onAfterCalculate()` to set flag when status is 'Pending Pre-Sale Approval'
-- [ ] Add `resetCalculationFlagOnRejection()` method to CPQQuoteTriggerFunctions
-- [ ] Add call to reset method in CPQQuoteTriggerHandler.beforeUpdate()
-- [ ] Update Approval Chain entry criteria to require flag = true
+
+### Testing (⏳ Pending)
 - [ ] Test Case 1: Normal Auto-Approve Flow
 - [ ] Test Case 2: Rejection & Resubmission
 - [ ] Test Case 3: Manual Approval
 - [ ] Test Case 4: Error Handling
+- [ ] Test Case 5: Verify flag triggers approval submission
+- [ ] Test Case 6: Verify status set before approval submission
+
+### Deployment (⏳ Pending)
 - [ ] Deploy to INTQA for validation
 - [ ] Monitor approval logs for timing issues
 - [ ] Deploy to Production
