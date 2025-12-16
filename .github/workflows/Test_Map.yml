@@ -1,0 +1,129 @@
+# Test workflow to verify GIST coverage map functionality
+name: Test Gist Coverage Map
+
+on:
+  workflow_dispatch:
+    inputs:
+      apex_classes:
+        description: 'Comma-separated list of Apex class names to look up (e.g., QuoteExtController,AccountExtController)'
+        required: true
+        type: string
+
+jobs:
+  test-gist:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Display Input Classes
+        run: |
+          echo "=== Input Apex Classes ==="
+          echo "${{ github.event.inputs.apex_classes }}"
+          echo ""
+
+      - name: Download Coverage Map from Gist
+        id: download_gist
+        run: |
+          echo "=== Downloading Coverage Map from Gist ==="
+          
+          GIST_URL="${{ secrets.TEST_COVERAGE_GIST_URL }}"
+          
+          if [ -z "$GIST_URL" ]; then
+            echo "Error: TEST_COVERAGE_GIST_URL secret not set"
+            echo "gist_downloaded=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "Downloading from Gist..."
+          
+          # Download the gist with token authentication
+          if curl -H "Authorization: token ${{ secrets.GIST_TOKEN }}" \
+            "$GIST_URL" \
+            -o coverage-map.json -f -s; then
+            
+            if [ -f "coverage-map.json" ] && [ -s "coverage-map.json" ]; then
+              echo "✅ Coverage map downloaded successfully"
+              echo "gist_downloaded=true" >> $GITHUB_OUTPUT
+              echo "File size: $(wc -c < coverage-map.json) bytes"
+              echo ""
+              echo "=== Coverage Map Metadata ==="
+              jq '{version, lastUpdated, recordCount}' coverage-map.json
+            else
+              echo "❌ Failed to download coverage map - file is empty or missing"
+              echo "gist_downloaded=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          else
+            echo "❌ Error downloading from Gist - HTTP request failed"
+            echo "gist_downloaded=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Match Apex Classes and Display Test Classes
+        if: ${{ steps.download_gist.outputs.gist_downloaded == 'true' }}
+        run: |
+          echo "=== Matching Apex Classes ==="
+          echo ""
+          
+          # Convert comma-separated input to array
+          IFS=',' read -ra CLASS_ARRAY <<< "${{ github.event.inputs.apex_classes }}"
+          
+          all_test_classes=""
+          
+          for class_name in "${CLASS_ARRAY[@]}"; do
+            # Trim whitespace
+            class_name=$(echo "$class_name" | xargs)
+            
+            if [ -z "$class_name" ]; then
+              continue
+            fi
+            
+            echo "----------------------------------------"
+            echo "Looking up: $class_name"
+            
+            # Check if this class exists in the coverage map
+            mapped_tests=$(jq -r ".coverage.\"$class_name\"[]?" coverage-map.json 2>/dev/null || true)
+            
+            if [ -n "$mapped_tests" ]; then
+              echo "✅ Found test classes:"
+              echo "$mapped_tests" | while read -r test; do
+                echo "   - $test"
+              done
+              all_test_classes="$all_test_classes $mapped_tests"
+            else
+              echo "⚠️  No test classes found in coverage map"
+            fi
+            echo ""
+          done
+          
+          echo "========================================"
+          echo "=== SUMMARY ==="
+          echo "========================================"
+          echo ""
+          
+          # Deduplicate and format final list
+          if [ -n "$all_test_classes" ]; then
+            final_test_classes=$(echo "$all_test_classes" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+            
+            echo "All unique test classes found:"
+            echo "$final_test_classes" | tr ' ' '\n' | while read -r test; do
+              if [ -n "$test" ]; then
+                echo "  ✓ $test"
+              fi
+            done
+            echo ""
+            echo "Space-separated list (for SF CLI):"
+            echo "$final_test_classes"
+            echo ""
+            echo "Total unique test classes: $(echo "$final_test_classes" | wc -w | xargs)"
+          else
+            echo "❌ No test classes found for any of the input classes"
+          fi
+
+      - name: Show Available Classes in Coverage Map
+        if: ${{ steps.download_gist.outputs.gist_downloaded == 'true' }}
+        run: |
+          echo ""
+          echo "=== All Classes in Coverage Map (first 50) ==="
+          jq -r '.coverage | keys[:50][]' coverage-map.json 2>/dev/null || echo "Could not list classes"
+          echo ""
+          echo "Total classes in map: $(jq -r '.coverage | keys | length' coverage-map.json)"
