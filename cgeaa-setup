@@ -141,38 +141,54 @@ fi
 # --- Run Installation ---
 install_globally
 
-# --- Configure GitHub Gist URL ---
+# --- Configure Coverage Mappings Repository ---
 echo
-echo -e "${YELLOW}--- GitHub Gist Configuration ---${NC}"
-echo "CGEAA can use a pre-generated test coverage map from GitHub Gist for faster test detection."
-echo "This is optional but recommended for improved performance."
+echo -e "${YELLOW}--- Coverage Mappings Repository ---${NC}"
+echo "CGEAA reads Apex class → test class mappings from a sibling git repository."
+echo "Expected layout:"
+echo "  <parent>/"
+echo "  ├── CGEAA/                       ← this repo"
+echo "  └── EA-Salesforce-Mappings/      ← mappings repo"
+echo "      └── JSON/test-coverage-map.json"
 echo
-read -p "Do you want to configure a GitHub Gist URL now? (y/n) " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
- echo
- echo "You need the RAW content URL from your GitHub Gist."
- echo "Example: https://gist.githubusercontent.com/username/abc123/raw/testCoverageMap.json"
- echo
- read -p "Enter your Gist URL (or press Enter to skip): " GIST_URL
- if [ -n "$GIST_URL" ]; then
- # Add to global config
- add_or_update_config "test_coverage_gist_url" "$GIST_URL" "$GLOBAL_CONFIG_FILE"
- echo "✓ Gist URL configured in global config"
- # Optionally add to project config
- read -p "Also add to project config? (y/n) " -n 1 -r
- echo
- if [[ $REPLY =~ ^[Yy]$ ]]; then
- add_or_update_config "test_coverage_gist_url" "$GIST_URL" "$PROJECT_CONFIG_FILE"
- echo "✓ Gist URL configured in project config"
- fi
- else
- echo "Skipping Gist configuration. You can add it later by editing your config file."
- fi
+read -p "Enter the mappings repository name (press Enter to use default: EA-Salesforce-Mappings): " MAPPINGS_REPO
+MAPPINGS_REPO="${MAPPINGS_REPO:-EA-Salesforce-Mappings}"
+
+read -p "Enter the git clone URL for ${MAPPINGS_REPO} (press Enter to use default: https://github.com/cargurus-ea/EA-Salesforce-Mappings): " MAPPINGS_REPO_URL
+MAPPINGS_REPO_URL="${MAPPINGS_REPO_URL:-https://github.com/cargurus-ea/EA-Salesforce-Mappings}"
+
+MAPPINGS_REPO_PATH="$(dirname "$SCRIPT_DIR")/${MAPPINGS_REPO}"
+MAP_FILE="${MAPPINGS_REPO_PATH}/JSON/test-coverage-map.json"
+
+if [ -d "$MAPPINGS_REPO_PATH" ]; then
+    if [ -f "$MAP_FILE" ]; then
+        echo "✓ Mappings repository found and test-coverage-map.json is present"
+    else
+        echo -e "${YELLOW}⚠ Repository directory found at $MAPPINGS_REPO_PATH but JSON/test-coverage-map.json is missing${NC}"
+        echo "  CGEAA will fall back to live ApexCodeCoverage queries until the file is present."
+    fi
 else
- echo "Skipping Gist configuration. You can add it later by editing your config file."
+    if [ -n "$MAPPINGS_REPO_URL" ]; then
+        echo "Repository not found locally — attempting to clone..."
+        if git clone "$MAPPINGS_REPO_URL" "$MAPPINGS_REPO_PATH" --quiet 2>/dev/null; then
+            echo "✓ Cloned ${MAPPINGS_REPO} successfully"
+        else
+            echo -e "${YELLOW}⚠ Clone failed. CGEAA will attempt to clone automatically on first use.${NC}"
+        fi
+    else
+        echo -e "${YELLOW}⚠ Repository not found at $MAPPINGS_REPO_PATH and no URL provided${NC}"
+        echo "  CGEAA will fall back to live ApexCodeCoverage queries until the repo is available."
+        echo "  You can set coverage_mappings_repo_url in your config to enable auto-cloning."
+    fi
 fi
 
+add_or_update_config "coverage_mappings_repo" "$MAPPINGS_REPO" "$GLOBAL_CONFIG_FILE"
+add_or_update_config "coverage_mappings_repo" "$MAPPINGS_REPO" "$PROJECT_CONFIG_FILE"
+if [ -n "$MAPPINGS_REPO_URL" ]; then
+    add_or_update_config "coverage_mappings_repo_url" "$MAPPINGS_REPO_URL" "$GLOBAL_CONFIG_FILE"
+    add_or_update_config "coverage_mappings_repo_url" "$MAPPINGS_REPO_URL" "$PROJECT_CONFIG_FILE"
+fi
+echo "✓ Coverage mappings repo configured: $MAPPINGS_REPO"
 
 # Check dependencies
 echo
@@ -193,14 +209,17 @@ echo
 echo -e "${GREEN}CGEAA setup completed successfully!${NC}"
 echo
 echo "Next steps:"
-echo "1. Review and customize the configuration files:"
+echo "1. Clone the coverage mappings repository as a sibling of this directory (if not already done):"
+echo "   cd .. && git clone <EA-Salesforce-Mappings-url>"
+echo
+echo "2. Review and customize the configuration files:"
 echo "   - Global: $GLOBAL_CONFIG_FILE"
 echo "   - Project: $PROJECT_CONFIG_FILE"
 echo
-echo "2. Authenticate to your Salesforce orgs:"
+echo "3. Authenticate to your Salesforce orgs:"
 echo "   sf auth web login --alias targetOrg"
 echo
-echo "3. Try running CGEAA:"
+echo "4. Try running CGEAA:"
 echo "   cgeaa validate --dry-run"
 echo
 echo "For help, run: cgeaa help"

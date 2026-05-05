@@ -6,14 +6,22 @@
 # Execute test run
 execute_test() {
     local start_time=$(date +%s)
-    
+
+    # --list: show mapped test classes without running anything
+    if [ "$LIST_TESTS" = "true" ]; then
+        check_dependencies
+        check_git_repo
+        list_test_classes
+        return 0
+    fi
+
     log_step "Starting test execution"
-    
+
     # Check dependencies and authentication
     check_dependencies
     check_git_repo
     check_sf_auth "$TARGET_ORG"
-    
+
     # Auto-detect test classes if TEST_LEVEL is not specified
     if [ -z "$TEST_LEVEL" ] || [ "$TEST_LEVEL" = "$DEFAULT_TEST_LEVEL" ]; then
         log_info "No test level specified, automatically detecting test classes..."
@@ -245,46 +253,56 @@ process_test_results() {
     fi
 }
 
-# Fetch coverage map from GitHub Gist
-fetch_coverage_map_from_gist() {
-    local gist_url=$(get_config "test_coverage_gist_url")
-    local cache_ttl=$(get_config "coverage_cache_ttl" "86400")
-    local cache_file="$HOME/.cgeaa/coverage-cache.json"
-    local cache_dir=$(dirname "$cache_file")
-    
-    # Check if Gist URL is configured
-    if [ -z "$gist_url" ]; then
-        log_debug "No test_coverage_gist_url configured, will use fallback method"
-        return 1
+# Fetch coverage map from the sibling mappings repository.
+# Navigates to <CGEAA_root>/../<coverage_mappings_repo>, pulls latest from main,
+# then returns the path to JSON/test-coverage-map.json.
+fetch_coverage_map_from_repo() {
+    local repo_name=$(get_config "coverage_mappings_repo" "EA-Salesforce-Mappings")
+    local repo_url=$(get_config "coverage_mappings_repo_url" "")
+    local cgeaa_root
+    # Prefer source_repo_path from global config (set by cgeaa-setup) so the
+    # globally installed copy resolves siblings correctly instead of using
+    # /usr/local/share/cgeaa as the anchor.
+    local source_repo_path=""
+    if [ -f "$GLOBAL_CONFIG_FILE" ]; then
+        source_repo_path=$(grep "^source_repo_path=" "$GLOBAL_CONFIG_FILE" | cut -d'=' -f2)
     fi
-    
-    # Create cache directory if it doesn't exist
-    mkdir -p "$cache_dir"
-    
-    # Check if cache exists and is still valid
-    if [ -f "$cache_file" ]; then
-        local cache_age=$(($(date +%s) - $(stat -f %m "$cache_file" 2>/dev/null || stat -c %Y "$cache_file" 2>/dev/null || echo 0)))
-        if [ "$cache_age" -lt "$cache_ttl" ]; then
-            log_debug "Using cached coverage map (age: ${cache_age}s, TTL: ${cache_ttl}s)"
-            echo "$cache_file"
-            return 0
+    if [ -n "$source_repo_path" ] && [ -d "$source_repo_path" ]; then
+        cgeaa_root="$source_repo_path"
+    else
+        cgeaa_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    fi
+    local repo_path="${cgeaa_root}/../${repo_name}"
+    local map_file="${repo_path}/JSON/test-coverage-map.json"
+
+    if [ ! -d "$repo_path" ]; then
+        if [ -n "$repo_url" ]; then
+            log_info "Coverage mappings repo not found — cloning from $repo_url"
+            if git clone "$repo_url" "$repo_path" --quiet 2>/dev/null; then
+                log_success "Cloned ${repo_name} successfully"
+            else
+                log_warning "Failed to clone ${repo_name} from $repo_url — falling back to ApexCodeCoverage query"
+                return 1
+            fi
         else
-            log_debug "Cache expired (age: ${cache_age}s, TTL: ${cache_ttl}s), fetching fresh data"
+            log_debug "Coverage mappings repo not found at $repo_path and no coverage_mappings_repo_url configured — falling back to ApexCodeCoverage query"
+            return 1
+        fi
+    else
+        log_debug "Pulling latest coverage mappings from ${repo_name}"
+        if ! git -C "$repo_path" pull origin main --ff-only --quiet 2>/dev/null; then
+            log_warning "Could not pull latest changes from ${repo_name} — using existing local copy"
         fi
     fi
-    
-    # Fetch from Gist
-    log_debug "Fetching coverage map from Gist: $gist_url"
-    if curl -sf "$gist_url" -o "$cache_file" 2>/dev/null; then
-        log_debug "Coverage map fetched and cached successfully"
-        echo "$cache_file"
-        return 0
-    else
-        log_debug "Failed to fetch coverage map from Gist"
-        # Remove invalid cache file
-        rm -f "$cache_file"
+
+    if [ ! -f "$map_file" ]; then
+        log_debug "Coverage map file not found: $map_file"
         return 1
     fi
+
+    log_debug "Coverage map loaded from repo: $map_file"
+    echo "$map_file"
+    return 0
 }
 
 # Get test classes for an Apex class from coverage map
@@ -297,10 +315,10 @@ get_tests_from_coverage_map() {
     fi
     
     if command_exists jq; then
-        jq -r ".coverage[\"$class_name\"] // [] | .[]" "$coverage_file" 2>/dev/null
+        jq -r ".coverage[\"$class_name\"].Tests // [] | .[]" "$coverage_file" 2>/dev/null
     else
-        # Fallback without jq (basic grep)
-        grep -o "\"$class_name\":\[.*\]" "$coverage_file" 2>/dev/null | sed 's/.*\[//;s/\].*//;s/"//g;s/,/ /g'
+        # Fallback without jq: find the class block then extract the Tests array
+        grep -A20 "\"$class_name\"" "$coverage_file" 2>/dev/null | grep -o '"Tests":\[[^]]*\]' | sed 's/.*\[//;s/\].*//;s/"//g;s/,/\n/g'
     fi
 }
 
@@ -329,6 +347,105 @@ show_test_summary() {
             log_info "  Org-wide Coverage: ${org_coverage}%"
         fi
     fi
+}
+
+# List test classes mapped to changed Apex classes (--list flag, no test run)
+list_test_classes() {
+    log_step "Computing changed Apex classes"
+
+    # Determine base reference (mirrors auto_detect_test_classes logic)
+    local base_ref=""
+    if [ -n "$BASE_BRANCH" ]; then
+        if git rev-parse --verify "$BASE_BRANCH" >/dev/null 2>&1; then
+            base_ref="$BASE_BRANCH"
+        else
+            log_warning "Base branch '$BASE_BRANCH' not found"
+        fi
+    fi
+
+    if [ -z "$base_ref" ]; then
+        local tag_prefix=$(get_branch_based_tag_prefix)
+        local latest_tag=$(get_latest_tag "$tag_prefix")
+        if [ -n "$latest_tag" ]; then
+            base_ref="$latest_tag"
+        elif git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+            base_ref="HEAD~1"
+        else
+            base_ref=$(git rev-list --max-parents=0 HEAD)
+        fi
+    fi
+
+    log_info "Comparing against: $base_ref"
+
+    local changed_files=$(get_changed_files "$base_ref")
+    local apex_files=$(echo "$changed_files" | grep '\.cls$' | filter_force_app_files)
+
+    if [ -z "$apex_files" ]; then
+        log_info "No Apex classes changed since $base_ref — no test mappings to display"
+        return 0
+    fi
+
+    # Collect changed class names
+    local class_names=""
+    while IFS= read -r file; do
+        [ -n "$file" ] && class_names="$class_names $(basename "$file" .cls)"
+    done < <(echo "$apex_files")
+    class_names=$(echo "$class_names" | xargs)
+
+    log_step "Looking up test class mappings"
+
+    local repo_name=$(get_config "coverage_mappings_repo" "EA-Salesforce-Mappings")
+    local cgeaa_root
+    local source_repo_path=""
+    if [ -f "$GLOBAL_CONFIG_FILE" ]; then
+        source_repo_path=$(grep "^source_repo_path=" "$GLOBAL_CONFIG_FILE" | cut -d'=' -f2)
+    fi
+    if [ -n "$source_repo_path" ] && [ -d "$source_repo_path" ]; then
+        cgeaa_root="$source_repo_path"
+    else
+        cgeaa_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    fi
+    local coverage_map_file="${cgeaa_root}/../${repo_name}/JSON/test-coverage-map.json"
+
+    if [ ! -f "$coverage_map_file" ]; then
+        log_error "Coverage map not found at: $coverage_map_file"
+        log_error "Run ./cgeaa-setup or clone the repo manually:"
+        log_error "  git clone https://github.com/cargurus-ea/EA-Salesforce-Mappings $(dirname "$coverage_map_file")/../.."
+        return 1
+    fi
+
+    echo
+    log_info "=== Test Class Mappings ==="
+    log_info "Base reference:  $base_ref"
+    log_info "Changed classes: $class_names"
+    echo
+
+    local found_any=false
+    local all_tests=""
+
+    for class_name in $class_names; do
+        local tests=$(get_tests_from_coverage_map "$class_name" "$coverage_map_file")
+        if [ -n "$tests" ]; then
+            found_any=true
+            echo "  $class_name"
+            echo "$tests" | while IFS= read -r t; do
+                echo "    → $t"
+            done
+            all_tests="$all_tests $tests"
+        else
+            echo "  $class_name"
+            echo "    → (no mappings found)"
+        fi
+    done
+
+    echo
+    if [ "$found_any" = "true" ]; then
+        local unique_tests
+        unique_tests=$(echo "$all_tests" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ',')
+        unique_tests="${unique_tests%,}"  # strip trailing comma
+        log_info "Combined (unique): $unique_tests"
+    fi
+    echo
 }
 
 # Auto-detect test classes based on changed files and coverage
@@ -392,27 +509,41 @@ auto_detect_test_classes() {
     fi
     
     log_debug "Changed classes: $class_names"
-    
-    # Query ApexCodeCoverage to find tests that cover the changed classes
+
+    # Try to get coverage data from mappings repo first, fall back to live SOQL query
     local coverage_tests=""
-    local quoted_names=$(echo "$class_names" | sed "s/ /','/g")
-    local coverage_query="SELECT ApexTestClass.Name FROM ApexCodeCoverage WHERE ApexClassOrTrigger.Name IN ('$quoted_names')"
-    
-    log_debug "Querying ApexCodeCoverage for test classes..."
-    
-    if sf data query --query "$coverage_query" --target-org "$TARGET_ORG" --json > query_result.json 2>query_error.txt; then
-        if command_exists jq; then
-            coverage_tests=$(jq -r '.result.records[]?.ApexTestClass.Name // empty' query_result.json 2>/dev/null | sort -u | tr '\n' ' ')
-        else
-            # Fallback parsing without jq
-            coverage_tests=$(grep -o '"Name":"[^"]*"' query_result.json 2>/dev/null | cut -d'"' -f4 | sort -u | tr '\n' ' ')
-        fi
-        log_debug "Coverage-based tests: $coverage_tests"
+    local coverage_map_file=$(fetch_coverage_map_from_repo)
+
+    if [ -n "$coverage_map_file" ] && [ -f "$coverage_map_file" ]; then
+        log_debug "Using coverage map from repo for test detection"
+        for class_name in $class_names; do
+            local tests=$(get_tests_from_coverage_map "$class_name" "$coverage_map_file")
+            if [ -n "$tests" ]; then
+                coverage_tests="$coverage_tests $tests"
+                log_debug "Found tests for $class_name: $tests"
+            fi
+        done
+        coverage_tests=$(echo "$coverage_tests" | xargs)
+        log_debug "Coverage-based tests from repo: $coverage_tests"
     else
-        log_debug "Coverage query failed or returned no results"
-        if [ -f query_error.txt ]; then
-            log_debug "Query error: $(cat query_error.txt)"
+        log_debug "Mappings repo unavailable, falling back to ApexCodeCoverage query"
+        local quoted_names=$(echo "$class_names" | sed "s/ /','/g")
+        local coverage_query="SELECT ApexTestClass.Name FROM ApexCodeCoverage WHERE ApexClassOrTrigger.Name IN ('$quoted_names')"
+
+        if sf data query --query "$coverage_query" --target-org "$TARGET_ORG" --json > query_result.json 2>query_error.txt; then
+            if command_exists jq; then
+                coverage_tests=$(jq -r '.result.records[]?.ApexTestClass.Name // empty' query_result.json 2>/dev/null | sort -u | tr '\n' ' ')
+            else
+                coverage_tests=$(grep -o '"Name":"[^"]*"' query_result.json 2>/dev/null | cut -d'"' -f4 | sort -u | tr '\n' ' ')
+            fi
+            log_debug "Coverage-based tests from query: $coverage_tests"
+        else
+            log_debug "Coverage query failed or returned no results"
+            if [ -f query_error.txt ]; then
+                log_debug "Query error: $(cat query_error.txt)"
+            fi
         fi
+        rm -f query_result.json query_error.txt
     fi
     
     # Also include any test classes that were modified

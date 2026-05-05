@@ -253,12 +253,12 @@ find_test_classes() {
     
     log_debug "Changed classes: $class_names"
     
-    # Try to get coverage data from Gist first
+    # Try to get coverage data from mappings repo first
     local coverage_tests=""
-    local coverage_map_file=$(fetch_coverage_map_from_gist)
-    
+    local coverage_map_file=$(fetch_coverage_map_from_repo)
+
     if [ -n "$coverage_map_file" ] && [ -f "$coverage_map_file" ]; then
-        log_debug "Using coverage map from Gist for deployment"
+        log_debug "Using coverage map from repo for deployment"
         
         # Look up test classes for each changed class
         for class_name in $class_names; do
@@ -273,7 +273,7 @@ find_test_classes() {
         log_debug "Coverage-based tests from Gist: $coverage_tests"
     else
         # Fallback to querying ApexCodeCoverage
-        log_debug "Gist unavailable, falling back to ApexCodeCoverage query"
+        log_debug "Mappings repo unavailable, falling back to ApexCodeCoverage query"
         
         local quoted_names=$(echo "$class_names" | sed "s/ /','/g")
         local coverage_query="SELECT ApexTestClass.Name FROM ApexCodeCoverage WHERE ApexClassOrTrigger.Name IN ('$quoted_names')"

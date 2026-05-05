@@ -18,8 +18,8 @@ DEFAULT_AUTO_CLEANUP="true"
 DEFAULT_ENABLE_NOTIFICATIONS="false"
 DEFAULT_MAX_DEPLOY_WAIT="3600"
 DEFAULT_PARALLEL_JOBS="1"
-DEFAULT_TEST_COVERAGE_GIST_URL=""
-DEFAULT_COVERAGE_CACHE_TTL="86400"
+DEFAULT_COVERAGE_MAPPINGS_REPO="EA-Salesforce-Mappings"
+DEFAULT_COVERAGE_MAPPINGS_REPO_URL=""
 
 # Current configuration variables
 CONFIG_DEFAULT_ORG="$DEFAULT_ORG"
@@ -32,8 +32,8 @@ CONFIG_AUTO_CLEANUP="$DEFAULT_AUTO_CLEANUP"
 CONFIG_ENABLE_NOTIFICATIONS="$DEFAULT_ENABLE_NOTIFICATIONS"
 CONFIG_MAX_DEPLOY_WAIT="$DEFAULT_MAX_DEPLOY_WAIT"
 CONFIG_PARALLEL_JOBS="$DEFAULT_PARALLEL_JOBS"
-CONFIG_TEST_COVERAGE_GIST_URL="$DEFAULT_TEST_COVERAGE_GIST_URL"
-CONFIG_COVERAGE_CACHE_TTL="$DEFAULT_COVERAGE_CACHE_TTL"
+CONFIG_COVERAGE_MAPPINGS_REPO="$DEFAULT_COVERAGE_MAPPINGS_REPO"
+CONFIG_COVERAGE_MAPPINGS_REPO_URL="$DEFAULT_COVERAGE_MAPPINGS_REPO_URL"
 
 # Load configuration from file
 load_config_file() {
@@ -66,8 +66,8 @@ load_config_file() {
                 "enable_notifications") CONFIG_ENABLE_NOTIFICATIONS="$value" ;;
                 "max_deploy_wait") CONFIG_MAX_DEPLOY_WAIT="$value" ;;
                 "parallel_jobs") CONFIG_PARALLEL_JOBS="$value" ;;
-                "test_coverage_gist_url") CONFIG_TEST_COVERAGE_GIST_URL="$value" ;;
-                "coverage_cache_ttl") CONFIG_COVERAGE_CACHE_TTL="$value" ;;
+                "coverage_mappings_repo") CONFIG_COVERAGE_MAPPINGS_REPO="$value" ;;
+                "coverage_mappings_repo_url") CONFIG_COVERAGE_MAPPINGS_REPO_URL="$value" ;;
             esac
             log_debug "Config loaded: $key = $value"
         done < "$config_file"
@@ -103,8 +103,8 @@ get_config() {
         "enable_notifications") echo "${CONFIG_ENABLE_NOTIFICATIONS:-$default}" ;;
         "max_deploy_wait") echo "${CONFIG_MAX_DEPLOY_WAIT:-$default}" ;;
         "parallel_jobs") echo "${CONFIG_PARALLEL_JOBS:-$default}" ;;
-        "test_coverage_gist_url") echo "${CONFIG_TEST_COVERAGE_GIST_URL:-$default}" ;;
-        "coverage_cache_ttl") echo "${CONFIG_COVERAGE_CACHE_TTL:-$default}" ;;
+        "coverage_mappings_repo") echo "${CONFIG_COVERAGE_MAPPINGS_REPO:-$default}" ;;
+        "coverage_mappings_repo_url") echo "${CONFIG_COVERAGE_MAPPINGS_REPO_URL:-$default}" ;;
         *) echo "$default" ;;
     esac
 }
@@ -125,8 +125,8 @@ set_config() {
         "enable_notifications") CONFIG_ENABLE_NOTIFICATIONS="$value" ;;
         "max_deploy_wait") CONFIG_MAX_DEPLOY_WAIT="$value" ;;
         "parallel_jobs") CONFIG_PARALLEL_JOBS="$value" ;;
-        "test_coverage_gist_url") CONFIG_TEST_COVERAGE_GIST_URL="$value" ;;
-        "coverage_cache_ttl") CONFIG_COVERAGE_CACHE_TTL="$value" ;;
+        "coverage_mappings_repo") CONFIG_COVERAGE_MAPPINGS_REPO="$value" ;;
+        "coverage_mappings_repo_url") CONFIG_COVERAGE_MAPPINGS_REPO_URL="$value" ;;
     esac
     log_debug "Config set: $key = $value"
 }
@@ -174,12 +174,14 @@ max_deploy_wait=3600
 # Number of parallel jobs for operations that support it
 parallel_jobs=1
 
-# GitHub Gist URL for test coverage map (raw content URL)
-# Example: https://gist.githubusercontent.com/username/gist-id/raw/test-coverage-map.json
-test_coverage_gist_url=
+# Name of the sibling repository containing Apex class -> test class JSON mappings.
+# The repo must be cloned at the same level as the CGEAA root directory.
+# Mapping file expected at: <repo>/JSON/test-coverage-map.json
+coverage_mappings_repo=EA-Salesforce-Mappings
 
-# Coverage cache TTL in seconds (default: 86400 = 24 hours)
-coverage_cache_ttl=86400
+# Git clone URL for the mappings repository.
+# Used to automatically clone the repo if it is not found on disk.
+coverage_mappings_repo_url=https://github.com/cargurus-ea/EA-Salesforce-Mappings
 EOF
 
     log_success "Sample configuration created: $config_file"
@@ -249,8 +251,8 @@ show_config() {
     echo "  enable_notifications = $CONFIG_ENABLE_NOTIFICATIONS"
     echo "  max_deploy_wait = $CONFIG_MAX_DEPLOY_WAIT"
     echo "  parallel_jobs = $CONFIG_PARALLEL_JOBS"
-    echo "  test_coverage_gist_url = $CONFIG_TEST_COVERAGE_GIST_URL"
-    echo "  coverage_cache_ttl = $CONFIG_COVERAGE_CACHE_TTL"
+    echo "  coverage_mappings_repo = $CONFIG_COVERAGE_MAPPINGS_REPO"
+    echo "  coverage_mappings_repo_url = ${CONFIG_COVERAGE_MAPPINGS_REPO_URL:-(not set)}"
     
     echo
     log_info "Configuration files:"
