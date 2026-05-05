@@ -21,6 +21,9 @@ source "${CGEAA_LIB_DIR}/rollback.sh"
 source "${CGEAA_LIB_DIR}/interactive.sh"
 source "${CGEAA_LIB_DIR}/update.sh"
 source "${CGEAA_LIB_DIR}/test.sh"
+source "${CGEAA_LIB_DIR}/manifest.sh"
+source "${CGEAA_LIB_DIR}/logs.sh"
+source "${CGEAA_LIB_DIR}/diff.sh"
 
 # Version information
 CGEAA_VERSION="1.0.0"
@@ -49,6 +52,13 @@ VERBOSE=false
 QUIET=false
 TAG_PREFIX="CGEAA"
 DEPLOYMENT_DIR="."
+LIST_TESTS=false
+LOGS_SUBCOMMAND=""
+LOG_ID=""
+LOG_OUTPUT_DIR=""
+LOG_COLOR="true"
+DIFF_DIRECTION=""
+DIFF_SOURCE_ORG=""
 
 # Usage information
 usage() {
@@ -62,6 +72,9 @@ COMMANDS:
     validate    Validate changes without deploying
     deploy      Deploy changes to target org
     test        Run Apex tests asynchronously
+    manifest    Generate a Salesforce package manifest from changed files
+    logs        Manage Apex debug logs (sub-commands: list, get, tail, clear)
+    diff        Compare local metadata against an org, or between two orgs
     orgs        List available Salesforce org aliases
     branch      Show current branch and tag information
     config      Show current configuration
@@ -88,6 +101,12 @@ OPTIONS:
     -gt, --git-tag             Create a git tag upon successful deployment
     --tag-prefix <prefix>       Tag prefix override (default: auto-detected from branch or ${TAG_PREFIX})
     --deployment-dir <dir>      Deployment directory (default: current directory)
+    --list                      List test classes mapped to changed Apex classes (test command only, no test run)
+    --log-id <id>               Log ID to fetch (logs get — omit for most recent)
+    --log-output-dir <dir>      Save fetched log files to this directory
+    --no-color                  Disable color output when tailing logs
+    --direction <mode>          Diff direction: local-to-org (default), org-to-local, org-to-org
+    --source-org <org>          Source org alias for org-to-org diff
 
 EXAMPLES:
     cgeaa validate                                    # Validate changes against default org
@@ -95,15 +114,32 @@ EXAMPLES:
     cgeaa validate -t RunSpecifiedTests --tests "MyTestClass,AnotherTest"  # Validate with specific tests
     cgeaa deploy -o BRStaging -t RunAllTestsInOrg     # Deploy to staging with all tests
     cgeaa deploy -o Playground -b develop -f          # Force deploy to playground from develop branch
+    cgeaa manifest                                    # Generate package.xml from changed files
+    cgeaa manifest -b develop                         # Compare against a specific base branch
+    cgeaa manifest -m custom-package.xml              # Write manifest to a custom file name
+    cgeaa manifest --dry-run                          # Preview without generating the file
     cgeaa validate --dry-run -v                       # Show what would be validated (verbose)
     cgeaa test -o BRInt                               # Auto-detect and run relevant tests based on changed files
     cgeaa test -o BRInt -t RunLocalTests              # Run all local tests asynchronously
     cgeaa test -o BRStaging -t RunSpecifiedTests --tests "TestClass1,TestClass2"  # Run specific tests
     cgeaa test -o Playground -t RunAllTestsInOrg -v   # Run all tests with verbose output
+    cgeaa test --list                                  # Show mapped test classes for changed Apex files (no test run)
+    cgeaa test --list -b develop                       # Same, comparing against a specific base branch
     cgeaa orgs                                        # List all available authenticated orgs
     cgeaa open -o BRInt                               # Open the BRInt org in a browser
     cgeaa rollback -o BRStaging                       # Roll back changes (interactive prompt for target branch)
     cgeaa rollback -o BRStaging --rollback-to develop # Roll back to develop branch
+    cgeaa logs list -o BRInt                           # List recent debug logs
+    cgeaa logs get -o BRInt                            # Fetch the most recent debug log
+    cgeaa logs get -o BRInt --log-id 07L000...         # Fetch a specific log by ID
+    cgeaa logs get -o BRInt --log-output-dir ./logs    # Save fetched log to a directory
+    cgeaa logs tail -o BRInt                           # Stream logs in real time (Ctrl-C to stop)
+    cgeaa logs clear -o BRInt                          # Delete all debug logs from the org
+    cgeaa logs clear -o BRInt -f                       # Clear logs without confirmation prompt
+    cgeaa diff -o BRInt                                # Compare local changes vs org (uses base branch)
+    cgeaa diff -o BRInt -m package.xml                 # Compare specific manifest vs org
+    cgeaa diff -o BRInt --direction org-to-local -m package.xml   # Show what org has vs local
+    cgeaa diff -o BRStaging --direction org-to-org --source-org BRInt -m package.xml
     cgeaa update                                      # Update CGEAA from main branch
     cgeaa update -b beta                              # Update CGEAA from beta branch (test new features)
 
@@ -122,7 +158,10 @@ TEST COMMAND AUTO-DETECTION:
     When using 'cgeaa test' without -t flag, CGEAA automatically:
     1. Compares current branch against base branch (default: main)
     2. Identifies changed Apex classes
-    3. Queries ApexCodeCoverage to find tests covering those classes
+    3. Looks up test mappings from the local coverage_mappings_repo (pulls latest first)
+       - If the repo is missing, clones it automatically from coverage_mappings_repo_url
+         (default: https://github.com/cargurus-ea/EA-Salesforce-Mappings)
+       - Falls back to a live ApexCodeCoverage SOQL query if the repo is unavailable
     4. Includes any test classes modified in the branch
     5. Runs all detected tests, or defaults to RunLocalTests if none found
 
@@ -144,6 +183,12 @@ parse_args() {
 
     COMMAND="$1"
     shift
+
+    # Capture sub-command for commands that require one
+    if [ "$COMMAND" = "logs" ] && [ $# -gt 0 ] && [[ "$1" != -* ]]; then
+        LOGS_SUBCOMMAND="$1"
+        shift
+    fi
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -207,6 +252,30 @@ parse_args() {
                 CREATE_GIT_TAG=true
                 shift
                 ;;
+            --list)
+                LIST_TESTS=true
+                shift
+                ;;
+            --log-id)
+                LOG_ID="$2"
+                shift 2
+                ;;
+            --log-output-dir)
+                LOG_OUTPUT_DIR="$2"
+                shift 2
+                ;;
+            --no-color)
+                LOG_COLOR="false"
+                shift
+                ;;
+            --direction)
+                DIFF_DIRECTION="$2"
+                shift 2
+                ;;
+            --source-org)
+                DIFF_SOURCE_ORG="$2"
+                shift 2
+                ;;
             -h|--help)
                 usage
                 exit 0
@@ -241,7 +310,7 @@ detect_target_org() {
 # Validate command
 validate_command() {
     case "$COMMAND" in
-        validate|deploy|test|open|rollback|update)
+        validate|deploy|test|manifest|logs|diff|open|rollback|update)
             ;;
         orgs)
             list_orgs
@@ -331,6 +400,18 @@ main() {
         open)
             source "${CGEAA_LIB_DIR}/open.sh"
             execute_open
+            ;;
+        manifest)
+            source "${CGEAA_LIB_DIR}/manifest.sh"
+            execute_manifest
+            ;;
+        logs)
+            source "${CGEAA_LIB_DIR}/logs.sh"
+            execute_logs
+            ;;
+        diff)
+            source "${CGEAA_LIB_DIR}/diff.sh"
+            execute_diff
             ;;
         rollback)
             source "${CGEAA_LIB_DIR}/rollback.sh"
