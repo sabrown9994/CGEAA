@@ -24,6 +24,7 @@ source "${CGEAA_LIB_DIR}/test.sh"
 source "${CGEAA_LIB_DIR}/manifest.sh"
 source "${CGEAA_LIB_DIR}/logs.sh"
 source "${CGEAA_LIB_DIR}/diff.sh"
+source "${CGEAA_LIB_DIR}/zuora.sh"
 
 # Version information
 CGEAA_VERSION="1.0.0"
@@ -75,6 +76,7 @@ COMMANDS:
     manifest    Generate a Salesforce package manifest from changed files
     logs        Manage Apex debug logs (sub-commands: list, get, tail, clear)
     diff        Compare local metadata against an org, or between two orgs
+    zuora       Run Zuora Development Framework (ZDF) commands
     orgs        List available Salesforce org aliases
     branch      Show current branch and tag information
     config      Show current configuration
@@ -142,6 +144,10 @@ EXAMPLES:
     cgeaa diff -o BRStaging --direction org-to-org --source-org BRInt -m package.xml
     cgeaa update                                      # Update CGEAA from main branch
     cgeaa update -b beta                              # Update CGEAA from beta branch (test new features)
+    cgeaa zuora auth login --name sandbox --url https://rest.sandbox.na.zuora.com --client-id <id> --client-secret <secret>
+    cgeaa zuora pull account <id>                     # Fetch account + all child records
+    cgeaa zuora push product-rate-plan <id>           # Push a product rate plan update
+    cgeaa zuora list orders                           # Fetch all orders to local storage
 
 BRANCH-BASED TAGGING:
     Feature/PGTM-2270 → Tags: PGTM-2270-0001, PGTM-2270-0002, etc.
@@ -183,6 +189,12 @@ parse_args() {
 
     COMMAND="$1"
     shift
+
+    # zuora passes all remaining args straight through to zdf — no flag parsing by cgeaa
+    if [ "$COMMAND" = "zuora" ]; then
+        ZUORA_ARGS=("$@")
+        return
+    fi
 
     # Capture sub-command for commands that require one
     if [ "$COMMAND" = "logs" ] && [ $# -gt 0 ] && [[ "$1" != -* ]]; then
@@ -310,7 +322,7 @@ detect_target_org() {
 # Validate command
 validate_command() {
     case "$COMMAND" in
-        validate|deploy|test|manifest|logs|diff|open|rollback|update)
+        validate|deploy|test|manifest|logs|diff|open|rollback|update|zuora)
             ;;
         orgs)
             list_orgs
@@ -344,7 +356,13 @@ validate_command() {
 main() {
     parse_args "$@"
     validate_command
-    
+
+    # zuora commands go straight to zdf — no SF org detection or deployment-dir needed
+    if [ "$COMMAND" = "zuora" ]; then
+        execute_zuora
+        exit $?
+    fi
+
     # Detect target org only for commands that need it (after fast commands have exited)
     detect_target_org
 

@@ -1,0 +1,4 @@
+node_modules/
+dist/
+zdf-output/
+package-lock.json

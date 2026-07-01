@@ -1,0 +1,79 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Command } from 'commander';
+
+const mockGet = vi.hoisted(() => vi.fn());
+const mockPut = vi.hoisted(() => vi.fn());
+const mockDelete = vi.hoisted(() => vi.fn());
+const mockQuery = vi.hoisted(() => vi.fn());
+vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiPut: mockPut, apiDelete: mockDelete, apiQuery: mockQuery, setDebug: vi.fn() }));
+
+const mockResolve = vi.hoisted(() => vi.fn());
+vi.mock('../../helpers/dependency-graph.js', () => ({
+  resolveAndSync: mockResolve,
+  setNoDependency: vi.fn(),
+  isNoDependency: vi.fn().mockReturnValue(false),
+}));
+
+const mockWrite = vi.hoisted(() => vi.fn());
+const mockRead = vi.hoisted(() => vi.fn());
+vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, deleteResourceFile: vi.fn() }));
+vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
+
+import { register } from '../../commands/invoices.js';
+
+function makeProgram() {
+  const p = new Command();
+  p.option('--debug');
+  register(p);
+  return p;
+}
+
+beforeEach(() => { vi.clearAllMocks(); });
+
+describe('zdf pull invoice', () => {
+  it('calls resolveAndSync with pull', async () => {
+    mockResolve.mockResolvedValue(undefined);
+    await makeProgram().parseAsync(['node', 'zdf', 'pull', 'invoice', 'INV-001']);
+    expect(mockResolve).toHaveBeenCalledWith('invoice', 'INV-001', 'pull');
+  });
+});
+
+describe('zdf push invoice', () => {
+  it('reads file, puts to Zuora', async () => {
+    mockRead.mockReturnValue({ id: 'INV-001', invoiceItems: [{ id: 'item-1', amount: 100 }] });
+    mockPut.mockResolvedValue({ success: true });
+    mockResolve.mockResolvedValue(undefined);
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001']);
+    expect(mockPut).toHaveBeenCalledWith('/v1/invoices/INV-001', expect.any(Object));
+  });
+});
+
+describe('zdf delete invoice', () => {
+  it('calls delete and resolveAndSync with delete', async () => {
+    mockDelete.mockResolvedValue({ success: true });
+    mockResolve.mockResolvedValue(undefined);
+    await makeProgram().parseAsync(['node', 'zdf', 'delete', 'invoice', 'INV-001']);
+    expect(mockDelete).toHaveBeenCalledWith('/v1/invoices/INV-001');
+    expect(mockResolve).toHaveBeenCalledWith('invoice', 'INV-001', 'delete');
+  });
+});
+
+describe('zdf delete invoice — async (jobId returned)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('polls async-jobs endpoint until Completed', async () => {
+    mockDelete.mockResolvedValue({ success: true, jobId: 'job-123' });
+    mockGet
+      .mockResolvedValueOnce({ jobStatus: 'Processing' })
+      .mockResolvedValueOnce({ jobStatus: 'Completed' });
+    mockResolve.mockResolvedValue(undefined);
+    const promise = makeProgram().parseAsync(['node', 'zdf', 'delete', 'invoice', 'INV-001']);
+    await vi.runAllTimersAsync();
+    await promise;
+    expect(mockGet).toHaveBeenCalledWith('/v1/async-jobs/job-123');
+    expect(mockGet).toHaveBeenCalledTimes(2);
+    expect(mockResolve).toHaveBeenCalledWith('invoice', 'INV-001', 'delete');
+  });
+});
