@@ -36,6 +36,20 @@ _find_zdf() {
 _build_zdf() {
     if [ ! -d "$ZDF_SOURCE_DIR" ]; then
         log_error "ZDF source not found at ${ZDF_SOURCE_DIR}"
+        log_error "Re-run cgeaa-setup from the CGEAA repository checkout to install ZDF."
+        exit 1
+    fi
+    # Only auto-build from a writable source tree — a globally-installed copy
+    # under /usr/local/share/cgeaa/zdf is not writable, and running npm there
+    # without sudo would fail confusingly.
+    if [ ! -w "$ZDF_SOURCE_DIR" ]; then
+        log_error "ZDF is not built and its source at ${ZDF_SOURCE_DIR} is not writable."
+        log_error "Re-run cgeaa-setup from the CGEAA repository checkout to (re)install ZDF."
+        exit 1
+    fi
+    if ! command -v node &>/dev/null || ! command -v npm &>/dev/null; then
+        log_error "node and npm are required to build ZDF (Node.js >=18)."
+        log_error "Install them and re-run cgeaa-setup, or run 'cgeaa zuora ...' again."
         exit 1
     fi
     log_info "Building ZDF from source at ${ZDF_SOURCE_DIR}..."

@@ -32,6 +32,44 @@ Setup & Configuration
 EOF
 echo -e "${NC}"
 
+# --- ZDF Installation Function ---
+# Builds zdf from the checkout and copies the ready-to-run tree (source + dist +
+# node_modules) into /usr/local/share/cgeaa/zdf. Kept as a soft dependency: if
+# node/npm are missing or the build fails, we warn and continue so Salesforce
+# functionality still installs cleanly.
+install_zdf_globally() {
+    local zdf_src="${SCRIPT_DIR}/zdf"
+
+    if [ ! -d "$zdf_src" ]; then
+        log_warning "zdf source not found at $zdf_src — skipping Zuora (ZDF) install."
+        return 0
+    fi
+
+    if ! command_exists node || ! command_exists npm; then
+        log_warning "node and/or npm not found — skipping Zuora (ZDF) install."
+        log_warning "Install Node.js >=18 and re-run ./cgeaa-setup to enable 'cgeaa zuora'."
+        return 0
+    fi
+
+    log_info "Building ZDF from ${zdf_src}..."
+    local npm_install_cmd="install"
+    if [ -f "${zdf_src}/package-lock.json" ]; then
+        npm_install_cmd="ci"
+    fi
+    if ! (cd "$zdf_src" && npm "$npm_install_cmd" --silent && npm run build --silent); then
+        log_warning "ZDF build failed — skipping global install of zdf."
+        log_warning "You can retry later by re-running ./cgeaa-setup."
+        return 0
+    fi
+
+    log_info "Copying zdf/ to /usr/local/share/cgeaa/..."
+    # Remove any prior copy first so stale files (e.g. old dist/) do not linger.
+    sudo rm -rf /usr/local/share/cgeaa/zdf
+    sudo cp -r "$zdf_src" /usr/local/share/cgeaa/
+
+    log_success "ZDF installed globally."
+}
+
 # --- Installation Function ---
 perform_global_install() {
     log_step "Performing Global Installation"
@@ -44,15 +82,17 @@ perform_global_install() {
     log_info "Copying cgeaa-lib contents..."
     sudo cp -r "${SCRIPT_DIR}/cgeaa-lib" /usr/local/share/cgeaa/
 
+    # 2b. Build and copy the Zuora Development Framework (soft dependency)
+    install_zdf_globally
+
     # 3. Create a temporary modified cgeaa script
     log_info "Configuring cgeaa script for global use..."
     TEMP_CGEAA_SCRIPT=$(mktemp)
-    # By targeting specific line numbers, we can precisely modify the script for global installation.
-    # This is the most reliable way to avoid regex errors.
-    # 1. Delete line 10 (SCRIPT_DIR=...)
-    # 2. Replace line 11 (CGEAA_LIB_DIR=...) with the global path.
-    # Note: Use separate sed commands to avoid line number shifting issues
-    sed -e '10d' "${SCRIPT_DIR}/cgeaa" | sed '10s|.*|CGEAA_LIB_DIR="/usr/local/share/cgeaa/cgeaa-lib"|' > "$TEMP_CGEAA_SCRIPT"
+    # Rewrite lines 10 and 11 to point at the global install location. SCRIPT_DIR
+    # must remain defined — zuora.sh derives ZDF_SOURCE_DIR from it.
+    sed -e '10s|.*|SCRIPT_DIR="/usr/local/share/cgeaa"|' \
+        -e '11s|.*|CGEAA_LIB_DIR="/usr/local/share/cgeaa/cgeaa-lib"|' \
+        "${SCRIPT_DIR}/cgeaa" > "$TEMP_CGEAA_SCRIPT"
 
     # 4. Copy the modified script to /usr/local/bin
     log_info "Copying cgeaa to /usr/local/bin..."
@@ -195,6 +235,14 @@ echo
 echo "Checking dependencies..."
 check_dependencies
 echo "✓ All dependencies are available"
+
+# Advisory: Node.js is only required for 'cgeaa zuora'. Missing it does not block
+# the Salesforce install path.
+if ! command_exists node || ! command_exists npm; then
+    echo -e "${YELLOW}⚠ node/npm not found on PATH.${NC}"
+    echo "  These are required for 'cgeaa zuora' (ZDF) commands only."
+    echo "  Install Node.js >=18 and re-run ./cgeaa-setup to enable Zuora support."
+fi
 
 # Test basic functionality
 echo
