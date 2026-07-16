@@ -17,16 +17,14 @@
 
 ZDF_SOURCE_DIR="${SCRIPT_DIR}/zdf"
 
-# Locate the zdf binary: prefer a globally installed one, fall back to the
-# locally built binary in the bundled source tree.
+# Always run the bundled zdf build shipped with this cgeaa install. We
+# intentionally do NOT use any 'zdf' binary that happens to be on PATH — that
+# would let a stale or divergent global install run under 'cgeaa zuora',
+# hiding drift from what a fresh 'cgeaa-setup' produces.
 _find_zdf() {
-    if command -v zdf &>/dev/null; then
-        echo "zdf"
-        return
-    fi
-    local local_bin="${ZDF_SOURCE_DIR}/dist/zdf.js"
-    if [ -f "$local_bin" ]; then
-        echo "node ${local_bin}"
+    local bundled_bin="${ZDF_SOURCE_DIR}/dist/zdf.js"
+    if [ -f "$bundled_bin" ]; then
+        echo "node ${bundled_bin}"
         return
     fi
     echo ""
