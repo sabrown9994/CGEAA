@@ -5,7 +5,7 @@ import { apiGet, apiPost, apiDelete } from '../api/client.js';
 import { readResourceFile, writeResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
-import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
+import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 
 const RESOURCE = 'data-query';
 const ENDPOINT = '/query/jobs';
@@ -46,6 +46,7 @@ export function register(program: Command): void {
     .action((id: string) =>
       runCommand(program, async () => {
         const data = await apiGet<Record<string, unknown>>(`${ENDPOINT}/${id}`);
+        assertReadSuccess(data, 'data query job fetch');
         writeResourceFile(RESOURCE, id, data);
         output.success(`Data query job ${id} written to ${resolveFilePath(RESOURCE, id)}`);
       })()

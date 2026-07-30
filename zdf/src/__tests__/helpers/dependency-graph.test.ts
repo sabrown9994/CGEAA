@@ -9,7 +9,7 @@ vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, delet
 vi.mock('../../helpers/output.js', () => ({ output: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warn: vi.fn() } }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
 
-import { resolveAndSync, MAX_TRAVERSAL_NODES } from '../../helpers/dependency-graph.js';
+import { resolveAndSync, MAX_TRAVERSAL_NODES, FETCH_ALL_ITEMS_MAX } from '../../helpers/dependency-graph.js';
 import { output } from '../../helpers/output.js';
 
 beforeEach(() => { vi.clearAllMocks(); });
@@ -136,6 +136,51 @@ describe('resolveAndSync traversal ceiling', () => {
     await resolveAndSync('account', 'ACC-SMALL', 'pull', new Set());
 
     expect(output.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('fetchAllItems pagination cap', () => {
+  it('stops following nextPage once the FETCH_ALL_ITEMS_MAX item cap is reached, warns once, and does not throw', async () => {
+    // A single page already at the cap, but the server still claims there's a nextPage
+    // (mirrors the real bug: /v1/orders ignoring its accountId filter and returning the
+    // whole tenant's orders across endless pages).
+    const bigPage = {
+      invoiceItems: Array.from({ length: FETCH_ALL_ITEMS_MAX }, (_, i) => ({ id: `ii-${i}` })),
+      nextPage: '/v1/invoices/INV-001/items?page=2',
+    };
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/invoices/INV-001') return { id: 'INV-001', accountId: 'ACC-001', success: true };
+      if (url.startsWith('/v1/invoices/INV-001/items')) return bigPage;
+      return {};
+    });
+    mockQuery.mockResolvedValue([]);
+
+    await resolveAndSync('invoice', 'INV-001', 'pull', new Set(['account:ACC-001']));
+
+    // Only one items page was fetched despite nextPage being present — the cap stopped pagination.
+    const itemsCalls = mockGet.mock.calls.filter(([url]) => (url as string).startsWith('/v1/invoices/INV-001/items'));
+    expect(itemsCalls.length).toBe(1);
+
+    expect(output.warn).toHaveBeenCalledTimes(1);
+    expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/truncated|cap|--no-dependency/);
+
+    const written = mockWrite.mock.calls.find(([resource]) => resource === 'invoice')?.[2] as Record<string, unknown>;
+    expect((written['invoiceItems'] as unknown[]).length).toBe(FETCH_ALL_ITEMS_MAX);
+  });
+
+  it('does not warn or truncate for a normal small sub-item list', async () => {
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/invoices/INV-002') return { id: 'INV-002', accountId: 'ACC-001', success: true };
+      if (url.startsWith('/v1/invoices/INV-002/items')) return { invoiceItems: [{ id: 'ii-1' }, { id: 'ii-2' }] };
+      return {};
+    });
+    mockQuery.mockResolvedValue([]);
+
+    await resolveAndSync('invoice', 'INV-002', 'pull', new Set(['account:ACC-001']));
+
+    expect(output.warn).not.toHaveBeenCalled();
+    const written = mockWrite.mock.calls.find(([resource]) => resource === 'invoice')?.[2] as Record<string, unknown>;
+    expect((written['invoiceItems'] as unknown[]).length).toBe(2);
   });
 });
 

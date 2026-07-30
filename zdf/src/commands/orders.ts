@@ -56,11 +56,10 @@ export function register(program: Command): void {
         const hasFilter = Boolean(opts.account) || Boolean(opts.status);
 
         if (!hasLimit && !hasFilter && !opts.all) {
-          output.error(
+          throw new Error(
             'list orders with no --limit or filter would export the entire tenant. ' +
               'Re-run with --limit <n>, --account <id>, --status <status>, or pass --all to confirm a full export.'
           );
-          return;
         }
 
         let page = 1;

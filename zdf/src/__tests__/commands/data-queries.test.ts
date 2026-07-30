@@ -36,6 +36,15 @@ describe('zdf pull data-query', () => {
     expect(mockGet).toHaveBeenCalledWith('/query/jobs/job-123');
     expect(mockWrite).toHaveBeenCalledWith('data-query', 'job-123', { id: 'job-123', queryStatus: 'completed', data: [] });
   });
+
+  it('throws and writes nothing when the response is a 200-with-error body (bad job id)', async () => {
+    mockGet.mockResolvedValue({ success: false, reasons: [{ code: 50000040, message: 'Invalid job id' }] });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(makeProgram().parseAsync(['node', 'zdf', 'pull', 'data-query', 'bad-id'])).rejects.toThrow('exit');
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(mockWrite).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
 });
 
 describe('zdf create data-query', () => {

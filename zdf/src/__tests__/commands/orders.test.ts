@@ -73,10 +73,13 @@ describe('zdf list orders', () => {
     expect(mockWrite).toHaveBeenCalledWith('order-line-item', 'li-uuid-1', expect.objectContaining({ id: 'li-uuid-1' }));
   });
 
-  it('with no --limit, --account/--status filter, or --all: does not fetch and surfaces guidance', async () => {
-    await makeProgram().parseAsync(['node', 'zdf', 'list', 'orders']);
+  it('with no --limit, --account/--status filter, or --all: does not fetch, surfaces guidance, and exits non-zero', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(makeProgram().parseAsync(['node', 'zdf', 'list', 'orders'])).rejects.toThrow('exit');
+    expect(exitSpy).toHaveBeenCalledWith(1);
     expect(mockGet).not.toHaveBeenCalled();
     expect(mockWrite).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
   });
 
   it('--limit 5 stops after exactly 5 orders across pages', async () => {

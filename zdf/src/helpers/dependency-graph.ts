@@ -21,6 +21,16 @@ export const MAX_TRAVERSAL_NODES = 500;
 // only once even though the ceiling is checked at every node.
 const warnedVisitedSets = new WeakSet<Set<string>>();
 
+// Some sub-item list endpoints ignore their filter query param entirely (observed:
+// `/v1/orders?accountId=X` returns the WHOLE tenant's orders, not just X's), so
+// fetchAllItems can paginate through tens of thousands of rows before the per-node
+// MAX_TRAVERSAL_NODES ceiling above ever gets a chance to engage — that ceiling only
+// checks in between resolveAndSync calls, not mid-pagination. This is an independent,
+// lower-level bound on a single fetchAllItems call so a mis-scoped endpoint can't
+// still explode a pull. Sized consistently with APIQUERY_MAX_ROWS in api/client.ts.
+// High enough that normal accounts' sub-item lists finish well under it.
+export const FETCH_ALL_ITEMS_MAX = 5000;
+
 type Action = 'pull' | 'push' | 'delete';
 
 interface ResourceRecord extends Record<string, unknown> {
@@ -50,6 +60,14 @@ async function fetchAllItems<T>(firstUrl: string, itemsKey: string): Promise<T[]
     const page = await apiGet<Record<string, unknown>>(url);
     const items = page[itemsKey] as T[] | undefined;
     if (items) all.push(...items);
+    if (all.length >= FETCH_ALL_ITEMS_MAX) {
+      output.warn(
+        `fetchAllItems: truncated ${itemsKey} at the ${FETCH_ALL_ITEMS_MAX}-item cap (endpoint may have ` +
+        `ignored a filter param and returned more than expected); some sub-items were not fetched. ` +
+        `Re-run with --no-dependency for large accounts.`
+      );
+      break;
+    }
     url = page['nextPage'] as string | undefined;
   }
   return all;
