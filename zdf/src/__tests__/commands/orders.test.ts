@@ -51,7 +51,7 @@ describe('zdf pull order-line-item', () => {
 });
 
 describe('zdf list orders', () => {
-  it('fetches all pages, writes orders and fetches order line item details', async () => {
+  it('fetches all pages, writes orders and fetches order line item details when --all is passed', async () => {
     mockGet
       .mockResolvedValueOnce({
         orders: [{
@@ -65,12 +65,38 @@ describe('zdf list orders', () => {
         success: true,
         orderLineItem: { id: 'li-uuid-1', itemName: 'Widget' },
       });
-    await makeProgram().parseAsync(['node', 'zdf', 'list', 'orders']);
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'orders', '--all']);
     expect(mockGet).toHaveBeenCalledTimes(2);
     expect(mockGet).toHaveBeenNthCalledWith(1, expect.stringContaining('/v1/orders'));
     expect(mockGet).toHaveBeenNthCalledWith(2, '/v1/order-line-items/li-uuid-1');
     expect(mockWrite).toHaveBeenCalledWith('order', 'O-001', expect.any(Object));
     expect(mockWrite).toHaveBeenCalledWith('order-line-item', 'li-uuid-1', expect.objectContaining({ id: 'li-uuid-1' }));
+  });
+
+  it('with no --limit, --account/--status filter, or --all: does not fetch and surfaces guidance', async () => {
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'orders']);
+    expect(mockGet).not.toHaveBeenCalled();
+    expect(mockWrite).not.toHaveBeenCalled();
+  });
+
+  it('--limit 5 stops after exactly 5 orders across pages', async () => {
+    const makePage = (start: number) => ({
+      orders: Array.from({ length: 3 }, (_, i) => ({ orderNumber: `O-${start + i}`, orderLineItems: [] })),
+      nextPage: 'yes',
+    });
+    mockGet
+      .mockResolvedValueOnce(makePage(1))
+      .mockResolvedValueOnce(makePage(4));
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'orders', '--limit', '5']);
+    expect(mockWrite).toHaveBeenCalledTimes(5);
+    // only 2 pages needed to reach 5 orders (3 + 3 = 6 >= 5), so pagination stops before a 3rd page
+    expect(mockGet).toHaveBeenCalledTimes(2);
+  });
+
+  it('--account <id> adds accountId=<id> to the requested URL', async () => {
+    mockGet.mockResolvedValueOnce({ orders: [] });
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'orders', '--account', 'ACC-123']);
+    expect(mockGet).toHaveBeenCalledWith(expect.stringContaining('accountId=ACC-123'));
   });
 });
 

@@ -44,19 +44,44 @@ export function register(program: Command): void {
 
   listCmd
     .command('orders')
-    .description('Fetch all orders from Zuora and write to local storage')
-    .action(() =>
+    .description('Fetch orders from Zuora and write to local storage')
+    .option('--limit <n>', 'stop after fetching N orders total')
+    .option('--account <id>', 'only fetch orders for the given account ID (accountId=)')
+    .option('--status <status>', 'only fetch orders with the given status')
+    .option('--all', 'confirm a full-tenant export when no --limit/--account/--status is given')
+    .action((opts: { limit?: string; account?: string; status?: string; all?: boolean }) =>
       runCommand(program, async () => {
+        const limit = opts.limit !== undefined ? parseInt(opts.limit, 10) : undefined;
+        const hasLimit = typeof limit === 'number' && Number.isFinite(limit);
+        const hasFilter = Boolean(opts.account) || Boolean(opts.status);
+
+        if (!hasLimit && !hasFilter && !opts.all) {
+          output.error(
+            'list orders with no --limit or filter would export the entire tenant. ' +
+              'Re-run with --limit <n>, --account <id>, --status <status>, or pass --all to confirm a full export.'
+          );
+          return;
+        }
+
         let page = 1;
         let total = 0;
         let lineItemTotal = 0;
+        let truncated = false;
         while (true) {
           output.info(`Fetching page ${page}…`);
+          const queryParams: string[] = [];
+          if (opts.account) queryParams.push(`accountId=${opts.account}`);
+          if (opts.status) queryParams.push(`status=${opts.status}`);
+          queryParams.push(`page=${page}`, 'pageSize=50');
           const res = await apiGet<{ orders: Record<string, unknown>[]; nextPage?: string }>(
-            `/v1/orders?page=${page}&pageSize=50`
+            `/v1/orders?${queryParams.join('&')}`
           );
           const orders = res.orders ?? [];
           for (const order of orders) {
+            if (hasLimit && total >= limit!) {
+              truncated = true;
+              break;
+            }
             const orderNumber = order['orderNumber'] as string;
             writeResourceFile(RESOURCE, orderNumber, order);
             const lineItems = (order['orderLineItems'] as Array<{ id: string }> | undefined) ?? [];
@@ -71,8 +96,11 @@ export function register(program: Command): void {
             }
             total += 1;
           }
-          if (!res.nextPage) break;
+          if (truncated || !res.nextPage) break;
           page++;
+        }
+        if (truncated) {
+          output.warn(`Stopped after reaching --limit ${limit}; more orders may remain on the server.`);
         }
         output.success(`Fetched ${total} orders and ${lineItemTotal} order line items to ${getOutputDir()}/.`);
       })()
