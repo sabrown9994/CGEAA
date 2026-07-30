@@ -5,7 +5,7 @@ const mockPut = vi.hoisted(() => vi.fn());
 vi.mock('../../api/client.js', () => ({ apiGet: vi.fn(), apiPost: vi.fn(), apiPut: mockPut, apiDelete: vi.fn(), apiQuery: vi.fn(), setDebug: vi.fn() }));
 
 const mockRead = vi.hoisted(() => vi.fn());
-vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: vi.fn(), readResourceFile: mockRead, deleteResourceFile: vi.fn() }));
+vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: vi.fn(), readResourceFile: mockRead, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
 
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));

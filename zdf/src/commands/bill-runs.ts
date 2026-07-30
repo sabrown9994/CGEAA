@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { apiDelete } from '../api/client.js';
+import { resolveFilePath } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
@@ -23,7 +24,7 @@ export function register(program: Command): void {
     .action((id: string) =>
       runCommand(program, async () => {
         await resolveAndSync(RESOURCE, id, 'pull');
-        output.success(`Bill run ${id} written to zdf-output/bill-runs/${id}.json`);
+        output.success(`Bill run ${id} written to ${resolveFilePath(RESOURCE, id)}`);
       })()
     );
 
@@ -33,7 +34,7 @@ export function register(program: Command): void {
     .action((id: string) =>
       runCommand(program, async () => {
         await resolveAndSync(RESOURCE, id, 'pull');
-        output.success(`Bill run ${id} re-fetched and written to zdf-output/bill-runs/${id}.json`);
+        output.success(`Bill run ${id} re-fetched and written to ${resolveFilePath(RESOURCE, id)}`);
       })()
     );
 

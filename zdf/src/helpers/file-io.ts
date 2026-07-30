@@ -7,6 +7,16 @@ function outputDir(): string {
 }
 
 /**
+ * Returns the effective output directory (honors ZDF_OUTPUT_DIR override).
+ * Use this for generic/bare directory references in user-facing messages
+ * where a specific resource path via resolveFilePath() doesn't apply
+ * (e.g. help text with a placeholder name, or a batch-completion summary).
+ */
+export function getOutputDir(): string {
+  return outputDir();
+}
+
+/**
  * Sanitize a path segment to prevent path traversal attacks.
  * Only allows alphanumeric characters, hyphens, underscores, and dots.
  */

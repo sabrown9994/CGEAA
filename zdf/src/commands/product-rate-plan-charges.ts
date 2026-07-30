@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
 import { apiPut } from '../api/client.js';
-import { readResourceFile } from '../helpers/file-io.js';
+import { readResourceFile, resolveFilePath } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
@@ -24,7 +24,7 @@ export function register(program: Command): void {
     .action((id: string) =>
       runCommand(program, async () => {
         await resolveAndSync(RESOURCE, id, 'pull');
-        output.success(`Product rate plan charge ${id} written to zdf-output/product-rate-plan-charges/${id}.json`);
+        output.success(`Product rate plan charge ${id} written to ${resolveFilePath(RESOURCE, id)}`);
       })()
     );
 

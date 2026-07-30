@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
 import { apiPost, apiPut, apiDelete } from '../api/client.js';
-import { readResourceFile, renameResourceFile } from '../helpers/file-io.js';
+import { readResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
@@ -28,14 +28,14 @@ export function register(program: Command): void {
     .action((id: string) =>
       runCommand(program, async () => {
         await resolveAndSync(RESOURCE, id, 'pull');
-        output.success(`Product rate plan ${id} written to zdf-output/product-rate-plans/${id}.json`);
+        output.success(`Product rate plan ${id} written to ${resolveFilePath(RESOURCE, id)}`);
       })()
     );
 
   createCmd
     .command('product-rate-plan <name>')
     .description('Create a product rate plan in Zuora from a local file')
-    .option('-f, --file <path>', 'path to JSON file (defaults to zdf-output/product-rate-plans/<name>.json)')
+    .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/product-rate-plans/<name>.json)`)
     .action((name: string, opts: { file?: string }) =>
       runCommand(program, async () => {
         const body: unknown = opts.file

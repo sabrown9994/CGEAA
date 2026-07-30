@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
 import { apiPost, apiPut } from '../api/client.js';
-import { readResourceFile, renameResourceFile } from '../helpers/file-io.js';
+import { readResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { checkDeleteAllowed } from '../helpers/delete-guard.js';
@@ -28,14 +28,14 @@ export function register(program: Command): void {
     .action((id: string) =>
       runCommand(program, async () => {
         await resolveAndSync(RESOURCE, id, 'pull');
-        output.success(`Subscription ${id} written to zdf-output/subscriptions/${id}.json`);
+        output.success(`Subscription ${id} written to ${resolveFilePath(RESOURCE, id)}`);
       })()
     );
 
   createCmd
     .command('subscription <name>')
     .description('Create a subscription in Zuora from a local file')
-    .option('-f, --file <path>', 'path to JSON file (defaults to zdf-output/subscriptions/<name>.json)')
+    .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/subscriptions/<name>.json)`)
     .action((name: string, opts: { file?: string }) =>
       runCommand(program, async () => {
         const body: unknown = opts.file

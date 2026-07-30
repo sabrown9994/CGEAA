@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
 import { apiGet, apiPost, apiPut, apiDelete } from '../api/client.js';
-import { readResourceFile, writeResourceFile, renameResourceFile } from '../helpers/file-io.js';
+import { readResourceFile, writeResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
@@ -29,14 +29,14 @@ export function register(program: Command): void {
         assertReadSuccess(data, 'billing template fetch');
         const { success: _s, ...resource } = data;
         writeResourceFile(RESOURCE, id, resource);
-        output.success(`Billing template ${id} written to zdf-output/billing-templates/${id}.json`);
+        output.success(`Billing template ${id} written to ${resolveFilePath(RESOURCE, id)}`);
       })()
     );
 
   createCmd
     .command('billing-template <name>')
     .description('Create a billing template in Zuora from a local file (invoice, credit memo, debit memo)')
-    .option('-f, --file <path>', 'path to JSON file (defaults to zdf-output/billing-templates/<name>.json)')
+    .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/billing-templates/<name>.json)`)
     .action((name: string, opts: { file?: string }) =>
       runCommand(program, async () => {
         const body: unknown = opts.file

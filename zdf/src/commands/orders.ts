@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
 import { apiGet, apiPost, apiPut, apiDelete } from '../api/client.js';
-import { readResourceFile, writeResourceFile, renameResourceFile } from '../helpers/file-io.js';
+import { readResourceFile, writeResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
@@ -28,7 +28,7 @@ export function register(program: Command): void {
     .action((orderNumber: string) =>
       runCommand(program, async () => {
         await resolveAndSync(RESOURCE, orderNumber, 'pull');
-        output.success(`Order ${orderNumber} written to zdf-output/orders/${orderNumber}.json`);
+        output.success(`Order ${orderNumber} written to ${resolveFilePath(RESOURCE, orderNumber)}`);
       })()
     );
 
@@ -38,7 +38,7 @@ export function register(program: Command): void {
     .action((id: string) =>
       runCommand(program, async () => {
         await resolveAndSync('order-line-item', id, 'pull');
-        output.success(`Order line item ${id} written to zdf-output/order-line-items/${id}.json`);
+        output.success(`Order line item ${id} written to ${resolveFilePath('order-line-item', id)}`);
       })()
     );
 
@@ -74,14 +74,14 @@ export function register(program: Command): void {
           if (!res.nextPage) break;
           page++;
         }
-        output.success(`Fetched ${total} orders and ${lineItemTotal} order line items to zdf-output/.`);
+        output.success(`Fetched ${total} orders and ${lineItemTotal} order line items to ${getOutputDir()}/.`);
       })()
     );
 
   createCmd
     .command('order <name>')
     .description('Create an order in Zuora from a local file')
-    .option('-f, --file <path>', 'path to JSON file (defaults to zdf-output/orders/<name>.json)')
+    .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/orders/<name>.json)`)
     .action((name: string, opts: { file?: string }) =>
       runCommand(program, async () => {
         const body: unknown = opts.file

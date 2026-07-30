@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { readFileSync } from 'fs';
 import ora from 'ora';
 import { apiGet, apiPost, apiDelete } from '../api/client.js';
-import { readResourceFile, writeResourceFile } from '../helpers/file-io.js';
+import { readResourceFile, writeResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
@@ -47,14 +47,14 @@ export function register(program: Command): void {
       runCommand(program, async () => {
         const data = await apiGet<Record<string, unknown>>(`${ENDPOINT}/${id}`);
         writeResourceFile(RESOURCE, id, data);
-        output.success(`Data query job ${id} written to zdf-output/data-queries/${id}.json`);
+        output.success(`Data query job ${id} written to ${resolveFilePath(RESOURCE, id)}`);
       })()
     );
 
   createCmd
     .command('data-query <name>')
     .description('Submit a data query job to Zuora from a local .sql file')
-    .option('-f, --file <path>', 'path to SQL file (defaults to zdf-output/data-queries/<name>.sql)')
+    .option('-f, --file <path>', `path to SQL file (defaults to ${getOutputDir()}/data-queries/<name>.sql)`)
     .action((name: string, opts: { file?: string }) =>
       runCommand(program, async () => {
         const sql: string = opts.file
@@ -67,7 +67,7 @@ export function register(program: Command): void {
           throw new Error(`Data query job ${jobId} ended with status: ${String(job['queryStatus'])}`);
         }
         writeResourceFile(RESOURCE, jobId, job);
-        output.success(`Data query job ${jobId} completed and written to zdf-output/data-queries/${jobId}.json`);
+        output.success(`Data query job ${jobId} completed and written to ${resolveFilePath(RESOURCE, jobId)}`);
       })()
     );
 

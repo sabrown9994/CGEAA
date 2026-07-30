@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { apiGet, apiPut, apiDelete } from '../api/client.js';
-import { readResourceFile } from '../helpers/file-io.js';
+import { readResourceFile, resolveFilePath } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
@@ -25,7 +25,7 @@ export function register(program: Command): void {
     .action((id: string) =>
       runCommand(program, async () => {
         await resolveAndSync(RESOURCE, id, 'pull');
-        output.success(`Invoice ${id} written to zdf-output/invoices/${id}.json`);
+        output.success(`Invoice ${id} written to ${resolveFilePath(RESOURCE, id)}`);
       })()
     );
 

@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
 import { apiGet, apiPost, apiPut, apiDelete } from '../api/client.js';
-import { writeResourceFile, readResourceFile, renameResourceFile } from '../helpers/file-io.js';
+import { writeResourceFile, readResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
@@ -28,14 +28,14 @@ export function register(program: Command): void {
     .action((id: string) =>
       runCommand(program, async () => {
         await resolveAndSync(RESOURCE, id, 'pull');
-        output.success(`Product ${id} written to zdf-output/products/${id}.json`);
+        output.success(`Product ${id} written to ${resolveFilePath(RESOURCE, id)}`);
       })()
     );
 
   createCmd
     .command('product <name>')
     .description('Create a product in Zuora from a local file')
-    .option('-f, --file <path>', 'path to JSON file (defaults to zdf-output/products/<name>.json)')
+    .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/products/<name>.json)`)
     .action((name: string, opts: { file?: string }) =>
       runCommand(program, async () => {
         const body: unknown = opts.file
