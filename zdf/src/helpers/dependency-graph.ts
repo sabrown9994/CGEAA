@@ -58,12 +58,12 @@ async function fetchAndWrite(resource: string, id: string): Promise<ResourceReco
     } else if (resource === 'credit-memo') {
       record['creditMemoItems'] = await fetchAllItems(
         `/v1/credit-memos/${id}/items`,
-        'creditMemoItems'
+        'items'
       );
     } else if (resource === 'debit-memo') {
       record['debitMemoItems'] = await fetchAllItems(
         `/v1/debit-memos/${id}/items`,
-        'debitMemoItems'
+        'items'
       );
     }
 

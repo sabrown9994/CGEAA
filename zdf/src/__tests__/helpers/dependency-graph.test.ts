@@ -59,6 +59,39 @@ describe('resolveAndSync subscription pull — embeds ratePlans inline', () => {
   });
 });
 
+describe('resolveAndSync credit-memo pull — embeds items from the "items" response key', () => {
+  it('captures non-zero items and stores them under creditMemoItems', async () => {
+    mockGet
+      .mockResolvedValueOnce({ id: 'CM-001', accountId: 'ACC-001', success: true }) // credit-memo header
+      .mockResolvedValueOnce({ items: [{ id: 'cmi-1', amount: 10 }, { id: 'cmi-2', amount: 5 }] }); // /items page
+    await resolveAndSync('credit-memo', 'CM-001', 'pull', new Set(['account:ACC-001']));
+    expect(mockGet).toHaveBeenNthCalledWith(2, '/v1/credit-memos/CM-001/items');
+    expect(mockWrite).toHaveBeenCalledWith('credit-memo', 'CM-001', expect.objectContaining({
+      creditMemoItems: [
+        expect.objectContaining({ id: 'cmi-1', amount: 10 }),
+        expect.objectContaining({ id: 'cmi-2', amount: 5 }),
+      ],
+    }));
+    const written = mockWrite.mock.calls[0][2];
+    expect(written.creditMemoItems).toHaveLength(2);
+  });
+});
+
+describe('resolveAndSync debit-memo pull — embeds items from the "items" response key', () => {
+  it('captures non-zero items and stores them under debitMemoItems', async () => {
+    mockGet
+      .mockResolvedValueOnce({ id: 'DM-001', accountId: 'ACC-001', success: true }) // debit-memo header
+      .mockResolvedValueOnce({ items: [{ id: 'dmi-1', amount: 20 }] }); // /items page
+    await resolveAndSync('debit-memo', 'DM-001', 'pull', new Set(['account:ACC-001']));
+    expect(mockGet).toHaveBeenNthCalledWith(2, '/v1/debit-memos/DM-001/items');
+    expect(mockWrite).toHaveBeenCalledWith('debit-memo', 'DM-001', expect.objectContaining({
+      debitMemoItems: [expect.objectContaining({ id: 'dmi-1', amount: 20 })],
+    }));
+    const written = mockWrite.mock.calls[0][2];
+    expect(written.debitMemoItems).toHaveLength(1);
+  });
+});
+
 describe('resolveAndSync read-response guard', () => {
   it('does not write when the body has a populated reasons array (200-with-error)', async () => {
     mockGet.mockResolvedValueOnce({
