@@ -20,7 +20,10 @@ vi.mock('../../auth/config.js', () => ({
 
 vi.mock('../../auth/token.js', () => ({ ensureToken: async () => 'tok' }));
 
-import { apiGet, apiPost, apiPut, apiPatch, apiDelete } from '../../api/client.js';
+const mockWarn = vi.hoisted(() => vi.fn());
+vi.mock('../../helpers/output.js', () => ({ output: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warn: mockWarn } }));
+
+import { apiGet, apiPost, apiPut, apiPatch, apiDelete, apiQuery, APIQUERY_MAX_ROWS } from '../../api/client.js';
 
 beforeEach(() => { vi.clearAllMocks(); });
 
@@ -64,5 +67,40 @@ describe('apiDelete', () => {
     mockRequest.mockResolvedValue({ data: { success: true } });
     await apiDelete('/v1/accounts/123');
     expect(mockRequest).toHaveBeenCalledWith(expect.objectContaining({ method: 'DELETE' }));
+  });
+});
+
+describe('apiQuery', () => {
+  it('paginates normally and stops on done:true without warning', async () => {
+    mockRequest
+      .mockResolvedValueOnce({ data: { records: [{ Id: '1' }], size: 1, done: false, queryLocator: 'loc-1' } })
+      .mockResolvedValueOnce({ data: { records: [{ Id: '2' }], size: 1, done: true } });
+    const result = await apiQuery('SELECT Id FROM Contact');
+    expect(result).toEqual([{ Id: '1' }, { Id: '2' }]);
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+    expect(mockWarn).not.toHaveBeenCalled();
+  });
+
+  it('stops pagination at APIQUERY_MAX_ROWS and warns instead of following queryMore forever', async () => {
+    const pageSize = 1000;
+    // Every page returns pageSize records, never signals done, always offers another
+    // queryLocator — simulating Zuora ignoring LIMIT and paginating a huge table.
+    mockRequest.mockImplementation(async () => ({
+      data: {
+        records: Array.from({ length: pageSize }, (_, i) => ({ Id: `row-${i}` })),
+        size: pageSize,
+        done: false,
+        queryLocator: 'loc-more',
+      },
+    }));
+
+    const result = await apiQuery('SELECT Id FROM Invoice LIMIT 3');
+
+    expect(result.length).toBe(APIQUERY_MAX_ROWS);
+    // 1 initial query + enough queryMore calls to reach the cap exactly, then stop
+    // without issuing a further request.
+    expect(mockRequest).toHaveBeenCalledTimes(APIQUERY_MAX_ROWS / pageSize);
+    expect(mockWarn).toHaveBeenCalledTimes(1);
+    expect(mockWarn.mock.calls[0][0]).toMatch(/cap/i);
   });
 });

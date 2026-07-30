@@ -7,6 +7,20 @@ let noDependency = false;
 export function setNoDependency(flag: boolean): void { noDependency = flag; }
 export function isNoDependency(): boolean { return noDependency; }
 
+// Dependency traversal (account -> invoices -> bill-run -> invoices -> ...) can explode
+// on a busy tenant even with the visited-set cycle guard, since the graph legitimately
+// contains thousands of distinct nodes. This ceiling bounds total nodes visited per
+// resolveAndSync call tree so a runaway pull degrades gracefully (warns + stops
+// traversing further) instead of issuing thousands of serial GETs. High enough that
+// normal small/medium accounts never hit it. `--no-dependency` bypasses traversal
+// entirely and is unaffected by this ceiling.
+export const MAX_TRAVERSAL_NODES = 500;
+
+// Tracks which `visited` sets have already emitted the ceiling warning, so a single
+// resolveAndSync call tree (which threads one Set through all recursive calls) warns
+// only once even though the ceiling is checked at every node.
+const warnedVisitedSets = new WeakSet<Set<string>>();
+
 type Action = 'pull' | 'push' | 'delete';
 
 interface ResourceRecord extends Record<string, unknown> {
@@ -88,6 +102,18 @@ export async function resolveAndSync(
 ): Promise<void> {
   const key = `${resource}:${id}`;
   if (visited.has(key)) return;
+
+  if (!noDependency && visited.size >= MAX_TRAVERSAL_NODES) {
+    if (!warnedVisitedSets.has(visited)) {
+      warnedVisitedSets.add(visited);
+      output.warn(
+        `Dependency traversal hit the ${MAX_TRAVERSAL_NODES}-node ceiling; stopping further traversal. ` +
+        `Some related records may not have been synced. Re-run with --no-dependency to skip traversal on a large account.`
+      );
+    }
+    return;
+  }
+
   visited.add(key);
 
   const record = await fetchAndWrite(resource, id);

@@ -3,6 +3,7 @@ import type { AxiosInstance } from 'axios';
 import { getActiveEnv } from '../auth/config.js';
 import { ensureToken } from '../auth/token.js';
 import type { ZuoraErrorResponse } from '../types.js';
+import { output } from '../helpers/output.js';
 
 let debugEnabled = false;
 
@@ -62,20 +63,28 @@ export const apiPut = <T>(path: string, body: unknown) => request<T>('PUT', path
 export const apiPatch = <T>(path: string, body: unknown) => request<T>('PATCH', path, body);
 export const apiDelete = <T>(path: string) => request<T>('DELETE', path);
 
+// Zuora's /v1/action/query does NOT honor a ZOQL LIMIT clause — a broad query can
+// paginate through an entire table (observed: `LIMIT 3` returned 8610 rows). This cap
+// bounds how many rows apiQuery will collect via queryMore before giving up and
+// returning what it has, so a single query can't hang or explode a pull. The value is
+// intentionally high relative to normal per-account/per-product child collections
+// (contacts, invoices, rate plans, etc.) so real-world queries are never affected.
+export const APIQUERY_MAX_ROWS = 5000;
+
+type QueryResponse<T> = { records: T[]; size: number; done: boolean; queryLocator?: string };
+
 export async function apiQuery<T>(zoql: string): Promise<T[]> {
   const all: T[] = [];
-  let res = await request<{ records: T[]; size: number; done: boolean; queryLocator?: string }>(
-    'POST',
-    '/v1/action/query',
-    { queryString: zoql }
-  );
+  let res = await request<QueryResponse<T>>('POST', '/v1/action/query', { queryString: zoql });
   if (res.records) all.push(...res.records);
   while (!res.done && res.queryLocator) {
-    res = await request<{ records: T[]; size: number; done: boolean; queryLocator?: string }>(
-      'POST',
-      '/v1/action/queryMore',
-      { queryLocator: res.queryLocator }
-    );
+    if (all.length >= APIQUERY_MAX_ROWS) {
+      output.warn(
+        `apiQuery: hit the ${APIQUERY_MAX_ROWS}-row cap before pagination finished; returning ${all.length} rows collected so far. Query: ${zoql}`
+      );
+      break;
+    }
+    res = await request<QueryResponse<T>>('POST', '/v1/action/queryMore', { queryLocator: res.queryLocator });
     if (res.records) all.push(...res.records);
   }
   return all;

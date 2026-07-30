@@ -9,7 +9,8 @@ vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, delet
 vi.mock('../../helpers/output.js', () => ({ output: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warn: vi.fn() } }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
 
-import { resolveAndSync } from '../../helpers/dependency-graph.js';
+import { resolveAndSync, MAX_TRAVERSAL_NODES } from '../../helpers/dependency-graph.js';
+import { output } from '../../helpers/output.js';
 
 beforeEach(() => { vi.clearAllMocks(); });
 
@@ -89,6 +90,52 @@ describe('resolveAndSync debit-memo pull — embeds items from the "items" respo
     }));
     const written = mockWrite.mock.calls[0][2];
     expect(written.debitMemoItems).toHaveLength(1);
+  });
+});
+
+describe('resolveAndSync traversal ceiling', () => {
+  it('stops traversing and warns once when a runaway pull would exceed MAX_TRAVERSAL_NODES', async () => {
+    // Simulate an account with far more contacts than the ceiling allows, so the
+    // account -> contact fan-out alone would blow past MAX_TRAVERSAL_NODES.
+    const contactCount = MAX_TRAVERSAL_NODES + 50;
+    const contactIds = Array.from({ length: contactCount }, (_, i) => ({ Id: `CON-${i}` }));
+
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/accounts/ACC-001') return { id: 'ACC-001', name: 'Acme', success: true };
+      if (url.startsWith('/v1/contacts/')) {
+        const id = url.replace('/v1/contacts/', '');
+        return { id, accountId: 'ACC-001', success: true };
+      }
+      // orders / subscriptions / invoices / credit-memos / debit-memos paginated lookups
+      return {};
+    });
+    mockQuery.mockImplementation(async (zoql: string) => {
+      if (zoql.includes('FROM Contact')) return contactIds;
+      return []; // BillRun lookup
+    });
+
+    const visited = new Set<string>();
+    await resolveAndSync('account', 'ACC-001', 'pull', visited);
+
+    // Traversal stopped at the ceiling: visited never grows past MAX_TRAVERSAL_NODES,
+    // and we did not fetch every contact (proves pagination/traversal actually halted).
+    expect(visited.size).toBeLessThanOrEqual(MAX_TRAVERSAL_NODES);
+    const contactFetchCalls = mockGet.mock.calls.filter(([url]) => (url as string).startsWith('/v1/contacts/'));
+    expect(contactFetchCalls.length).toBeLessThan(contactCount);
+
+    expect(output.warn).toHaveBeenCalledTimes(1);
+    expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/ceiling|--no-dependency/);
+  });
+
+  it('does not warn or cap traversal for a small account well under the ceiling', async () => {
+    mockGet
+      .mockResolvedValueOnce({ id: 'ACC-SMALL', name: 'Acme', success: true }) // account
+      .mockResolvedValue({}); // orders/subs/invoices/creditmemos/debitmemos pages
+    mockQuery.mockResolvedValue([]); // no contacts, no bill runs
+
+    await resolveAndSync('account', 'ACC-SMALL', 'pull', new Set());
+
+    expect(output.warn).not.toHaveBeenCalled();
   });
 });
 
