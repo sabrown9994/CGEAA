@@ -31,6 +31,12 @@ function makeProgram() {
 beforeEach(() => { vi.clearAllMocks(); });
 
 describe('zdf pull workflow', () => {
+  it('fetches from the corrected /workflows base path', async () => {
+    mockGet.mockResolvedValue({ id: 123, name: 'My Workflow' });
+    await makeProgram().parseAsync(['node', 'zdf', 'pull', 'workflow', '123']);
+    expect(mockGet).toHaveBeenCalledWith('/workflows/123');
+  });
+
   it('writes the file when the body has no success field (valid workflow object)', async () => {
     mockGet.mockResolvedValue({ id: 123, name: 'My Workflow' });
     await makeProgram().parseAsync(['node', 'zdf', 'pull', 'workflow', '123']);
@@ -48,5 +54,32 @@ describe('zdf pull workflow', () => {
     ).rejects.toThrow('exit');
     expect(mockWrite).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+});
+
+describe('zdf create workflow', () => {
+  it('posts to the corrected /workflows base path', async () => {
+    mockRead.mockReturnValue({ name: 'New Workflow' });
+    mockPost.mockResolvedValue({ success: true, id: 456 });
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'workflow', 'my-draft']);
+    expect(mockPost).toHaveBeenCalledWith('/workflows', { name: 'New Workflow' });
+    expect(mockRename).toHaveBeenCalledWith('workflow', 'my-draft', '456');
+  });
+});
+
+describe('zdf push workflow', () => {
+  it('puts to the corrected /workflows/{id} path', async () => {
+    mockRead.mockReturnValue({ name: 'My Workflow' });
+    mockPut.mockResolvedValue({ success: true });
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'workflow', '123']);
+    expect(mockPut).toHaveBeenCalledWith('/workflows/123', expect.any(Object));
+  });
+});
+
+describe('zdf delete workflow', () => {
+  it('deletes via the corrected /workflows/{id} path', async () => {
+    mockDelete.mockResolvedValue({ success: true });
+    await makeProgram().parseAsync(['node', 'zdf', 'delete', 'workflow', '123']);
+    expect(mockDelete).toHaveBeenCalledWith('/workflows/123');
   });
 });

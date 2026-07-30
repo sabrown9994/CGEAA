@@ -8,7 +8,7 @@ import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 
 const RESOURCE = 'workflow';
-const ENDPOINT = '/v1/api/workflows';
+const ENDPOINT = '/workflows';
 
 function getOrCreate(program: Command, name: string, description: string): Command {
   return program.commands.find((c) => c.name() === name) ?? program.command(name).description(description);
