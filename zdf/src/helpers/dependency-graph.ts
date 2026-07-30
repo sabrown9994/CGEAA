@@ -1,6 +1,7 @@
 import { apiGet, apiQuery } from '../api/client.js';
 import { writeResourceFile, deleteResourceFile } from './file-io.js';
 import { output } from './output.js';
+import { assertReadSuccess } from './zuora-response.js';
 
 let noDependency = false;
 export function setNoDependency(flag: boolean): void { noDependency = flag; }
@@ -45,6 +46,7 @@ async function fetchAndWrite(resource: string, id: string): Promise<ResourceReco
   if (!endpoint) return null;
   try {
     const data = await apiGet<ResourceRecord>(endpoint(id));
+    assertReadSuccess(data, `${resource} fetch`);
     const { success: _s, ...record } = data;
 
     // For invoices, credit-memos, and debit-memos, embed sub-item arrays.

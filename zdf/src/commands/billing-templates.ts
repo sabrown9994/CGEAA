@@ -4,7 +4,7 @@ import { apiGet, apiPost, apiPut, apiDelete } from '../api/client.js';
 import { readResourceFile, writeResourceFile, renameResourceFile } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
-import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
+import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 
 const RESOURCE = 'billing-template';
@@ -26,6 +26,7 @@ export function register(program: Command): void {
     .action((id: string) =>
       runCommand(program, async () => {
         const data = await apiGet<Record<string, unknown>>(`${ENDPOINT}/${id}`);
+        assertReadSuccess(data, 'billing template fetch');
         const { success: _s, ...resource } = data;
         writeResourceFile(RESOURCE, id, resource);
         output.success(`Billing template ${id} written to zdf-output/billing-templates/${id}.json`);

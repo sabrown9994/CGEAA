@@ -58,3 +58,32 @@ describe('resolveAndSync subscription pull — embeds ratePlans inline', () => {
     }));
   });
 });
+
+describe('resolveAndSync read-response guard', () => {
+  it('does not write when the body has a populated reasons array (200-with-error)', async () => {
+    mockGet.mockResolvedValueOnce({
+      success: false,
+      reasons: [{ code: 58230015, message: 'Object not found.' }],
+    });
+    await resolveAndSync('account', 'ACC-BAD', 'pull', new Set());
+    expect(mockWrite).not.toHaveBeenCalled();
+  });
+
+  it('does not write when the body has success:false and no reasons', async () => {
+    mockGet.mockResolvedValueOnce({ success: false });
+    await resolveAndSync('account', 'ACC-BAD', 'pull', new Set());
+    expect(mockWrite).not.toHaveBeenCalled();
+  });
+
+  it('writes when the body has no success field and no errors (e.g. a workflow-shaped object)', async () => {
+    mockGet.mockResolvedValueOnce({ id: 'CON-001', accountId: 'ACC-001' });
+    await resolveAndSync('contact', 'CON-001', 'pull', new Set());
+    expect(mockWrite).toHaveBeenCalledWith('contact', 'CON-001', expect.objectContaining({ id: 'CON-001' }));
+  });
+
+  it('writes when the body has a normal success:true field', async () => {
+    mockGet.mockResolvedValueOnce({ id: 'CON-001', accountId: 'ACC-001', success: true });
+    await resolveAndSync('contact', 'CON-001', 'pull', new Set());
+    expect(mockWrite).toHaveBeenCalledWith('contact', 'CON-001', expect.objectContaining({ id: 'CON-001' }));
+  });
+});
