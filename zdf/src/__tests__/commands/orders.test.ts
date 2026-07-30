@@ -93,6 +93,20 @@ describe('zdf list orders', () => {
     expect(mockGet).toHaveBeenCalledTimes(2);
   });
 
+  it('--limit 6 (exact multiple of page size) stops without fetching the next page', async () => {
+    const makePage = (start: number) => ({
+      orders: Array.from({ length: 3 }, (_, i) => ({ orderNumber: `O-${start + i}`, orderLineItems: [] })),
+      nextPage: 'yes',
+    });
+    mockGet
+      .mockResolvedValueOnce(makePage(1))
+      .mockResolvedValueOnce(makePage(4));
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'orders', '--limit', '6']);
+    expect(mockWrite).toHaveBeenCalledTimes(6);
+    // total reaches limit exactly at the end of the 2nd page; the 3rd page must NOT be fetched
+    expect(mockGet).toHaveBeenCalledTimes(2);
+  });
+
   it('--account <id> adds accountId=<id> to the requested URL', async () => {
     mockGet.mockResolvedValueOnce({ orders: [] });
     await makeProgram().parseAsync(['node', 'zdf', 'list', 'orders', '--account', 'ACC-123']);

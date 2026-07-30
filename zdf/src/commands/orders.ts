@@ -96,6 +96,9 @@ export function register(program: Command): void {
             }
             total += 1;
           }
+          if (hasLimit && total >= limit!) {
+            truncated = true;
+          }
           if (truncated || !res.nextPage) break;
           page++;
         }
