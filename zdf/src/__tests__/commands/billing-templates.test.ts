@@ -257,6 +257,37 @@ describe('zdf update billing-template', () => {
     expect(mockPut).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
+
+  it('treats a PUT response with no `success` field (the real Settings API echo) as success', async () => {
+    mockReaddirSync.mockReturnValue(['Invoice_Template_bt-1.json']);
+    mockReadFileSync.mockReturnValue(JSON.stringify(DESIGN_JSON));
+    mockGet.mockResolvedValue({ id: 'bt-1', name: 'Invoice Template', templateFormat: 'HTML' });
+    // No `success` key at all — just the echoed resource, as the live Settings API returns.
+    mockPut.mockResolvedValue({
+      id: 'bt-1',
+      name: 'Invoice Template',
+      templateFormat: 'HTML',
+      base64EncodedTemplateFileContent: DESIGN_B64,
+    });
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'update', 'billing-template', 'bt-1'])
+    ).resolves.toBeDefined();
+    expect(mockPut).toHaveBeenCalledTimes(1);
+  });
+
+  it('still fails when the PUT response has a `reasons`/`errors` array even without `success:false`', async () => {
+    mockReaddirSync.mockReturnValue(['Invoice_Template_bt-1.json']);
+    mockReadFileSync.mockReturnValue(JSON.stringify(DESIGN_JSON));
+    mockGet.mockResolvedValue({ id: 'bt-1', name: 'Invoice Template', templateFormat: 'HTML' });
+    mockPut.mockResolvedValue({ reasons: [{ code: 'INVALID', message: 'Bad field.' }] });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'update', 'billing-template', 'bt-1'])
+    ).rejects.toThrow('exit');
+    exitSpy.mockRestore();
+  });
 });
 
 describe('billing-template round-trip', () => {

@@ -5,7 +5,7 @@ import { apiGet, apiPut } from '../api/client.js';
 import { writeResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
-import { assertSuccess, assertReadSuccess, ZuoraReadResponse, ZuoraWriteResponse } from '../helpers/zuora-response.js';
+import { assertReadSuccess, ZuoraReadResponse } from '../helpers/zuora-response.js';
 import { RESOURCE_SUBFOLDERS } from '../constants.js';
 
 const RESOURCE = 'billing-template';
@@ -172,8 +172,15 @@ export function register(program: Command): void {
           }
         }
 
-        const res = await apiPut<ZuoraWriteResponse>(`${ENDPOINT}/${encodedId}`, body);
-        assertSuccess(res, 'billing template update');
+        // The Settings API PUT echoes the updated resource with no `success` envelope at all
+        // on success (confirmed live: HTTP 200 with just the resource body) — unlike the
+        // order/account/etc. write endpoints, which always return `{ success: true/false }`.
+        // assertReadSuccess is the correct guard here: it treats "no `success` field and no
+        // `reasons`/`errors`" as success, and only fails on an explicit `success === false` or
+        // a populated `reasons`/`errors` array. Using the strict assertSuccess here was the bug
+        // — a genuinely successful update has no `success` key, so assertSuccess always threw.
+        const res = await apiPut<InvoiceTemplateMetadata & ZuoraReadResponse>(`${ENDPOINT}/${encodedId}`, body);
+        assertReadSuccess(res, 'billing template update');
         output.success(`Billing template ${id} updated.`);
       })()
     );
