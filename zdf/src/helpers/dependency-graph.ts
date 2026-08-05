@@ -242,18 +242,23 @@ async function rulesContact(action: Action, record: ResourceRecord, visited: Set
 }
 
 async function rulesOrder(_id: string, _action: Action, record: ResourceRecord, visited: Set<string>): Promise<void> {
+  // GET /v1/orders/{orderNumber} wraps the order under an 'order' key; unwrap before
+  // reading, same as the push path (src/commands/orders.ts: rawFull['order'] ?? rawFull).
+  // Stay safe when there's no envelope (defensive/older shape).
+  const o = (record['order'] as ResourceRecord | undefined) ?? record;
+
   // Order record uses existingAccountNumber; GET /v1/accounts/{accountNumber} returns the full account record
-  const accountNumber = (record['existingAccountNumber'] ?? record['accountNumber']) as string | undefined;
+  const accountNumber = (o['existingAccountNumber'] ?? o['accountNumber']) as string | undefined;
   if (accountNumber) {
     const acctRecord = await apiGet<ResourceRecord>(`/v1/accounts/${accountNumber}`);
     const acctId = (acctRecord['basicInfo'] as ResourceRecord | undefined)?.['id'] as string | undefined;
     if (acctId) await resolveAndSync('account', acctId, 'pull', visited);
   }
 
-  const items = (record['orderLineItems'] as Array<{ id: string }> | undefined) ?? [];
+  const items = (o['orderLineItems'] as Array<{ id: string }> | undefined) ?? [];
   for (const item of items) await resolveAndSync('order-line-item', item.id, 'pull', visited);
 
-  const subs = (record['subscriptions'] as Array<{ subscriptionNumber: string }> | undefined) ?? [];
+  const subs = (o['subscriptions'] as Array<{ subscriptionNumber: string }> | undefined) ?? [];
   for (const s of subs) await resolveAndSync('subscription', s.subscriptionNumber, 'pull', visited);
 }
 

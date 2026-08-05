@@ -372,6 +372,65 @@ describe('rulesAccount order traversal uses the account NUMBER via subscriptionO
   });
 });
 
+describe('rulesOrder — order envelope unwrapping', () => {
+  it('resolves OLI children and account number from inside a WRAPPED order response', async () => {
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/orders/O-01339581') {
+        return {
+          order: {
+            orderNumber: 'O-01339581',
+            orderLineItems: [{ id: 'x' }],
+            existingAccountNumber: 'ACG00026522',
+          },
+          success: true,
+        };
+      }
+      if (url === '/v1/accounts/ACG00026522') {
+        return { basicInfo: { id: 'ACC-INTERNAL-9' }, success: true };
+      }
+      if (url === '/v1/order-line-items/x') {
+        return { id: 'x', success: true };
+      }
+      return {};
+    });
+
+    await resolveAndSync('order', 'O-01339581', 'pull', new Set());
+
+    // Account number was read from inside the envelope, not the (undefined) top level.
+    expect(mockGet).toHaveBeenCalledWith('/v1/accounts/ACG00026522');
+    // The OLI child was resolved.
+    expect(mockGet).toHaveBeenCalledWith('/v1/order-line-items/x');
+  });
+
+  it('still resolves subscription orders with no envelope and no orderLineItems', async () => {
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/orders/O-SUB-1') {
+        return {
+          orderNumber: 'O-SUB-1',
+          existingAccountNumber: 'ACG00099999',
+          subscriptions: [{ subscriptionNumber: 'SUB-001' }],
+          success: true,
+        };
+      }
+      if (url === '/v1/accounts/ACG00099999') {
+        return { basicInfo: { id: 'ACC-INTERNAL-2' }, success: true };
+      }
+      if (url === '/v1/subscriptions/SUB-001') {
+        return { id: 'SUB-001', success: true };
+      }
+      return {};
+    });
+
+    await resolveAndSync('order', 'O-SUB-1', 'pull', new Set());
+
+    expect(mockGet).toHaveBeenCalledWith('/v1/accounts/ACG00099999');
+    expect(mockGet).toHaveBeenCalledWith('/v1/subscriptions/SUB-001');
+    // No OLI lookups were attempted since orderLineItems is absent.
+    const oliCalls = mockGet.mock.calls.filter(([url]) => (url as string).startsWith('/v1/order-line-items/'));
+    expect(oliCalls).toHaveLength(0);
+  });
+});
+
 describe('resolveAndSync read-response guard', () => {
   it('does not write when the body has a populated reasons array (200-with-error)', async () => {
     mockGet.mockResolvedValueOnce({
