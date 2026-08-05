@@ -206,7 +206,9 @@ const UPDATABLE_FIELDS: Record<string, string[]> = {
     'UseTenantDefaultForPriceChange',
     'WeeklyBillCycleDay',
   ],
-  // workflow, billing-template: TBD — pass through unfiltered until defined
+  // workflow: TBD — pass through unfiltered until defined. billing-template no longer
+  // uses this helper (its update command builds its own PUT body from Settings API
+  // metadata + re-encoded content; see commands/billing-templates.ts).
 };
 
 export function filterUpdatableFields(
