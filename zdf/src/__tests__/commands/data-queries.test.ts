@@ -5,7 +5,7 @@ const mockGet = vi.hoisted(() => vi.fn());
 const mockPost = vi.hoisted(() => vi.fn());
 const mockDelete = vi.hoisted(() => vi.fn());
 const mockQuery = vi.hoisted(() => vi.fn());
-vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiPost: mockPost, apiDelete: mockDelete, apiQuery: mockQuery, setDebug: vi.fn() }));
+vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiPost: mockPost, apiDelete: mockDelete, apiQuery: mockQuery, setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
 
 const mockWrite = vi.hoisted(() => vi.fn());
 const mockRead = vi.hoisted(() => vi.fn());

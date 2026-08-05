@@ -2,6 +2,7 @@ import { apiGet, apiQuery } from '../api/client.js';
 import { writeResourceFile, deleteResourceFile } from './file-io.js';
 import { output } from './output.js';
 import { assertReadSuccess } from './zuora-response.js';
+import { startProgress, updateProgress, stopProgress } from './progress.js';
 
 let noDependency = false;
 export function setNoDependency(flag: boolean): void { noDependency = flag; }
@@ -15,6 +16,14 @@ export function isNoDependency(): boolean { return noDependency; }
 // normal small/medium accounts never hit it. `--no-dependency` bypasses traversal
 // entirely and is unaffected by this ceiling.
 export const MAX_TRAVERSAL_NODES = 500;
+
+// Current effective ceiling. Defaults to the constant above; overridable per-invocation
+// via `--max-nodes <n>` (or set to Infinity by `--no-caps`/`--unbounded`).
+let maxTraversalNodes: number = MAX_TRAVERSAL_NODES;
+
+export function setMaxTraversalNodes(n: number): void {
+  maxTraversalNodes = n;
+}
 
 // Tracks which `visited` sets have already emitted the ceiling warning, so a single
 // resolveAndSync call tree (which threads one Set through all recursive calls) warns
@@ -30,6 +39,14 @@ const warnedVisitedSets = new WeakSet<Set<string>>();
 // still explode a pull. Sized consistently with APIQUERY_MAX_ROWS in api/client.ts.
 // High enough that normal accounts' sub-item lists finish well under it.
 export const FETCH_ALL_ITEMS_MAX = 5000;
+
+// Current effective ceiling. Defaults to the constant above; overridable per-invocation
+// via `--max-items <n>` (or set to Infinity by `--no-caps`/`--unbounded`).
+let fetchAllItemsMax: number = FETCH_ALL_ITEMS_MAX;
+
+export function setMaxItems(n: number): void {
+  fetchAllItemsMax = n;
+}
 
 type Action = 'pull' | 'push' | 'delete';
 
@@ -56,19 +73,28 @@ const ENDPOINTS: Record<string, (id: string) => string> = {
 async function fetchAllItems<T>(firstUrl: string, itemsKey: string): Promise<T[]> {
   const all: T[] = [];
   let url: string | undefined = firstUrl;
-  while (url) {
-    const page = await apiGet<Record<string, unknown>>(url);
-    const items = page[itemsKey] as T[] | undefined;
-    if (items) all.push(...items);
-    if (all.length >= FETCH_ALL_ITEMS_MAX) {
-      output.warn(
-        `fetchAllItems: truncated ${itemsKey} at the ${FETCH_ALL_ITEMS_MAX}-item cap (endpoint may have ` +
-        `ignored a filter param and returned more than expected); some sub-items were not fetched. ` +
-        `Re-run with --no-dependency for large accounts.`
-      );
-      break;
+  let page = 1;
+  try {
+    while (url) {
+      if (page === 1) startProgress(`Fetching ${itemsKey} page ${page}…`);
+      else updateProgress(`Fetching ${itemsKey} page ${page} (${all.length} so far)…`);
+      const res = await apiGet<Record<string, unknown>>(url);
+      const items = res[itemsKey] as T[] | undefined;
+      if (items) all.push(...items);
+      if (all.length >= fetchAllItemsMax) {
+        stopProgress();
+        output.warn(
+          `fetchAllItems: truncated ${itemsKey} at the ${fetchAllItemsMax}-item cap (endpoint may have ` +
+          `ignored a filter param and returned more than expected); some sub-items were not fetched. ` +
+          `Re-run with --no-dependency for large accounts.`
+        );
+        break;
+      }
+      url = res['nextPage'] as string | undefined;
+      page++;
     }
-    url = page['nextPage'] as string | undefined;
+  } finally {
+    stopProgress();
   }
   return all;
 }
@@ -121,11 +147,11 @@ export async function resolveAndSync(
   const key = `${resource}:${id}`;
   if (visited.has(key)) return;
 
-  if (!noDependency && visited.size >= MAX_TRAVERSAL_NODES) {
+  if (!noDependency && visited.size >= maxTraversalNodes) {
     if (!warnedVisitedSets.has(visited)) {
       warnedVisitedSets.add(visited);
       output.warn(
-        `Dependency traversal hit the ${MAX_TRAVERSAL_NODES}-node ceiling; stopping further traversal. ` +
+        `Dependency traversal hit the ${maxTraversalNodes}-node ceiling; stopping further traversal. ` +
         `Some related records may not have been synced. Re-run with --no-dependency to skip traversal on a large account.`
       );
     }

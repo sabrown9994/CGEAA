@@ -71,6 +71,15 @@ export const apiDelete = <T>(path: string) => request<T>('DELETE', path);
 // (contacts, invoices, rate plans, etc.) so real-world queries are never affected.
 export const APIQUERY_MAX_ROWS = 5000;
 
+// Current effective cap. Defaults to the constant above; overridable per-invocation via
+// `--max-rows <n>` (or set to Infinity by `--no-caps`/`--unbounded`). See bin/zdf.ts and
+// src/helpers/command-runner.ts for how the CLI flags reach this setter.
+let apiQueryMaxRows: number = APIQUERY_MAX_ROWS;
+
+export function setMaxRows(n: number): void {
+  apiQueryMaxRows = n;
+}
+
 type QueryResponse<T> = { records: T[]; size: number; done: boolean; queryLocator?: string };
 
 export async function apiQuery<T>(zoql: string): Promise<T[]> {
@@ -78,9 +87,9 @@ export async function apiQuery<T>(zoql: string): Promise<T[]> {
   let res = await request<QueryResponse<T>>('POST', '/v1/action/query', { queryString: zoql });
   if (res.records) all.push(...res.records);
   while (!res.done && res.queryLocator) {
-    if (all.length >= APIQUERY_MAX_ROWS) {
+    if (all.length >= apiQueryMaxRows) {
       output.warn(
-        `apiQuery: hit the ${APIQUERY_MAX_ROWS}-row cap before pagination finished; returning ${all.length} rows collected so far. Query: ${zoql}`
+        `apiQuery: hit the ${apiQueryMaxRows}-row cap before pagination finished; returning ${all.length} rows collected so far. Query: ${zoql}`
       );
       break;
     }

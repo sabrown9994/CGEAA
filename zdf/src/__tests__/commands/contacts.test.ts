@@ -6,7 +6,7 @@ const mockPost = vi.hoisted(() => vi.fn());
 const mockPut = vi.hoisted(() => vi.fn());
 const mockDelete = vi.hoisted(() => vi.fn());
 const mockQuery = vi.hoisted(() => vi.fn());
-vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiPost: mockPost, apiPut: mockPut, apiDelete: mockDelete, apiQuery: mockQuery, setDebug: vi.fn() }));
+vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiPost: mockPost, apiPut: mockPut, apiDelete: mockDelete, apiQuery: mockQuery, setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
 
 const mockWrite = vi.hoisted(() => vi.fn());
 const mockRead = vi.hoisted(() => vi.fn());
@@ -21,6 +21,10 @@ vi.mock('../../helpers/dependency-graph.js', () => ({
   resolveAndSync: mockResolve,
   setNoDependency: vi.fn(),
   isNoDependency: vi.fn().mockReturnValue(false),
+  setMaxTraversalNodes: vi.fn(),
+  setMaxItems: vi.fn(),
+  MAX_TRAVERSAL_NODES: 500,
+  FETCH_ALL_ITEMS_MAX: 5000,
 }));
 
 const mockReadFileSync = vi.hoisted(() => vi.fn());

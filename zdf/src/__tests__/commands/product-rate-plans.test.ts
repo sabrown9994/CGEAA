@@ -4,7 +4,7 @@ import { Command } from 'commander';
 const mockPost = vi.hoisted(() => vi.fn());
 const mockPut = vi.hoisted(() => vi.fn());
 const mockDelete = vi.hoisted(() => vi.fn());
-vi.mock('../../api/client.js', () => ({ apiGet: vi.fn(), apiPost: mockPost, apiPut: mockPut, apiDelete: mockDelete, apiQuery: vi.fn(), setDebug: vi.fn() }));
+vi.mock('../../api/client.js', () => ({ apiGet: vi.fn(), apiPost: mockPost, apiPut: mockPut, apiDelete: mockDelete, apiQuery: vi.fn(), setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
 
 const mockRead = vi.hoisted(() => vi.fn());
 const mockRename = vi.hoisted(() => vi.fn());
@@ -18,6 +18,10 @@ vi.mock('../../helpers/dependency-graph.js', () => ({
   resolveAndSync: mockResolve,
   setNoDependency: vi.fn(),
   isNoDependency: vi.fn().mockReturnValue(false),
+  setMaxTraversalNodes: vi.fn(),
+  setMaxItems: vi.fn(),
+  MAX_TRAVERSAL_NODES: 500,
+  FETCH_ALL_ITEMS_MAX: 5000,
 }));
 
 import { register } from '../../commands/product-rate-plans.js';

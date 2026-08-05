@@ -5,7 +5,7 @@ const mockGet = vi.hoisted(() => vi.fn());
 const mockPost = vi.hoisted(() => vi.fn());
 const mockPut = vi.hoisted(() => vi.fn());
 const mockDelete = vi.hoisted(() => vi.fn());
-vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiPost: mockPost, apiPut: mockPut, apiDelete: mockDelete, setDebug: vi.fn() }));
+vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiPost: mockPost, apiPut: mockPut, apiDelete: mockDelete, setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
 
 const mockWrite = vi.hoisted(() => vi.fn());
 const mockRead = vi.hoisted(() => vi.fn());
@@ -17,6 +17,10 @@ vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: fa
 vi.mock('../../helpers/dependency-graph.js', () => ({
   setNoDependency: vi.fn(),
   isNoDependency: vi.fn().mockReturnValue(false),
+  setMaxTraversalNodes: vi.fn(),
+  setMaxItems: vi.fn(),
+  MAX_TRAVERSAL_NODES: 500,
+  FETCH_ALL_ITEMS_MAX: 5000,
 }));
 
 import { register } from '../../commands/workflows.js';

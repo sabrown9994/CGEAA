@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockGet = vi.hoisted(() => vi.fn());
 const mockQuery = vi.hoisted(() => vi.fn());
@@ -9,10 +9,20 @@ vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, delet
 vi.mock('../../helpers/output.js', () => ({ output: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warn: vi.fn() } }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
 
-import { resolveAndSync, MAX_TRAVERSAL_NODES, FETCH_ALL_ITEMS_MAX } from '../../helpers/dependency-graph.js';
+import {
+  resolveAndSync,
+  MAX_TRAVERSAL_NODES,
+  FETCH_ALL_ITEMS_MAX,
+  setMaxTraversalNodes,
+  setMaxItems,
+} from '../../helpers/dependency-graph.js';
 import { output } from '../../helpers/output.js';
 
 beforeEach(() => { vi.clearAllMocks(); });
+afterEach(() => {
+  setMaxTraversalNodes(MAX_TRAVERSAL_NODES);
+  setMaxItems(FETCH_ALL_ITEMS_MAX);
+});
 
 describe('resolveAndSync visited-set loop prevention', () => {
   it('skips a resource+id pair already in the visited set', async () => {
@@ -137,6 +147,56 @@ describe('resolveAndSync traversal ceiling', () => {
 
     expect(output.warn).not.toHaveBeenCalled();
   });
+
+  it('setMaxTraversalNodes overrides the ceiling so traversal stops at the overridden value', async () => {
+    setMaxTraversalNodes(3);
+    const contactIds = Array.from({ length: 20 }, (_, i) => ({ Id: `CON-${i}` }));
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/accounts/ACC-001') return { id: 'ACC-001', name: 'Acme', success: true };
+      if (url.startsWith('/v1/contacts/')) {
+        const id = url.replace('/v1/contacts/', '');
+        return { id, accountId: 'ACC-001', success: true };
+      }
+      return {};
+    });
+    mockQuery.mockImplementation(async (zoql: string) => {
+      if (zoql.includes('FROM Contact')) return contactIds;
+      return [];
+    });
+
+    const visited = new Set<string>();
+    await resolveAndSync('account', 'ACC-001', 'pull', visited);
+
+    expect(visited.size).toBeLessThanOrEqual(3);
+    expect(output.warn).toHaveBeenCalledTimes(1);
+    expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/3-node ceiling/);
+  });
+
+  it('setMaxTraversalNodes(Infinity) (the --no-caps behavior) does not stop traversal at the default ceiling', async () => {
+    setMaxTraversalNodes(Infinity);
+    const contactCount = MAX_TRAVERSAL_NODES + 50;
+    const contactIds = Array.from({ length: contactCount }, (_, i) => ({ Id: `CON-${i}` }));
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/accounts/ACC-001') return { id: 'ACC-001', name: 'Acme', success: true };
+      if (url.startsWith('/v1/contacts/')) {
+        const id = url.replace('/v1/contacts/', '');
+        return { id, accountId: 'ACC-001', success: true };
+      }
+      return {};
+    });
+    mockQuery.mockImplementation(async (zoql: string) => {
+      if (zoql.includes('FROM Contact')) return contactIds;
+      return [];
+    });
+
+    const visited = new Set<string>();
+    await resolveAndSync('account', 'ACC-001', 'pull', visited);
+
+    expect(visited.size).toBeGreaterThan(MAX_TRAVERSAL_NODES);
+    const contactFetchCalls = mockGet.mock.calls.filter(([url]) => (url as string).startsWith('/v1/contacts/'));
+    expect(contactFetchCalls.length).toBe(contactCount);
+    expect(output.warn).not.toHaveBeenCalled();
+  });
 });
 
 describe('fetchAllItems pagination cap', () => {
@@ -181,6 +241,52 @@ describe('fetchAllItems pagination cap', () => {
     expect(output.warn).not.toHaveBeenCalled();
     const written = mockWrite.mock.calls.find(([resource]) => resource === 'invoice')?.[2] as Record<string, unknown>;
     expect((written['invoiceItems'] as unknown[]).length).toBe(2);
+  });
+
+  it('setMaxItems overrides the cap so pagination stops at the overridden value', async () => {
+    setMaxItems(2);
+    const page = {
+      invoiceItems: [{ id: 'ii-1' }, { id: 'ii-2' }],
+      nextPage: '/v1/invoices/INV-003/items?page=2',
+    };
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/invoices/INV-003') return { id: 'INV-003', accountId: 'ACC-001', success: true };
+      if (url.startsWith('/v1/invoices/INV-003/items')) return page;
+      return {};
+    });
+    mockQuery.mockResolvedValue([]);
+
+    await resolveAndSync('invoice', 'INV-003', 'pull', new Set(['account:ACC-001']));
+
+    const itemsCalls = mockGet.mock.calls.filter(([url]) => (url as string).startsWith('/v1/invoices/INV-003/items'));
+    expect(itemsCalls.length).toBe(1);
+    expect(output.warn).toHaveBeenCalledTimes(1);
+    expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/2-item cap/);
+  });
+
+  it('setMaxItems(Infinity) (the --no-caps behavior) keeps paginating past the default item cap', async () => {
+    setMaxItems(Infinity);
+    let calls = 0;
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/invoices/INV-004') return { id: 'INV-004', accountId: 'ACC-001', success: true };
+      if (url.startsWith('/v1/invoices/INV-004/items')) {
+        calls += 1;
+        const done = calls >= 6; // 6 pages * 1000 = 6000 items, past the 5000 default cap
+        return {
+          invoiceItems: Array.from({ length: 1000 }, (_, i) => ({ id: `ii-${calls}-${i}` })),
+          nextPage: done ? undefined : `/v1/invoices/INV-004/items?page=${calls + 1}`,
+        };
+      }
+      return {};
+    });
+    mockQuery.mockResolvedValue([]);
+
+    await resolveAndSync('invoice', 'INV-004', 'pull', new Set(['account:ACC-001']));
+
+    expect(output.warn).not.toHaveBeenCalled();
+    const written = mockWrite.mock.calls.find(([resource]) => resource === 'invoice')?.[2] as Record<string, unknown>;
+    expect((written['invoiceItems'] as unknown[]).length).toBe(6000);
+    expect((written['invoiceItems'] as unknown[]).length).toBeGreaterThan(FETCH_ALL_ITEMS_MAX);
   });
 });
 

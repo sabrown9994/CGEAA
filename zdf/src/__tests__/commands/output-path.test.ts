@@ -8,13 +8,17 @@ import os from 'os';
 // the REAL module, so this test exercises the actual ZDF_OUTPUT_DIR override behavior
 // that resolveFilePath()/getOutputDir() depend on (see file-io.ts).
 const mockGet = vi.hoisted(() => vi.fn());
-vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiPost: vi.fn(), apiPut: vi.fn(), apiDelete: vi.fn(), setDebug: vi.fn() }));
+vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiPost: vi.fn(), apiPut: vi.fn(), apiDelete: vi.fn(), setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
 
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
 vi.mock('../../helpers/dependency-graph.js', () => ({
   setNoDependency: vi.fn(),
   isNoDependency: vi.fn().mockReturnValue(false),
+  setMaxTraversalNodes: vi.fn(),
+  setMaxItems: vi.fn(),
+  MAX_TRAVERSAL_NODES: 500,
+  FETCH_ALL_ITEMS_MAX: 5000,
 }));
 
 import { register } from '../../commands/workflows.js';

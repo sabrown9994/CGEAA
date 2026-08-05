@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Command } from 'commander';
 
 const mockPut = vi.hoisted(() => vi.fn());
-vi.mock('../../api/client.js', () => ({ apiGet: vi.fn(), apiPost: vi.fn(), apiPut: mockPut, apiDelete: vi.fn(), apiQuery: vi.fn(), setDebug: vi.fn() }));
+vi.mock('../../api/client.js', () => ({ apiGet: vi.fn(), apiPost: vi.fn(), apiPut: mockPut, apiDelete: vi.fn(), apiQuery: vi.fn(), setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
 
 const mockRead = vi.hoisted(() => vi.fn());
 vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: vi.fn(), readResourceFile: mockRead, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
@@ -15,6 +15,10 @@ vi.mock('../../helpers/dependency-graph.js', () => ({
   resolveAndSync: mockResolve,
   setNoDependency: vi.fn(),
   isNoDependency: vi.fn().mockReturnValue(false),
+  setMaxTraversalNodes: vi.fn(),
+  setMaxItems: vi.fn(),
+  MAX_TRAVERSAL_NODES: 500,
+  FETCH_ALL_ITEMS_MAX: 5000,
 }));
 
 import { register } from '../../commands/product-rate-plan-charges.js';

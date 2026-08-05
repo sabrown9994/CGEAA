@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockRequest = vi.hoisted(() => vi.fn());
 vi.mock('axios', () => ({
@@ -23,9 +23,10 @@ vi.mock('../../auth/token.js', () => ({ ensureToken: async () => 'tok' }));
 const mockWarn = vi.hoisted(() => vi.fn());
 vi.mock('../../helpers/output.js', () => ({ output: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warn: mockWarn } }));
 
-import { apiGet, apiPost, apiPut, apiPatch, apiDelete, apiQuery, APIQUERY_MAX_ROWS } from '../../api/client.js';
+import { apiGet, apiPost, apiPut, apiPatch, apiDelete, apiQuery, APIQUERY_MAX_ROWS, setMaxRows } from '../../api/client.js';
 
 beforeEach(() => { vi.clearAllMocks(); });
+afterEach(() => { setMaxRows(APIQUERY_MAX_ROWS); });
 
 describe('apiGet', () => {
   it('calls GET with correct path and auth header', async () => {
@@ -102,5 +103,49 @@ describe('apiQuery', () => {
     expect(mockRequest).toHaveBeenCalledTimes(APIQUERY_MAX_ROWS / pageSize);
     expect(mockWarn).toHaveBeenCalledTimes(1);
     expect(mockWarn.mock.calls[0][0]).toMatch(/cap/i);
+  });
+
+  it('setMaxRows overrides the cap so pagination stops at the overridden value, not the default', async () => {
+    setMaxRows(10);
+    const pageSize = 5;
+    mockRequest.mockImplementation(async () => ({
+      data: {
+        records: Array.from({ length: pageSize }, (_, i) => ({ Id: `row-${i}` })),
+        size: pageSize,
+        done: false,
+        queryLocator: 'loc-more',
+      },
+    }));
+
+    const result = await apiQuery('SELECT Id FROM Invoice');
+
+    expect(result.length).toBe(10);
+    expect(result.length).toBeLessThan(APIQUERY_MAX_ROWS);
+    expect(mockWarn).toHaveBeenCalledTimes(1);
+    expect(mockWarn.mock.calls[0][0]).toMatch(/10-row cap/);
+  });
+
+  it('setMaxRows(Infinity) (the --no-caps behavior) keeps paginating well past the default cap', async () => {
+    setMaxRows(Infinity);
+    const pageSize = 1000;
+    let calls = 0;
+    mockRequest.mockImplementation(async () => {
+      calls += 1;
+      const done = calls >= 7; // 7 pages = 7000 rows, past the 5000-row default cap
+      return {
+        data: {
+          records: Array.from({ length: pageSize }, (_, i) => ({ Id: `row-${i}` })),
+          size: pageSize,
+          done,
+          queryLocator: done ? undefined : 'loc-more',
+        },
+      };
+    });
+
+    const result = await apiQuery('SELECT Id FROM Invoice');
+
+    expect(result.length).toBe(7000);
+    expect(result.length).toBeGreaterThan(APIQUERY_MAX_ROWS);
+    expect(mockWarn).not.toHaveBeenCalled();
   });
 });
