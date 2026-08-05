@@ -433,6 +433,74 @@ describe('rulesOrder — order envelope unwrapping', () => {
   });
 });
 
+describe('rulesBillRun — child-lookup failures warn and continue instead of aborting the pull', () => {
+  it('warns and continues when the Invoice ZOQL 400s (e.g. INVALID_TYPE on intQA)', async () => {
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/bill-runs/BR-001') return { id: 'BR-001', accountId: 'ACC-001', billRunNumber: 'BR-NUM-001', success: true };
+      if (url.startsWith('/v1/credit-memos?sourceId=')) return { creditMemos: [] };
+      return {};
+    });
+    mockQuery.mockImplementation(async (zoql: string) => {
+      if (zoql.includes('FROM Invoice')) throw Object.assign(new Error('invalid type specified: invoice'), { statusCode: 400 });
+      return []; // DebitMemo lookup
+    });
+
+    // Must not throw — the whole pull would otherwise abort.
+    await expect(resolveAndSync('bill-run', 'BR-001', 'pull', new Set(['account:ACC-001']))).resolves.toBeUndefined();
+
+    expect(output.warn).toHaveBeenCalledTimes(1);
+    expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/invoices for bill-run BR-001/);
+  });
+
+  it('warns and continues when the credit-memo sourceId GET 400s', async () => {
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/bill-runs/BR-002') return { id: 'BR-002', accountId: 'ACC-001', billRunNumber: 'BR-NUM-002', success: true };
+      if (url.startsWith('/v1/credit-memos?sourceId=')) throw Object.assign(new Error('bad request'), { statusCode: 400 });
+      return {};
+    });
+    mockQuery.mockResolvedValue([]);
+
+    await expect(resolveAndSync('bill-run', 'BR-002', 'pull', new Set(['account:ACC-001']))).resolves.toBeUndefined();
+
+    expect(output.warn).toHaveBeenCalledTimes(1);
+    expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/credit-memos for bill-run BR-002/);
+  });
+
+  it('warns and continues when the DebitMemo ZOQL 400s, and still resolves the invoice lookup', async () => {
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/bill-runs/BR-003') return { id: 'BR-003', accountId: 'ACC-001', billRunNumber: 'BR-NUM-003', success: true };
+      if (url === '/v1/invoices/INV-001') return { id: 'INV-001', accountId: 'ACC-001', success: true };
+      if (url.startsWith('/v1/invoices/INV-001/items')) return { invoiceItems: [] };
+      if (url.startsWith('/v1/credit-memos?sourceId=')) return { creditMemos: [] };
+      return {};
+    });
+    mockQuery.mockImplementation(async (zoql: string) => {
+      if (zoql.includes('FROM Invoice')) return [{ Id: 'INV-001' }];
+      if (zoql.includes('FROM DebitMemo')) throw Object.assign(new Error('invalid type specified: debitmemo'), { statusCode: 400 });
+      return [];
+    });
+
+    await expect(resolveAndSync('bill-run', 'BR-003', 'pull', new Set(['account:ACC-001']))).resolves.toBeUndefined();
+
+    expect(mockGet).toHaveBeenCalledWith('/v1/invoices/INV-001');
+    expect(output.warn).toHaveBeenCalledTimes(1);
+    expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/debit-memos for bill-run BR-003/);
+  });
+
+  it('does not warn when all bill-run child lookups succeed', async () => {
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/bill-runs/BR-004') return { id: 'BR-004', accountId: 'ACC-001', billRunNumber: 'BR-NUM-004', success: true };
+      if (url.startsWith('/v1/credit-memos?sourceId=')) return { creditMemos: [] };
+      return {};
+    });
+    mockQuery.mockResolvedValue([]);
+
+    await resolveAndSync('bill-run', 'BR-004', 'pull', new Set(['account:ACC-001']));
+
+    expect(output.warn).not.toHaveBeenCalled();
+  });
+});
+
 describe('resolveAndSync read-response guard', () => {
   it('does not write when the body has a populated reasons array (200-with-error)', async () => {
     mockGet.mockResolvedValueOnce({

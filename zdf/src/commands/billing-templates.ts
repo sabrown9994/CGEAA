@@ -23,6 +23,8 @@ const CONTENT_FIELD = 'base64EncodedTemplateFileContent';
  * permitted"). `id`, `templateNumber`, and `updatedOn` are read-only/path-redundant and are
  * also excluded. This is an ALLOWLIST (not "resend everything minus a denylist") specifically
  * so future extraneous fields Zuora adds to the GET response don't leak into the PUT body.
+ * Custom fields (`__c` suffix) are passed through in addition to this allowlist, matching the
+ * convention in helpers/updatable-fields.ts (filterUpdatableFields) — see the loop below.
  */
 const UPDATE_ALLOWLIST = ['name', 'defaultTemplate', 'suppressZeroValueLine', 'templateFileName'] as const;
 
@@ -169,6 +171,13 @@ export function register(program: Command): void {
         for (const field of UPDATE_ALLOWLIST) {
           if (field in current) {
             body[field] = current[field];
+          }
+        }
+        // Custom fields always pass through in addition to the allowlist above, consistent
+        // with filterUpdatableFields' `key.endsWith('__c')` convention elsewhere in the codebase.
+        for (const [key, value] of Object.entries(current)) {
+          if (key.endsWith('__c')) {
+            body[key] = value;
           }
         }
 

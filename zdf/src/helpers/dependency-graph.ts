@@ -48,6 +48,13 @@ export function setMaxItems(n: number): void {
   fetchAllItemsMax = n;
 }
 
+/** Current effective per-call items cap (see setMaxItems above). Reused by callers
+ * outside the dependency graph (e.g. `list orders`' per-line-item fetch loop) that
+ * need to respect the same --max-items / --no-caps configuration. */
+export function getMaxItems(): number {
+  return fetchAllItemsMax;
+}
+
 type Action = 'pull' | 'push' | 'delete';
 
 interface ResourceRecord extends Record<string, unknown> {
@@ -329,12 +336,29 @@ async function rulesDebitMemo(_id: string, action: Action, record: ResourceRecor
 async function rulesBillRun(id: string, action: Action, record: ResourceRecord, visited: Set<string>): Promise<void> {
   if (record['accountId']) await resolveAndSync('account', record['accountId'] as string, 'pull', visited);
 
-  const invIds = await apiQuery<{ Id: string }>(`SELECT Id FROM Invoice WHERE BillRunId = '${id}'`);
-  for (const inv of invIds) await resolveAndSync('invoice', inv.Id, action, visited);
+  // Each child-lookup below is independently wrapped: intQA has been observed to reject
+  // some of these ZOQL/GET calls with HTTP 400 (e.g. INVALID_TYPE on Invoice/DebitMemo
+  // ZOQL), which would otherwise throw out of rulesBillRun and abort the entire pull for
+  // any account that has bill-runs. Warn and continue instead — mirrors fetchAndWrite's
+  // tolerant-of-non-404-errors pattern above.
+  try {
+    const invIds = await apiQuery<{ Id: string }>(`SELECT Id FROM Invoice WHERE BillRunId = '${id}'`);
+    for (const inv of invIds) await resolveAndSync('invoice', inv.Id, action, visited);
+  } catch (err: unknown) {
+    output.warn(`Skipping invoices for bill-run ${id}: ${(err as Error).message}`);
+  }
 
-  const cmIds = await apiGet<{ creditMemos?: Array<{ id: string }> }>(`/v1/credit-memos?sourceId=${(record['billRunNumber'] as string) ?? id}`);
-  for (const cm of cmIds.creditMemos ?? []) await resolveAndSync('credit-memo', cm.id, action, visited);
+  try {
+    const cmIds = await apiGet<{ creditMemos?: Array<{ id: string }> }>(`/v1/credit-memos?sourceId=${(record['billRunNumber'] as string) ?? id}`);
+    for (const cm of cmIds.creditMemos ?? []) await resolveAndSync('credit-memo', cm.id, action, visited);
+  } catch (err: unknown) {
+    output.warn(`Skipping credit-memos for bill-run ${id}: ${(err as Error).message}`);
+  }
 
-  const dmIds = await apiQuery<{ Id: string }>(`SELECT Id FROM DebitMemo WHERE BillRunId = '${id}'`);
-  for (const dm of dmIds) await resolveAndSync('debit-memo', dm.Id, action, visited);
+  try {
+    const dmIds = await apiQuery<{ Id: string }>(`SELECT Id FROM DebitMemo WHERE BillRunId = '${id}'`);
+    for (const dm of dmIds) await resolveAndSync('debit-memo', dm.Id, action, visited);
+  } catch (err: unknown) {
+    output.warn(`Skipping debit-memos for bill-run ${id}: ${(err as Error).message}`);
+  }
 }

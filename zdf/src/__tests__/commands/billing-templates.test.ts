@@ -196,6 +196,30 @@ describe('zdf update billing-template', () => {
     expect(body).toHaveProperty('suppressZeroValueLine', true);
   });
 
+  it('passes through custom fields (__c suffix) in addition to the documented allowlist', async () => {
+    mockReaddirSync.mockReturnValue(['Invoice_Template_bt-1.json']);
+    mockReadFileSync.mockReturnValue(JSON.stringify(DESIGN_JSON));
+    mockGet.mockResolvedValue({
+      id: 'bt-1',
+      name: 'Invoice Template',
+      templateFormat: 'HTML',
+      defaultTemplate: false,
+      MyCustomField__c: 'custom-value',
+      AnotherOne__c: 42,
+      base64EncodedTemplateFileContent: 'stale-b64-should-be-overwritten',
+    });
+    mockPut.mockResolvedValue({ success: true });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'update', 'billing-template', 'bt-1']);
+
+    const [, body] = mockPut.mock.calls[0];
+    expect(body).toHaveProperty('MyCustomField__c', 'custom-value');
+    expect(body).toHaveProperty('AnotherOne__c', 42);
+    // Still excludes the known-rejected keys.
+    expect(body).not.toHaveProperty('templateFormat');
+    expect(body).not.toHaveProperty('id');
+  });
+
   it('URL-encodes the id in both the GET and PUT request paths', async () => {
     mockReadFileSync.mockReturnValue(JSON.stringify(DESIGN_JSON));
     mockGet.mockResolvedValue({ id: 'bt/1 2', name: 'Invoice Template', templateFormat: 'HTML' });

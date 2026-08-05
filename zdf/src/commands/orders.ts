@@ -6,7 +6,7 @@ import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
-import { resolveAndSync } from '../helpers/dependency-graph.js';
+import { resolveAndSync, getMaxItems } from '../helpers/dependency-graph.js';
 
 const RESOURCE = 'order';
 const ENDPOINT = '/v1/orders';
@@ -69,11 +69,19 @@ export function register(program: Command): void {
         // with --account we filter the returned orders client-side.
         const clientSideStatusFilter = Boolean(opts.account) && Boolean(opts.status);
 
+        // Each order's line items are fetched with one GET apiece and there is no
+        // server-side limit on orderLineItems per order; an order (or set of orders)
+        // with many line items would otherwise issue unbounded serial GETs. Reuse the
+        // same effective cap as the dependency graph's --max-items (getMaxItems()) so
+        // this loop degrades gracefully instead of throwing.
+        const maxItems = getMaxItems();
+        let lineItemCapWarned = false;
+
         let page = 1;
         let total = 0;
         let lineItemTotal = 0;
         let truncated = false;
-        while (true) {
+        outer: while (true) {
           output.info(`Fetching page ${page}…`);
           const queryParams: string[] = [];
           if (!opts.account && opts.status) queryParams.push(`status=${opts.status}`);
@@ -93,8 +101,19 @@ export function register(program: Command): void {
             }
             const orderNumber = order['orderNumber'] as string;
             writeResourceFile(RESOURCE, orderNumber, order);
+            total += 1;
             const lineItems = (order['orderLineItems'] as Array<{ id: string }> | undefined) ?? [];
             for (const lineItem of lineItems) {
+              if (lineItemTotal >= maxItems) {
+                if (!lineItemCapWarned) {
+                  lineItemCapWarned = true;
+                  output.warn(
+                    `list orders: reached the ${maxItems}-item cap on order-line-item fetches; ` +
+                    `some line items were not fetched. Re-run with --max-items <n> to raise the cap.`
+                  );
+                }
+                break outer;
+              }
               const liRes = await apiGet<{ success: boolean; orderLineItem: Record<string, unknown> }>(
                 `/v1/order-line-items/${lineItem.id}`
               );
@@ -103,7 +122,6 @@ export function register(program: Command): void {
                 lineItemTotal += 1;
               }
             }
-            total += 1;
           }
           if (hasLimit && total >= limit!) {
             truncated = true;

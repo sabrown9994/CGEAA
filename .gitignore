@@ -17,6 +17,8 @@ apex-scripts/log
 salesforce.schema
 Referenced Packages
 bin/
+!zdf/bin/
+!zdf/bin/*.ts
 tmp/
 config/
 *.tmp

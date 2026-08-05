@@ -15,19 +15,25 @@ vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readR
 
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
+vi.mock('../../helpers/output.js', () => ({
+  output: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warn: vi.fn() },
+}));
 
 const mockResolve = vi.hoisted(() => vi.fn());
+const mockGetMaxItems = vi.hoisted(() => vi.fn().mockReturnValue(5000));
 vi.mock('../../helpers/dependency-graph.js', () => ({
   resolveAndSync: mockResolve,
   setNoDependency: vi.fn(),
   isNoDependency: vi.fn().mockReturnValue(false),
   setMaxTraversalNodes: vi.fn(),
   setMaxItems: vi.fn(),
+  getMaxItems: mockGetMaxItems,
   MAX_TRAVERSAL_NODES: 500,
   FETCH_ALL_ITEMS_MAX: 5000,
 }));
 
 import { register } from '../../commands/orders.js';
+import { output } from '../../helpers/output.js';
 
 function makeProgram() {
   const p = new Command();
@@ -36,7 +42,10 @@ function makeProgram() {
   return p;
 }
 
-beforeEach(() => { vi.clearAllMocks(); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockGetMaxItems.mockReturnValue(5000);
+});
 
 describe('zdf pull order', () => {
   it('calls resolveAndSync with pull action', async () => {
@@ -154,6 +163,45 @@ describe('zdf list orders', () => {
     await makeProgram().parseAsync(['node', 'zdf', 'list', 'orders', '--status', 'Draft']);
     expect(mockGet).toHaveBeenCalledWith(expect.stringContaining('status=Draft'));
     expect(mockGet).toHaveBeenCalledWith(expect.stringContaining('/v1/orders?'));
+  });
+
+  it('bounds per-order-line-item fetches by the effective --max-items cap, warns once, and does not throw', async () => {
+    // A single order with more line items than the (overridden, small) cap allows, so the
+    // per-item GET loop would otherwise issue unbounded serial GETs.
+    mockGetMaxItems.mockReturnValue(2);
+    mockGet
+      .mockResolvedValueOnce({
+        orders: [{
+          orderNumber: 'O-BIG',
+          orderLineItems: Array.from({ length: 5 }, (_, i) => ({ id: `li-${i}` })),
+        }],
+        // no nextPage
+      })
+      .mockResolvedValue({ success: true, orderLineItem: { id: 'li-x' } });
+
+    await expect(makeProgram().parseAsync(['node', 'zdf', 'list', 'orders', '--all'])).resolves.not.toThrow();
+
+    // Order page fetch (1) + exactly 2 line-item GETs (the cap) = 3 total.
+    expect(mockGet).toHaveBeenCalledTimes(3);
+    expect(mockGet).toHaveBeenNthCalledWith(2, '/v1/order-line-items/li-0');
+    expect(mockGet).toHaveBeenNthCalledWith(3, '/v1/order-line-items/li-1');
+    expect(output.warn).toHaveBeenCalledTimes(1);
+    expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/2-item cap/);
+    // The order itself is still written even though its line items were truncated.
+    expect(mockWrite).toHaveBeenCalledWith('order', 'O-BIG', expect.any(Object));
+  });
+
+  it('does not warn or cap for a normal order with few line items', async () => {
+    mockGet
+      .mockResolvedValueOnce({
+        orders: [{ orderNumber: 'O-SMALL', orderLineItems: [{ id: 'li-1' }, { id: 'li-2' }] }],
+      })
+      .mockResolvedValue({ success: true, orderLineItem: { id: 'li-x' } });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'orders', '--all']);
+
+    expect(output.warn).not.toHaveBeenCalled();
+    expect(mockGet).toHaveBeenCalledTimes(3); // 1 page + 2 line items
   });
 });
 
