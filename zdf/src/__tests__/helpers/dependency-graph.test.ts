@@ -374,6 +374,7 @@ describe('rulesAccount order traversal uses the account NUMBER via subscriptionO
 
 describe('rulesOrder — order envelope unwrapping', () => {
   it('resolves OLI children and account number from inside a WRAPPED order response', async () => {
+    mockQuery.mockResolvedValue([]);
     mockGet.mockImplementation(async (url: string) => {
       if (url === '/v1/orders/O-01339581') {
         return {
@@ -403,6 +404,7 @@ describe('rulesOrder — order envelope unwrapping', () => {
   });
 
   it('still resolves subscription orders with no envelope and no orderLineItems', async () => {
+    mockQuery.mockResolvedValue([]);
     mockGet.mockImplementation(async (url: string) => {
       if (url === '/v1/orders/O-SUB-1') {
         return {
