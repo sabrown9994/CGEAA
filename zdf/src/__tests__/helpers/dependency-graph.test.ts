@@ -290,6 +290,88 @@ describe('fetchAllItems pagination cap', () => {
   });
 });
 
+describe('rulesAccount order traversal uses the account NUMBER via subscriptionOwner', () => {
+  it('resolves orders against /v1/orders/subscriptionOwner/{accountNumber}, not the internal id', async () => {
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/accounts/ACC-INTERNAL-1') {
+        return { id: 'ACC-INTERNAL-1', basicInfo: { id: 'ACC-INTERNAL-1', accountNumber: 'ACG00018042' }, success: true };
+      }
+      if (url === '/v1/orders/subscriptionOwner/ACG00018042') {
+        return { orders: [{ orderNumber: 'O-001' }], success: true };
+      }
+      if (url === '/v1/orders/O-001') {
+        return { id: 'O-001', orderNumber: 'O-001', success: true };
+      }
+      return {};
+    });
+    mockQuery.mockResolvedValue([]);
+
+    await resolveAndSync('account', 'ACC-INTERNAL-1', 'pull', new Set());
+
+    // The internal id must never be used against the orders endpoint.
+    const orderUrlCalls = mockGet.mock.calls.map(([url]) => url as string).filter((u) => u.includes('/v1/orders'));
+    expect(orderUrlCalls).toContain('/v1/orders/subscriptionOwner/ACG00018042');
+    expect(orderUrlCalls.every((u) => !u.includes('accountId=ACC-INTERNAL-1'))).toBe(true);
+    expect(mockGet).toHaveBeenCalledWith('/v1/orders/O-001');
+  });
+
+  it('falls back to a top-level accountNumber field when basicInfo is absent', async () => {
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/accounts/ACC-INTERNAL-2') {
+        return { id: 'ACC-INTERNAL-2', accountNumber: 'ADM-00033408', success: true };
+      }
+      if (url === '/v1/orders/subscriptionOwner/ADM-00033408') {
+        return { orders: [], success: true };
+      }
+      return {};
+    });
+    mockQuery.mockResolvedValue([]);
+
+    await resolveAndSync('account', 'ACC-INTERNAL-2', 'pull', new Set());
+
+    expect(mockGet).toHaveBeenCalledWith('/v1/orders/subscriptionOwner/ADM-00033408');
+  });
+
+  it('skips order traversal (does not fall back to the internal id) when no account number is present', async () => {
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/accounts/ACC-NO-NUMBER') {
+        return { id: 'ACC-NO-NUMBER', success: true };
+      }
+      return {};
+    });
+    mockQuery.mockResolvedValue([]);
+
+    await resolveAndSync('account', 'ACC-NO-NUMBER', 'pull', new Set());
+
+    const orderUrlCalls = mockGet.mock.calls.map(([url]) => url as string).filter((u) => u.includes('/v1/orders'));
+    expect(orderUrlCalls).toHaveLength(0);
+  });
+
+  it('bounds order enumeration by FETCH_ALL_ITEMS_MAX via the subscriptionOwner endpoint', async () => {
+    setMaxItems(2);
+    const page = {
+      orders: [{ orderNumber: 'O-1' }, { orderNumber: 'O-2' }],
+      nextPage: '/v1/orders/subscriptionOwner/ACG00018042?page=2',
+    };
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/accounts/ACC-INTERNAL-3') {
+        return { id: 'ACC-INTERNAL-3', basicInfo: { accountNumber: 'ACG00018042' }, success: true };
+      }
+      if (url.startsWith('/v1/orders/subscriptionOwner/ACG00018042')) return page;
+      if (url.startsWith('/v1/orders/O-')) return { id: 'ignored', success: true };
+      return {};
+    });
+    mockQuery.mockResolvedValue([]);
+
+    await resolveAndSync('account', 'ACC-INTERNAL-3', 'pull', new Set());
+
+    const subOwnerCalls = mockGet.mock.calls.filter(([url]) => (url as string).startsWith('/v1/orders/subscriptionOwner/'));
+    expect(subOwnerCalls.length).toBe(1);
+    expect(output.warn).toHaveBeenCalledTimes(1);
+    expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/2-item cap/);
+  });
+});
+
 describe('resolveAndSync read-response guard', () => {
   it('does not write when the body has a populated reasons array (200-with-error)', async () => {
     mockGet.mockResolvedValueOnce({

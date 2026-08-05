@@ -199,8 +199,22 @@ async function rulesAccount(id: string, action: Action, record: ResourceRecord, 
     const contactIds = await apiQuery<{ Id: string }>(`SELECT Id FROM Contact WHERE AccountId = '${id}'`);
     for (const c of contactIds) await resolveAndSync('contact', c.Id, 'pull', visited);
 
-    const orders = await fetchAllItems<{ orderNumber: string }>(`/v1/orders?accountId=${id}`, 'orders');
-    for (const o of orders) await resolveAndSync('order', o.orderNumber, 'pull', visited);
+    // The generic /v1/orders?accountId= filter is ignored server-side (observed on intQA:
+    // byte-identical to the unfiltered tenant-wide list), so scope via the dedicated
+    // subscriptionOwner endpoint instead. That endpoint takes the account NUMBER/key
+    // (e.g. ACG00018042), not the internal id passed into rulesAccount — resolve it off
+    // the already-fetched account record (basicInfo.accountNumber or accountNumber).
+    const accountNumber = ((record['basicInfo'] as ResourceRecord | undefined)?.['accountNumber']
+      ?? record['accountNumber']) as string | undefined;
+    if (accountNumber) {
+      const orders = await fetchAllItems<{ orderNumber: string }>(
+        `/v1/orders/subscriptionOwner/${encodeURIComponent(accountNumber)}`,
+        'orders'
+      );
+      for (const o of orders) await resolveAndSync('order', o.orderNumber, 'pull', visited);
+    }
+    // else: account record carries no number (unexpected for a real Zuora account GET
+    // response) — skip order traversal for this node rather than fetch tenant-wide.
 
     const subs = await fetchAllItems<{ id: string }>(`/v1/subscriptions/accounts/${id}`, 'subscriptions');
     for (const s of subs) await resolveAndSync('subscription', s.id, 'pull', visited);

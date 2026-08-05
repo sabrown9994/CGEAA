@@ -46,7 +46,7 @@ export function register(program: Command): void {
     .command('orders')
     .description('Fetch orders from Zuora and write to local storage')
     .option('--limit <n>', 'stop after fetching N orders total')
-    .option('--account <id>', 'only fetch orders for the given account ID (accountId=)')
+    .option('--account <key>', 'only fetch orders for the given account number/key via GET /v1/orders/subscriptionOwner/{key}')
     .option('--status <status>', 'only fetch orders with the given status')
     .option('--all', 'confirm a full-tenant export when no --limit/--account/--status is given')
     .action((opts: { limit?: string; account?: string; status?: string; all?: boolean }) =>
@@ -62,6 +62,13 @@ export function register(program: Command): void {
           );
         }
 
+        // The generic /v1/orders?accountId= filter is ignored server-side (observed on
+        // intQA: byte-identical to the unfiltered list), so --account scopes via the
+        // dedicated GET /v1/orders/subscriptionOwner/{accountKey} endpoint instead. That
+        // endpoint has no documented `status` query param, so when --status is combined
+        // with --account we filter the returned orders client-side.
+        const clientSideStatusFilter = Boolean(opts.account) && Boolean(opts.status);
+
         let page = 1;
         let total = 0;
         let lineItemTotal = 0;
@@ -69,13 +76,16 @@ export function register(program: Command): void {
         while (true) {
           output.info(`Fetching page ${page}…`);
           const queryParams: string[] = [];
-          if (opts.account) queryParams.push(`accountId=${opts.account}`);
-          if (opts.status) queryParams.push(`status=${opts.status}`);
+          if (!opts.account && opts.status) queryParams.push(`status=${opts.status}`);
           queryParams.push(`page=${page}`, 'pageSize=50');
-          const res = await apiGet<{ orders: Record<string, unknown>[]; nextPage?: string }>(
-            `/v1/orders?${queryParams.join('&')}`
-          );
-          const orders = res.orders ?? [];
+          const url = opts.account
+            ? `/v1/orders/subscriptionOwner/${encodeURIComponent(opts.account)}?${queryParams.join('&')}`
+            : `/v1/orders?${queryParams.join('&')}`;
+          const res = await apiGet<{ orders: Record<string, unknown>[]; nextPage?: string }>(url);
+          let orders = res.orders ?? [];
+          if (clientSideStatusFilter) {
+            orders = orders.filter((order) => (order['status'] as string | undefined) === opts.status);
+          }
           for (const order of orders) {
             if (hasLimit && total >= limit!) {
               truncated = true;

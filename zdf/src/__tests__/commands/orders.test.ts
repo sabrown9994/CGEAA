@@ -114,10 +114,46 @@ describe('zdf list orders', () => {
     expect(mockGet).toHaveBeenCalledTimes(2);
   });
 
-  it('--account <id> adds accountId=<id> to the requested URL', async () => {
+  it('--account <key> issues GET to /v1/orders/subscriptionOwner/<key>', async () => {
     mockGet.mockResolvedValueOnce({ orders: [] });
-    await makeProgram().parseAsync(['node', 'zdf', 'list', 'orders', '--account', 'ACC-123']);
-    expect(mockGet).toHaveBeenCalledWith(expect.stringContaining('accountId=ACC-123'));
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'orders', '--account', 'ACG00018042']);
+    expect(mockGet).toHaveBeenCalledWith('/v1/orders/subscriptionOwner/ACG00018042?page=1&pageSize=50');
+  });
+
+  it('--account <key> URL-encodes the key', async () => {
+    mockGet.mockResolvedValueOnce({ orders: [] });
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'orders', '--account', 'ADM-00033408']);
+    expect(mockGet).toHaveBeenCalledWith(`/v1/orders/subscriptionOwner/${encodeURIComponent('ADM-00033408')}?page=1&pageSize=50`);
+  });
+
+  it('--account + --limit N stops after exactly N orders fetched via subscriptionOwner', async () => {
+    mockGet.mockResolvedValueOnce({
+      orders: Array.from({ length: 5 }, (_, i) => ({ orderNumber: `O-${i}`, orderLineItems: [] })),
+      // no nextPage
+    });
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'orders', '--account', 'ACG00018042', '--limit', '3']);
+    expect(mockGet).toHaveBeenCalledWith('/v1/orders/subscriptionOwner/ACG00018042?page=1&pageSize=50');
+    expect(mockWrite).toHaveBeenCalledTimes(3);
+  });
+
+  it('--account + --status filters orders client-side (status is not sent as a query param to subscriptionOwner)', async () => {
+    mockGet.mockResolvedValueOnce({
+      orders: [
+        { orderNumber: 'O-1', status: 'Completed', orderLineItems: [] },
+        { orderNumber: 'O-2', status: 'Draft', orderLineItems: [] },
+      ],
+    });
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'orders', '--account', 'ACG00018042', '--status', 'Completed']);
+    expect(mockGet).toHaveBeenCalledWith('/v1/orders/subscriptionOwner/ACG00018042?page=1&pageSize=50');
+    expect(mockWrite).toHaveBeenCalledTimes(1);
+    expect(mockWrite).toHaveBeenCalledWith('order', 'O-1', expect.objectContaining({ status: 'Completed' }));
+  });
+
+  it('--status without --account still sends status= as a query param to the generic endpoint', async () => {
+    mockGet.mockResolvedValueOnce({ orders: [] });
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'orders', '--status', 'Draft']);
+    expect(mockGet).toHaveBeenCalledWith(expect.stringContaining('status=Draft'));
+    expect(mockGet).toHaveBeenCalledWith(expect.stringContaining('/v1/orders?'));
   });
 });
 
