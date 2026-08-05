@@ -24,37 +24,55 @@ async function request<T>(method: string, path: string, data?: unknown): Promise
   const token = await ensureToken(env);
   const client = createAxiosInstance(env.baseUrl);
 
-  log(`→ ${method} ${env.baseUrl}${path}`);
-  if (data !== undefined) log('  request body:', JSON.stringify(data, null, 2));
+  const attempt = async (bearerToken: string): Promise<T> => {
+    log(`→ ${method} ${env.baseUrl}${path}`);
+    if (data !== undefined) log('  request body:', JSON.stringify(data, null, 2));
 
-  try {
     const response = await client.request<T>({
       method,
       url: path,
       data,
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${bearerToken}`,
         'Content-Type': 'application/json',
       },
     });
     log(`← ${response.status} ${method} ${path}`);
     log('  response body:', JSON.stringify(response.data, null, 2));
     return response.data;
+  };
+
+  try {
+    return await attempt(token);
   } catch (err) {
     const axiosErr = err as AxiosError<{ errors?: Array<{ code: string; message: string }>; reasons?: Array<{ code: number; message: string }>; message?: string }>;
-    if (axiosErr.response) {
-      const { status, data: body } = axiosErr.response;
-      log(`← ${status} ${method} ${path} (error)`);
-      log('  error body:', JSON.stringify(body, null, 2));
-      const zuoraErr: ZuoraErrorResponse = {
-        statusCode: status,
-        message: body?.message ?? `HTTP ${status}`,
-        errors: body?.errors ?? body?.reasons?.map(r => ({ code: String(r.code), message: r.message })) ?? [],
-      };
-      throw zuoraErr;
+    if (axiosErr.response?.status === 401) {
+      log(`← 401 ${method} ${path} (token rejected, forcing refresh and retrying once)`);
+      const freshToken = await ensureToken(env, true);
+      try {
+        return await attempt(freshToken);
+      } catch (retryErr) {
+        return handleAxiosError(retryErr, method, path);
+      }
     }
-    throw err;
+    return handleAxiosError(err, method, path);
   }
+}
+
+function handleAxiosError(err: unknown, method: string, path: string): never {
+  const axiosErr = err as AxiosError<{ errors?: Array<{ code: string; message: string }>; reasons?: Array<{ code: number; message: string }>; message?: string }>;
+  if (axiosErr.response) {
+    const { status, data: body } = axiosErr.response;
+    log(`← ${status} ${method} ${path} (error)`);
+    log('  error body:', JSON.stringify(body, null, 2));
+    const zuoraErr: ZuoraErrorResponse = {
+      statusCode: status,
+      message: body?.message ?? `HTTP ${status}`,
+      errors: body?.errors ?? body?.reasons?.map(r => ({ code: String(r.code), message: r.message })) ?? [],
+    };
+    throw zuoraErr;
+  }
+  throw err;
 }
 
 export const apiGet = <T>(path: string) => request<T>('GET', path);

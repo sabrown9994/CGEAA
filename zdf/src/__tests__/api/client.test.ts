@@ -18,14 +18,18 @@ vi.mock('../../auth/config.js', () => ({
   }),
 }));
 
-vi.mock('../../auth/token.js', () => ({ ensureToken: async () => 'tok' }));
+const mockEnsureToken = vi.hoisted(() => vi.fn(async () => 'tok'));
+vi.mock('../../auth/token.js', () => ({ ensureToken: mockEnsureToken }));
 
 const mockWarn = vi.hoisted(() => vi.fn());
 vi.mock('../../helpers/output.js', () => ({ output: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warn: mockWarn } }));
 
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete, apiQuery, APIQUERY_MAX_ROWS, setMaxRows } from '../../api/client.js';
 
-beforeEach(() => { vi.clearAllMocks(); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockEnsureToken.mockImplementation(async () => 'tok');
+});
 afterEach(() => { setMaxRows(APIQUERY_MAX_ROWS); });
 
 describe('apiGet', () => {
@@ -147,5 +151,74 @@ describe('apiQuery', () => {
     expect(result.length).toBe(7000);
     expect(result.length).toBeGreaterThan(APIQUERY_MAX_ROWS);
     expect(mockWarn).not.toHaveBeenCalled();
+  });
+});
+
+function axiosErrorWithStatus(status: number, body: unknown = { message: `HTTP ${status}` }) {
+  return { response: { status, data: body } };
+}
+
+describe('request() reactive 401 refresh-and-retry', () => {
+  it('401-then-200: forces exactly one refresh, replays once, returns the 200 result', async () => {
+    mockRequest
+      .mockRejectedValueOnce(axiosErrorWithStatus(401))
+      .mockResolvedValueOnce({ data: { id: '123' } });
+    mockEnsureToken.mockImplementationOnce(async () => 'tok').mockImplementationOnce(async () => 'fresh-tok');
+
+    const result = await apiGet('/v1/accounts/123');
+
+    expect(result).toEqual({ id: '123' });
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+    // First call (non-forced, from `request()`'s initial `ensureToken(env)`) + one forced call.
+    expect(mockEnsureToken).toHaveBeenCalledTimes(2);
+    expect(mockEnsureToken).toHaveBeenNthCalledWith(2, expect.anything(), true);
+    // The replay must use the freshly-forced token, not the stale one.
+    expect(mockRequest).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: 'Bearer fresh-tok' }),
+    }));
+  });
+
+  it('persistent 401: refreshes once, replays once, then throws — no infinite loop', async () => {
+    mockRequest
+      .mockRejectedValueOnce(axiosErrorWithStatus(401))
+      .mockRejectedValueOnce(axiosErrorWithStatus(401));
+    mockEnsureToken.mockImplementationOnce(async () => 'tok').mockImplementationOnce(async () => 'fresh-tok');
+
+    await expect(apiGet('/v1/accounts/123')).rejects.toMatchObject({ statusCode: 401 });
+
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+    expect(mockEnsureToken).toHaveBeenCalledTimes(2);
+    expect(mockEnsureToken).toHaveBeenNthCalledWith(2, expect.anything(), true);
+  });
+
+  it('non-401 error (404): no forced refresh, no retry, throws immediately', async () => {
+    mockRequest.mockRejectedValueOnce(axiosErrorWithStatus(404, { message: 'Not Found' }));
+
+    await expect(apiGet('/v1/accounts/999')).rejects.toMatchObject({ statusCode: 404 });
+
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+    // Only the initial, non-forced ensureToken call from request().
+    expect(mockEnsureToken).toHaveBeenCalledTimes(1);
+    expect(mockEnsureToken).toHaveBeenCalledWith(expect.anything());
+  });
+
+  it('non-401 error (500): no forced refresh, no retry, throws immediately', async () => {
+    mockRequest.mockRejectedValueOnce(axiosErrorWithStatus(500, { message: 'Internal Server Error' }));
+
+    await expect(apiGet('/v1/accounts/999')).rejects.toMatchObject({ statusCode: 500 });
+
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+    expect(mockEnsureToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('success path: no extra refresh, no retry', async () => {
+    mockRequest.mockResolvedValueOnce({ data: { id: 'ok' } });
+
+    const result = await apiGet('/v1/accounts/123');
+
+    expect(result).toEqual({ id: 'ok' });
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+    expect(mockEnsureToken).toHaveBeenCalledTimes(1);
+    expect(mockEnsureToken).toHaveBeenCalledWith(expect.anything());
   });
 });

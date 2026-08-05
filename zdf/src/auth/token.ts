@@ -2,8 +2,8 @@ import axios from 'axios';
 import { saveUpdatedEnv } from './config.js';
 import type { EnvironmentConfig } from '../types.js';
 
-export async function ensureToken(env: EnvironmentConfig): Promise<string> {
-  if (env.token && env.tokenExpiresAt && env.tokenExpiresAt > Date.now()) {
+export async function ensureToken(env: EnvironmentConfig, force = false): Promise<string> {
+  if (!force && env.token && env.tokenExpiresAt && env.tokenExpiresAt > Date.now()) {
     return env.token;
   }
 

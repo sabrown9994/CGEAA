@@ -49,4 +49,15 @@ describe('ensureToken', () => {
     expect(token).toBe('fresh');
     expect(mockSave).toHaveBeenCalledOnce();
   });
+
+  it('force=true bypasses the not-expired short-circuit and fetches a new token', async () => {
+    const env = { ...baseEnv, token: 'still-valid', tokenExpiresAt: Date.now() + 60_000 };
+    mockPost.mockResolvedValue({ data: { access_token: 'forced-fresh', expires_in: 3600 } });
+
+    const token = await ensureToken(env, true);
+
+    expect(token).toBe('forced-fresh');
+    expect(mockPost).toHaveBeenCalledOnce();
+    expect(mockSave).toHaveBeenCalledOnce();
+  });
 });
