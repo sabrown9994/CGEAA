@@ -139,7 +139,7 @@ describe('zdf list billing-templates', () => {
   });
 });
 
-describe('zdf update billing-template', () => {
+describe('zdf push billing-template', () => {
   it('reads the local file, base64-encodes it, and PUTs to /settings/invoice-templates/{id} with the content in the right field', async () => {
     mockReaddirSync.mockReturnValue(['Invoice_Template_bt-1.json']);
     mockReadFileSync.mockReturnValue(JSON.stringify(DESIGN_JSON));
@@ -151,7 +151,7 @@ describe('zdf update billing-template', () => {
     });
     mockPut.mockResolvedValue({ success: true });
 
-    await makeProgram().parseAsync(['node', 'zdf', 'update', 'billing-template', 'bt-1']);
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'billing-template', 'bt-1']);
 
     expect(mockGet).toHaveBeenCalledWith('/settings/invoice-templates/bt-1');
     expect(mockPut).toHaveBeenCalledTimes(1);
@@ -178,7 +178,7 @@ describe('zdf update billing-template', () => {
     });
     mockPut.mockResolvedValue({ success: true });
 
-    await makeProgram().parseAsync(['node', 'zdf', 'update', 'billing-template', 'bt-1']);
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'billing-template', 'bt-1']);
 
     const [, body] = mockPut.mock.calls[0];
     // Confirmed-rejected by live intQA (400 INVALID_USER_INPUT: extraneous key) plus read-only /
@@ -210,7 +210,7 @@ describe('zdf update billing-template', () => {
     });
     mockPut.mockResolvedValue({ success: true });
 
-    await makeProgram().parseAsync(['node', 'zdf', 'update', 'billing-template', 'bt-1']);
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'billing-template', 'bt-1']);
 
     const [, body] = mockPut.mock.calls[0];
     expect(body).toHaveProperty('MyCustomField__c', 'custom-value');
@@ -225,7 +225,7 @@ describe('zdf update billing-template', () => {
     mockGet.mockResolvedValue({ id: 'bt/1 2', name: 'Invoice Template', templateFormat: 'HTML' });
     mockPut.mockResolvedValue({ success: true });
 
-    await makeProgram().parseAsync(['node', 'zdf', 'update', 'billing-template', 'bt/1 2', '--file', '/tmp/custom.json']);
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'billing-template', 'bt/1 2', '--file', '/tmp/custom.json']);
 
     const encoded = encodeURIComponent('bt/1 2');
     expect(mockGet).toHaveBeenCalledWith(`/settings/invoice-templates/${encoded}`);
@@ -237,7 +237,7 @@ describe('zdf update billing-template', () => {
     mockGet.mockResolvedValue({ id: 'bt-1', name: 'Invoice Template', templateFormat: 'HTML' });
     mockPut.mockResolvedValue({ success: true });
 
-    await makeProgram().parseAsync(['node', 'zdf', 'update', 'billing-template', 'bt-1', '--file', '/tmp/custom.json']);
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'billing-template', 'bt-1', '--file', '/tmp/custom.json']);
 
     expect(mockReaddirSync).not.toHaveBeenCalled();
     expect(mockReadFileSync).toHaveBeenCalledWith('/tmp/custom.json', 'utf-8');
@@ -252,7 +252,7 @@ describe('zdf update billing-template', () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
 
     await expect(
-      makeProgram().parseAsync(['node', 'zdf', 'update', 'billing-template', 'bt-2'])
+      makeProgram().parseAsync(['node', 'zdf', 'push', 'billing-template', 'bt-2'])
     ).rejects.toThrow('exit');
     expect(mockPut).not.toHaveBeenCalled();
     exitSpy.mockRestore();
@@ -264,7 +264,7 @@ describe('zdf update billing-template', () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
 
     await expect(
-      makeProgram().parseAsync(['node', 'zdf', 'update', 'billing-template', 'bt-1'])
+      makeProgram().parseAsync(['node', 'zdf', 'push', 'billing-template', 'bt-1'])
     ).rejects.toThrow('exit');
     expect(mockGet).not.toHaveBeenCalled();
     expect(mockPut).not.toHaveBeenCalled();
@@ -276,7 +276,7 @@ describe('zdf update billing-template', () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
 
     await expect(
-      makeProgram().parseAsync(['node', 'zdf', 'update', 'billing-template', 'bt-1'])
+      makeProgram().parseAsync(['node', 'zdf', 'push', 'billing-template', 'bt-1'])
     ).rejects.toThrow('exit');
     expect(mockPut).not.toHaveBeenCalled();
     exitSpy.mockRestore();
@@ -295,7 +295,7 @@ describe('zdf update billing-template', () => {
     });
 
     await expect(
-      makeProgram().parseAsync(['node', 'zdf', 'update', 'billing-template', 'bt-1'])
+      makeProgram().parseAsync(['node', 'zdf', 'push', 'billing-template', 'bt-1'])
     ).resolves.toBeDefined();
     expect(mockPut).toHaveBeenCalledTimes(1);
   });
@@ -308,7 +308,7 @@ describe('zdf update billing-template', () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
 
     await expect(
-      makeProgram().parseAsync(['node', 'zdf', 'update', 'billing-template', 'bt-1'])
+      makeProgram().parseAsync(['node', 'zdf', 'push', 'billing-template', 'bt-1'])
     ).rejects.toThrow('exit');
     exitSpy.mockRestore();
   });
@@ -335,7 +335,7 @@ describe('billing-template round-trip', () => {
     mockGet.mockResolvedValue({ id: 'bt-1', name: 'Invoice Template', templateFormat: 'HTML' });
     mockPut.mockResolvedValue({ success: true });
 
-    await makeProgram().parseAsync(['node', 'zdf', 'update', 'billing-template', 'bt-1']);
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'billing-template', 'bt-1']);
     const [, body] = mockPut.mock.calls[0];
     expect(body.base64EncodedTemplateFileContent).toBe(DESIGN_B64);
   });

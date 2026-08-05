@@ -25,6 +25,8 @@ A CLI for syncing Zuora configuration and billing objects to local JSON files, e
   - [credit-memo](#credit-memo)
   - [debit-memo](#debit-memo)
   - [bill-run](#bill-run)
+  - [workflow](#workflow)
+  - [billing-template](#billing-template)
 - [Dependency Graph](#dependency-graph)
 - [Updatable Fields](#updatable-fields)
 - [Output Directory Layout](#output-directory-layout)
@@ -36,7 +38,7 @@ A CLI for syncing Zuora configuration and billing objects to local JSON files, e
 ```bash
 # Install dependencies and build
 npm install
-npx tsup bin/zdf.ts --format cjs --out-dir dist
+npm run build   # runs: tsup bin/zdf.ts --format cjs --out-dir dist
 
 # Authenticate (saved to ~/.zdf/config.json)
 node dist/zdf.js auth login --name sandbox --url https://rest.sandbox.na.zuora.com --client-id <id> --client-secret <secret>
@@ -51,8 +53,14 @@ node dist/zdf.js auth use sandbox
 |------|-------------|
 | `--debug` | Print every HTTP request and response body |
 | `--no-dependency` | Skip dependency traversal; operate only on the specified resource |
+| `--max-rows <n>` | Override the ZOQL query row cap (default 5000) for this invocation |
+| `--max-nodes <n>` | Override the dependency-traversal node ceiling (default 500) for this invocation |
+| `--max-items <n>` | Override the sub-item / list pagination cap (default 5000) for this invocation |
+| `--no-caps` (alias `--unbounded`) | Disable all three caps above for this run; warns that the run may take a long time and could enumerate entire tables |
 
 The `--no-dependency` flag is essential for large accounts with hundreds of child records (orders, subscriptions, invoices) where a full traversal would be impractical.
+
+A progress indicator (spinner) is shown during long-running pulls when connected to an interactive terminal (TTY); it is silent when stdout is piped or redirected.
 
 ---
 
@@ -66,6 +74,8 @@ The `--no-dependency` flag is essential for large accounts with hundreds of chil
 | `auth use <name>` | Set the active environment |
 | `auth show` | Show current active environment |
 | `auth list` | List all saved environments |
+
+The CLI transparently refreshes the OAuth token when it has expired, and also reactively refreshes-and-retries the request once if Zuora responds with an HTTP 401.
 
 ### pull
 
@@ -81,6 +91,12 @@ Read the local JSON file and update the resource in Zuora. Dependent records are
 
 ```
 zdf push <resource> <id>
+```
+
+`billing-template` is also updated via `push` (a Settings API `PUT`, not the standard `/v1/` write endpoints) — see [billing-template](#billing-template) for details:
+
+```
+zdf push billing-template <id>
 ```
 
 ### create
@@ -106,6 +122,7 @@ Fetch all records of a type and write them to local storage.
 
 ```
 zdf list orders
+zdf list billing-templates
 ```
 
 ---
@@ -165,7 +182,7 @@ zdf list orders
 |-----------|----------|----------|-------|
 | pull | order | `GET /v1/orders/{orderNumber}` | Order number is the identifier (e.g. `O-00000001`) |
 | pull | order-line-item | `GET /v1/order-line-items/{id}` | UUID identifier |
-| list | orders | `GET /v1/orders?page=N&pageSize=50` | Paginated; also fetches all order line item details |
+| list | orders | `GET /v1/orders?page=N&pageSize=50` or `GET /v1/orders/subscriptionOwner/{accountKey}?...` | Paginated; also fetches all order line item details |
 | create | order | `POST /v1/orders` | |
 | push | order | `PUT /v1/orders/{orderNumber}` | |
 | push | order-line-item | `PUT /v1/order-line-items/{id}` | |
@@ -176,6 +193,9 @@ zdf list orders
 - The file from `pull order` stores data under an `order` key; the push command unwraps this automatically before sending to Zuora.
 - `push order` re-pulls the parent account after updating.
 - There is no `create order-line-item` or `delete order-line-item` — line items are managed through the order.
+- `zdf list orders` supports `--account <key>`, `--status <status>`, `--limit <n>`, and `--all`. It refuses to run with no flags at all, to avoid an accidental full-tenant export — pass `--all` to confirm one.
+- `--account <key>` scopes the list via `GET /v1/orders/subscriptionOwner/{accountKey}` rather than the generic `?accountId=` filter — the generic filter is ignored server-side by the tenant and returns the unfiltered list. When `--account` and `--status` are combined, the status filter is applied client-side (the `subscriptionOwner` endpoint has no `status` query param).
+- The account → orders dependency traversal (pulling an account's orders) uses the same `GET /v1/orders/subscriptionOwner/{accountKey}` endpoint.
 
 ---
 
@@ -289,6 +309,40 @@ zdf list orders
 - **Bill runs cannot be updated** via the Zuora API. `push bill-run` re-fetches the latest data rather than writing anything.
 - Deletion requires the bill run to be in **Canceled** or **Error** status.
 - There is no `create bill-run` command.
+
+---
+
+### workflow
+
+| Operation | Endpoint | Notes |
+|-----------|----------|-------|
+| pull | `GET /workflows/{id}` | |
+| push | `PUT /workflows/{id}` | |
+| create | `POST /workflows` | |
+| delete | `DELETE /workflows/{id}` | |
+
+**Limitations:**
+- The endpoint is `/workflows` (not `/v1/api/workflows` or another `/v1/`-prefixed path).
+- The workflow object has no `success` field on a good response; only an explicit `success: false` or a populated `reasons`/`errors` array is treated as a failure.
+- There is no allowlist for workflow fields — the local file is pushed through unfiltered (custom fields pass through as with every other resource).
+
+---
+
+### billing-template
+
+HTML invoice templates only, accessed via the Zuora **Settings API** (`/settings/...`, not `/v1/`-prefixed).
+
+| Operation | Endpoint | Notes |
+|-----------|----------|-------|
+| pull | `GET /settings/invoice-templates/{id}` | Base64-decodes `base64EncodedTemplateFileContent` to JSON and writes it as `<name>_<id>.json`; rejects non-HTML (WORD) templates |
+| push | `PUT /settings/invoice-templates/{id}` | Re-encodes the local JSON to base64 and sends an allowlisted body |
+| list | `GET /settings/invoice-templates` (`zdf list billing-templates`) | Metadata only (id, name, templateNumber, templateFormat) |
+
+**Limitations:**
+- **HTML templates only.** WORD-format templates are not supported — their content is a binary `.doc`, not JSON, so `pull billing-template` rejects them.
+- `push billing-template` sends an allowlisted body (`name`, `defaultTemplate`, `suppressZeroValueLine`, `templateFileName`, `base64EncodedTemplateFileContent`), plus any `__c` custom fields. It is deliberately an allowlist rather than "current minus a denylist" — the Settings API rejects unexpected keys.
+- The Settings API response for both pull and push has no `success` envelope at all on success — only an explicit `success: false` or a populated `reasons`/`errors` array is treated as a failure.
+- There is no `create billing-template` or `delete billing-template`.
 
 ---
 

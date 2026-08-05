@@ -106,7 +106,7 @@ function readJsonFile(path: string): unknown {
 export function register(program: Command): void {
   const pullCmd = getOrCreate(program, 'pull', 'Fetch a resource from Zuora');
   const listCmd = getOrCreate(program, 'list', 'List resources from Zuora');
-  const updateCmd = getOrCreate(program, 'update', 'Update a resource in Zuora from a local file');
+  const pushCmd = getOrCreate(program, 'push', 'Update a resource in Zuora from a local file');
 
   pullCmd
     .command('billing-template <id>')
@@ -142,7 +142,7 @@ export function register(program: Command): void {
       })()
     );
 
-  updateCmd
+  pushCmd
     .command('billing-template <id>')
     .description('Update an HTML invoice template in Zuora from a local design JSON file')
     .option('-f, --file <path>', 'path to JSON file (defaults to the local <name>_<id>.json under billing-templates/)')
