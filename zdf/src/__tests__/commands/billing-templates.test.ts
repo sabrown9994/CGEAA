@@ -63,6 +63,17 @@ describe('zdf pull billing-template', () => {
     expect(mockWrite).toHaveBeenCalledWith('billing-template', 'Invoice-Template_bt-1', DESIGN_JSON);
   });
 
+  it('URL-encodes the id in the GET request path', async () => {
+    mockGet.mockResolvedValue({
+      id: 'bt/1 2',
+      name: 'Invoice Template',
+      templateFormat: 'HTML',
+      base64EncodedTemplateFileContent: DESIGN_B64,
+    });
+    await makeProgram().parseAsync(['node', 'zdf', 'pull', 'billing-template', 'bt/1 2']);
+    expect(mockGet).toHaveBeenCalledWith(`/settings/invoice-templates/${encodeURIComponent('bt/1 2')}`);
+  });
+
   it('sanitizes non-filename-safe characters in the template name', async () => {
     mockGet.mockResolvedValue({
       id: 'bt-2',
@@ -148,6 +159,53 @@ describe('zdf update billing-template', () => {
     expect(url).toBe('/settings/invoice-templates/bt-1');
     expect(body.base64EncodedTemplateFileContent).toBe(DESIGN_B64);
     expect(body.name).toBe('Invoice Template');
+  });
+
+  it('builds the PUT body from an allowlist: excludes extraneous/read-only keys the live Settings API rejects', async () => {
+    mockReaddirSync.mockReturnValue(['Invoice_Template_bt-1.json']);
+    mockReadFileSync.mockReturnValue(JSON.stringify(DESIGN_JSON));
+    mockGet.mockResolvedValue({
+      id: 'bt-1',
+      name: 'Invoice Template',
+      templateFormat: 'HTML',
+      templateNumber: 'TN-1',
+      updatedOn: '2026-01-01T00:00:00.000Z',
+      associatedToBillingAccount: false,
+      templateFileName: 'design.json',
+      defaultTemplate: false,
+      suppressZeroValueLine: true,
+      base64EncodedTemplateFileContent: 'stale-b64-should-be-overwritten',
+    });
+    mockPut.mockResolvedValue({ success: true });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'update', 'billing-template', 'bt-1']);
+
+    const [, body] = mockPut.mock.calls[0];
+    // Confirmed-rejected by live intQA (400 INVALID_USER_INPUT: extraneous key) plus read-only /
+    // path-redundant fields must never be sent.
+    expect(body).not.toHaveProperty('associatedToBillingAccount');
+    expect(body).not.toHaveProperty('templateFormat');
+    expect(body).not.toHaveProperty('id');
+    expect(body).not.toHaveProperty('templateNumber');
+    expect(body).not.toHaveProperty('updatedOn');
+    // Documented request-body fields must be carried forward.
+    expect(body).toHaveProperty('base64EncodedTemplateFileContent', DESIGN_B64);
+    expect(body).toHaveProperty('name', 'Invoice Template');
+    expect(body).toHaveProperty('templateFileName', 'design.json');
+    expect(body).toHaveProperty('defaultTemplate', false);
+    expect(body).toHaveProperty('suppressZeroValueLine', true);
+  });
+
+  it('URL-encodes the id in both the GET and PUT request paths', async () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify(DESIGN_JSON));
+    mockGet.mockResolvedValue({ id: 'bt/1 2', name: 'Invoice Template', templateFormat: 'HTML' });
+    mockPut.mockResolvedValue({ success: true });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'update', 'billing-template', 'bt/1 2', '--file', '/tmp/custom.json']);
+
+    const encoded = encodeURIComponent('bt/1 2');
+    expect(mockGet).toHaveBeenCalledWith(`/settings/invoice-templates/${encoded}`);
+    expect(mockPut).toHaveBeenCalledWith(`/settings/invoice-templates/${encoded}`, expect.anything());
   });
 
   it('supports --file to override the local file lookup', async () => {

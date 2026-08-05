@@ -12,6 +12,20 @@ const RESOURCE = 'billing-template';
 const ENDPOINT = '/settings/invoice-templates';
 const CONTENT_FIELD = 'base64EncodedTemplateFileContent';
 
+/**
+ * Fields accepted by `PUT /settings/invoice-templates/{id}`, per the documented request body
+ * on docs.zuora.com (zuora-platform > settings-api > settings-api-tutorials >
+ * invoice-template-settings > update-a-specific-invoice-template):
+ *   { name, defaultTemplate, suppressZeroValueLine, templateFileName, base64EncodedTemplateFileContent }
+ * `templateCategory` appears only in that page's *response* example, not the request body, so
+ * it is deliberately excluded here. `associatedToBillingAccount` and `templateFormat` are
+ * confirmed-rejected by live intQA (400 INVALID_USER_INPUT: "extraneous key ... is not
+ * permitted"). `id`, `templateNumber`, and `updatedOn` are read-only/path-redundant and are
+ * also excluded. This is an ALLOWLIST (not "resend everything minus a denylist") specifically
+ * so future extraneous fields Zuora adds to the GET response don't leak into the PUT body.
+ */
+const UPDATE_ALLOWLIST = ['name', 'defaultTemplate', 'suppressZeroValueLine', 'templateFileName'] as const;
+
 type InvoiceTemplateMetadata = {
   id: string;
   name: string;
@@ -97,7 +111,7 @@ export function register(program: Command): void {
     .description('Fetch an HTML invoice template from Zuora by internal ID and write its decoded design JSON')
     .action((id: string) =>
       runCommand(program, async () => {
-        const data = await apiGet<InvoiceTemplateMetadata & ZuoraReadResponse>(`${ENDPOINT}/${id}`);
+        const data = await apiGet<InvoiceTemplateMetadata & ZuoraReadResponse>(`${ENDPOINT}/${encodeURIComponent(id)}`);
         assertReadSuccess(data, 'billing template fetch');
         const decodedJson = decodeAndValidateTemplateJson(id, data);
 
@@ -135,11 +149,15 @@ export function register(program: Command): void {
         const filePath = opts.file ?? findLocalFile(id);
         const parsed = readJsonFile(filePath);
         const encoded = Buffer.from(JSON.stringify(parsed), 'utf-8').toString('base64');
+        const encodedId = encodeURIComponent(id);
 
-        // The Settings API PUT contract isn't documented as content-only, so we fetch the
-        // template's current metadata first and resend it verbatim (minus read-only fields)
-        // alongside the freshly re-encoded content, rather than guessing a minimal body.
-        const current = await apiGet<InvoiceTemplateMetadata & ZuoraReadResponse>(`${ENDPOINT}/${id}`);
+        // Fetch the template's current metadata first so we can (a) re-verify it's still an
+        // HTML template and (b) carry forward writable fields like `name` that the PUT
+        // contract expects. The PUT body itself is built from an ALLOWLIST of documented
+        // request-body fields (see UPDATE_ALLOWLIST) — NOT "current minus a denylist" — because
+        // the Settings API rejects any key it doesn't expect (confirmed live: 400
+        // INVALID_USER_INPUT on `associatedToBillingAccount` and `templateFormat`).
+        const current = await apiGet<InvoiceTemplateMetadata & ZuoraReadResponse>(`${ENDPOINT}/${encodedId}`);
         assertReadSuccess(current, 'billing template fetch (for update)');
         if (current.templateFormat !== 'HTML') {
           throw new Error(
@@ -147,10 +165,14 @@ export function register(program: Command): void {
           );
         }
 
-        const { id: _id, updatedOn: _updatedOn, success: _success, reasons: _reasons, errors: _errors, ...metadata } = current;
-        const body = { ...metadata, [CONTENT_FIELD]: encoded };
+        const body: Record<string, unknown> = { [CONTENT_FIELD]: encoded };
+        for (const field of UPDATE_ALLOWLIST) {
+          if (field in current) {
+            body[field] = current[field];
+          }
+        }
 
-        const res = await apiPut<ZuoraWriteResponse>(`${ENDPOINT}/${id}`, body);
+        const res = await apiPut<ZuoraWriteResponse>(`${ENDPOINT}/${encodedId}`, body);
         assertSuccess(res, 'billing template update');
         output.success(`Billing template ${id} updated.`);
       })()
