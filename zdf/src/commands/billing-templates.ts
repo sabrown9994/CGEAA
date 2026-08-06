@@ -55,10 +55,17 @@ function getOrCreate(program: Command, name: string, description: string): Comma
  * disallowed character) — the id suffix is the authoritative key, so a mangled
  * name is acceptable as long as it doesn't blow up the pull.
  */
-function sanitizeNameForFilename(name: string): string {
+export function sanitizeNameForFilename(name: string): string {
   const cleaned = name.replace(/[^a-zA-Z0-9\-_.]/g, '-');
   return cleaned.length > 0 ? cleaned : 'template';
 }
+
+/**
+ * Thrown by findLocalFile when more than one local file matches an id. Distinguished from the
+ * "no match" case (a plain Error) so callers that treat "nothing to clean up locally" as fine
+ * can still surface an ambiguous-match warning instead of silently discarding it.
+ */
+export class MultipleMatchesError extends Error {}
 
 function decodeAndValidateTemplateJson(id: string, template: InvoiceTemplateMetadata): unknown {
   if (template.templateFormat !== 'HTML') {
@@ -97,7 +104,7 @@ function findLocalFile(id: string): string {
     );
   }
   if (matches.length > 1) {
-    throw new Error(
+    throw new MultipleMatchesError(
       `Multiple local files match billing template ${id}: ${matches.join(', ')}. Provide --file <path> to disambiguate.`
     );
   }
@@ -160,7 +167,14 @@ export function register(program: Command): void {
     .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/billing-templates/<name>.json)`)
     .action((name: string, opts: { file?: string }) =>
       runCommand(program, async () => {
-        const defaultPath = join(getOutputDir(), RESOURCE_SUBFOLDERS[RESOURCE], `${name}.json`);
+        // Use the SAME sanitization as pull (sanitizeNameForFilename) for the default local file
+        // name — not the raw `name` — so names with spaces or other disallowed characters (e.g.
+        // "HTML - ZDF POC") resolve to a filename that file-io.ts's sanitizeSegment will accept
+        // later on (both here and in the post-create rename below). Using the raw name would
+        // make the post-create rename throw on any character outside [a-zA-Z0-9._-], leaving a
+        // successfully-created remote record with no corresponding local file rename.
+        const sanitizedName = sanitizeNameForFilename(name);
+        const defaultPath = join(getOutputDir(), RESOURCE_SUBFOLDERS[RESOURCE], `${sanitizedName}.json`);
         const filePath = opts.file ?? defaultPath;
         if (!opts.file && !existsSync(filePath)) {
           throw new Error(
@@ -190,9 +204,9 @@ export function register(program: Command): void {
         const res = await apiPost<InvoiceTemplateMetadata & ZuoraReadResponse>(ENDPOINT, body);
         assertReadSuccess(res, 'billing template create');
 
-        const fileId = `${sanitizeNameForFilename(name)}_${res.id}`;
+        const fileId = `${sanitizedName}_${res.id}`;
         if (!opts.file) {
-          renameResourceFile(RESOURCE, name, fileId);
+          renameResourceFile(RESOURCE, sanitizedName, fileId);
         } else {
           writeResourceFile(RESOURCE, fileId, designJson);
         }
@@ -264,8 +278,14 @@ export function register(program: Command): void {
         let localFile: string | undefined;
         try {
           localFile = findLocalFile(id);
-        } catch {
-          // No local file to clean up — deletion from Zuora already succeeded above.
+        } catch (err) {
+          // A missing local file is fine — nothing to clean up locally, and the remote delete
+          // already succeeded above. An ambiguous match (multiple local files), however, is a
+          // real condition the user should know about, so surface it as a warning rather than
+          // silently discarding it the same way as "no match".
+          if (err instanceof MultipleMatchesError) {
+            output.warn(err.message);
+          }
         }
         if (localFile) unlinkSync(localFile);
 

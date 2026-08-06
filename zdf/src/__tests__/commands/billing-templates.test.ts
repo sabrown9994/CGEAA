@@ -18,6 +18,9 @@ vi.mock('../../helpers/file-io.js', () => ({
 
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
+vi.mock('../../helpers/output.js', () => ({
+  output: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warn: vi.fn() },
+}));
 vi.mock('../../helpers/dependency-graph.js', () => ({
   setNoDependency: vi.fn(),
   isNoDependency: vi.fn().mockReturnValue(false),
@@ -43,6 +46,7 @@ vi.mock('fs', async (importOriginal) => {
 });
 
 import { register } from '../../commands/billing-templates.js';
+import { output } from '../../helpers/output.js';
 
 function makeProgram() {
   const p = new Command();
@@ -330,7 +334,7 @@ describe('zdf create billing-template', () => {
 
     await makeProgram().parseAsync(['node', 'zdf', 'create', 'billing-template', 'New Template']);
 
-    expect(mockReadFileSync).toHaveBeenCalledWith('MOCK_OUTPUT/billing-templates/New Template.json', 'utf-8');
+    expect(mockReadFileSync).toHaveBeenCalledWith('MOCK_OUTPUT/billing-templates/New-Template.json', 'utf-8');
     expect(mockPost).toHaveBeenCalledTimes(1);
     const [url, body] = mockPost.mock.calls[0];
     expect(url).toBe('/settings/invoice-templates');
@@ -347,7 +351,25 @@ describe('zdf create billing-template', () => {
 
     await makeProgram().parseAsync(['node', 'zdf', 'create', 'billing-template', 'New Template']);
 
-    expect(mockRename).toHaveBeenCalledWith('billing-template', 'New Template', 'New-Template_bt-new');
+    expect(mockRename).toHaveBeenCalledWith('billing-template', 'New-Template', 'New-Template_bt-new');
+  });
+
+  it('create with a name containing a space renames to the sanitized <name>_<id>.json without throwing (BUG 1)', async () => {
+    // Reproduces the orphaned-remote-record bug: a template named "HTML - ZDF POC" has a space
+    // and a hyphen surrounded by spaces, which file-io.ts's sanitizeSegment (used under the hood
+    // by renameResourceFile in the real implementation) rejects outright. The create path must
+    // sanitize the name the same way pull does (sanitizeNameForFilename) before ever handing it
+    // to a sanitizeSegment-backed file-io call, both for the default read path and the rename.
+    const name = 'HTML - ZDF POC';
+    mockReadFileSync.mockReturnValue(JSON.stringify(DESIGN_JSON));
+    mockPost.mockResolvedValue({ id: 'bt-new', name, templateFormat: 'HTML' });
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'create', 'billing-template', name])
+    ).resolves.toBeDefined();
+
+    expect(mockReadFileSync).toHaveBeenCalledWith('MOCK_OUTPUT/billing-templates/HTML---ZDF-POC.json', 'utf-8');
+    expect(mockRename).toHaveBeenCalledWith('billing-template', 'HTML---ZDF-POC', 'HTML---ZDF-POC_bt-new');
   });
 
   it('carries forward optional create fields present in the design JSON', async () => {
@@ -418,14 +440,33 @@ describe('zdf delete billing-template', () => {
     expect(mockDelete).toHaveBeenCalledWith(`/settings/invoice-templates/${encodeURIComponent('bt/1 2')}`);
   });
 
-  it('still succeeds and skips unlink when no local file matches the id', async () => {
+  it('still succeeds and skips unlink when no local file matches the id (remote delete still proceeds)', async () => {
     mockReaddirSync.mockReturnValue([]);
     mockDelete.mockResolvedValue({ id: 'bt-9' });
 
     await expect(
       makeProgram().parseAsync(['node', 'zdf', 'delete', 'billing-template', 'bt-9'])
     ).resolves.toBeDefined();
+    expect(mockDelete).toHaveBeenCalledWith('/settings/invoice-templates/bt-9');
     expect(mockUnlinkSync).not.toHaveBeenCalled();
+    expect(output.warn).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a warning (not silence) when multiple local files match the id, but still succeeds (BUG 2)', async () => {
+    // The "no local file" case and the "ambiguous match" case were previously conflated by a
+    // blanket try/catch. A missing file is fine to ignore, but an ambiguous match should still
+    // be surfaced to the user rather than silently discarded the same way.
+    mockReaddirSync.mockReturnValue(['Invoice_Template_bt-1.json', 'Old_Invoice_Template_bt-1.json']);
+    mockDelete.mockResolvedValue({ id: 'bt-1' });
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'delete', 'billing-template', 'bt-1'])
+    ).resolves.toBeDefined();
+
+    expect(mockDelete).toHaveBeenCalledWith('/settings/invoice-templates/bt-1');
+    expect(mockUnlinkSync).not.toHaveBeenCalled();
+    expect(output.warn).toHaveBeenCalledTimes(1);
+    expect(output.warn).toHaveBeenCalledWith(expect.stringContaining('Multiple local files match billing template bt-1'));
   });
 
   it('does not unlink and exits non-zero when Zuora returns success:false', async () => {
