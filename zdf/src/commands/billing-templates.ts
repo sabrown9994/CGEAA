@@ -1,8 +1,8 @@
 import { Command } from 'commander';
-import { readFileSync, readdirSync, existsSync } from 'fs';
+import { readFileSync, readdirSync, existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { apiGet, apiPut } from '../api/client.js';
-import { writeResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
+import { apiGet, apiPost, apiPut, apiDelete } from '../api/client.js';
+import { writeResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertReadSuccess, ZuoraReadResponse } from '../helpers/zuora-response.js';
@@ -27,6 +27,16 @@ const CONTENT_FIELD = 'base64EncodedTemplateFileContent';
  * convention in helpers/updatable-fields.ts (filterUpdatableFields) — see the loop below.
  */
 const UPDATE_ALLOWLIST = ['name', 'defaultTemplate', 'suppressZeroValueLine', 'templateFileName'] as const;
+
+/**
+ * Optional fields accepted by `POST /settings/invoice-templates`, per the documented request
+ * body on docs.zuora.com (zuora-platform > settings-api > settings-api-tutorials >
+ * invoice-template-settings > create-a-new-invoice-template). `name` and
+ * `base64EncodedTemplateFileContent` are required and built separately; `templateFormat` is
+ * always sent as `'HTML'` (this CLI is HTML-only) and is likewise built separately, not via
+ * this list.
+ */
+const CREATE_OPTIONAL_ALLOWLIST = ['defaultTemplate', 'suppressZeroValueLine', 'templateFileName'] as const;
 
 type InvoiceTemplateMetadata = {
   id: string;
@@ -106,7 +116,9 @@ function readJsonFile(path: string): unknown {
 export function register(program: Command): void {
   const pullCmd = getOrCreate(program, 'pull', 'Fetch a resource from Zuora');
   const listCmd = getOrCreate(program, 'list', 'List resources from Zuora');
+  const createCmd = getOrCreate(program, 'create', 'Create a resource in Zuora from a local file');
   const pushCmd = getOrCreate(program, 'push', 'Update a resource in Zuora from a local file');
+  const deleteCmd = getOrCreate(program, 'delete', 'Delete a resource in Zuora');
 
   pullCmd
     .command('billing-template <id>')
@@ -139,6 +151,52 @@ export function register(program: Command): void {
           output.info(`${t.id}  ${t.name}  #${String(t.templateNumber)}  ${t.templateFormat}${pullable}`);
         }
         output.success(`Fetched ${data.length} billing templates.`);
+      })()
+    );
+
+  createCmd
+    .command('billing-template <name>')
+    .description('Create an HTML invoice template in Zuora from a local design JSON file')
+    .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/billing-templates/<name>.json)`)
+    .action((name: string, opts: { file?: string }) =>
+      runCommand(program, async () => {
+        const defaultPath = join(getOutputDir(), RESOURCE_SUBFOLDERS[RESOURCE], `${name}.json`);
+        const filePath = opts.file ?? defaultPath;
+        if (!opts.file && !existsSync(filePath)) {
+          throw new Error(
+            `No local file found at ${filePath}. Create the design JSON there first, or provide --file <path>.`
+          );
+        }
+        const designJson = readJsonFile(filePath);
+        const encoded = Buffer.from(JSON.stringify(designJson), 'utf-8').toString('base64');
+
+        const body: Record<string, unknown> = {
+          name,
+          [CONTENT_FIELD]: encoded,
+          templateFormat: 'HTML',
+        };
+        // Optional create fields (defaultTemplate, suppressZeroValueLine, templateFileName)
+        // may be present in the design JSON itself if a prior pull/edit set them; carry them
+        // forward when present so create can round-trip a previously-pulled template.
+        if (designJson && typeof designJson === 'object') {
+          const parsedForOptions = designJson as Record<string, unknown>;
+          for (const field of CREATE_OPTIONAL_ALLOWLIST) {
+            if (field in parsedForOptions) {
+              body[field] = parsedForOptions[field];
+            }
+          }
+        }
+
+        const res = await apiPost<InvoiceTemplateMetadata & ZuoraReadResponse>(ENDPOINT, body);
+        assertReadSuccess(res, 'billing template create');
+
+        const fileId = `${sanitizeNameForFilename(name)}_${res.id}`;
+        if (!opts.file) {
+          renameResourceFile(RESOURCE, name, fileId);
+        } else {
+          writeResourceFile(RESOURCE, fileId, designJson);
+        }
+        output.success(`Billing template created. Zuora ID: ${res.id}`);
       })()
     );
 
@@ -191,6 +249,27 @@ export function register(program: Command): void {
         const res = await apiPut<InvoiceTemplateMetadata & ZuoraReadResponse>(`${ENDPOINT}/${encodedId}`, body);
         assertReadSuccess(res, 'billing template update');
         output.success(`Billing template ${id} updated.`);
+      })()
+    );
+
+  deleteCmd
+    .command('billing-template <id>')
+    .description('Delete an HTML invoice template in Zuora and remove its local file')
+    .action((id: string) =>
+      runCommand(program, async () => {
+        const encodedId = encodeURIComponent(id);
+        const res = await apiDelete<ZuoraReadResponse>(`${ENDPOINT}/${encodedId}`);
+        assertReadSuccess(res, 'billing template delete');
+
+        let localFile: string | undefined;
+        try {
+          localFile = findLocalFile(id);
+        } catch {
+          // No local file to clean up — deletion from Zuora already succeeded above.
+        }
+        if (localFile) unlinkSync(localFile);
+
+        output.success(`Billing template ${id} deleted.`);
       })()
     );
 }

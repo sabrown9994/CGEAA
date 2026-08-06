@@ -8,8 +8,10 @@ const mockDelete = vi.hoisted(() => vi.fn());
 vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiPost: mockPost, apiPut: mockPut, apiDelete: mockDelete, setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
 
 const mockWrite = vi.hoisted(() => vi.fn());
+const mockRename = vi.hoisted(() => vi.fn());
 vi.mock('../../helpers/file-io.js', () => ({
   writeResourceFile: mockWrite,
+  renameResourceFile: mockRename,
   resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`),
   getOutputDir: vi.fn(() => 'MOCK_OUTPUT'),
 }));
@@ -28,9 +30,16 @@ vi.mock('../../helpers/dependency-graph.js', () => ({
 const mockReadFileSync = vi.hoisted(() => vi.fn());
 const mockReaddirSync = vi.hoisted(() => vi.fn());
 const mockExistsSync = vi.hoisted(() => vi.fn());
+const mockUnlinkSync = vi.hoisted(() => vi.fn());
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>();
-  return { ...actual, readFileSync: mockReadFileSync, readdirSync: mockReaddirSync, existsSync: mockExistsSync };
+  return {
+    ...actual,
+    readFileSync: mockReadFileSync,
+    readdirSync: mockReaddirSync,
+    existsSync: mockExistsSync,
+    unlinkSync: mockUnlinkSync,
+  };
 });
 
 import { register } from '../../commands/billing-templates.js';
@@ -310,6 +319,124 @@ describe('zdf push billing-template', () => {
     await expect(
       makeProgram().parseAsync(['node', 'zdf', 'push', 'billing-template', 'bt-1'])
     ).rejects.toThrow('exit');
+    exitSpy.mockRestore();
+  });
+});
+
+describe('zdf create billing-template', () => {
+  it('re-encodes the local design JSON to base64 and POSTs to /settings/invoice-templates with templateFormat HTML', async () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify(DESIGN_JSON));
+    mockPost.mockResolvedValue({ id: 'bt-new', name: 'New Template', templateFormat: 'HTML' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'billing-template', 'New Template']);
+
+    expect(mockReadFileSync).toHaveBeenCalledWith('MOCK_OUTPUT/billing-templates/New Template.json', 'utf-8');
+    expect(mockPost).toHaveBeenCalledTimes(1);
+    const [url, body] = mockPost.mock.calls[0];
+    expect(url).toBe('/settings/invoice-templates');
+    expect(body.name).toBe('New Template');
+    expect(body.templateFormat).toBe('HTML');
+    // The POST body must carry the base64-encoded content, never the raw JSON.
+    expect(body.base64EncodedTemplateFileContent).toBe(DESIGN_B64);
+    expect(body).not.toHaveProperty('design');
+  });
+
+  it('renames the local file to <name>_<id>.json after a successful create', async () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify(DESIGN_JSON));
+    mockPost.mockResolvedValue({ id: 'bt-new', name: 'New Template', templateFormat: 'HTML' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'billing-template', 'New Template']);
+
+    expect(mockRename).toHaveBeenCalledWith('billing-template', 'New Template', 'New-Template_bt-new');
+  });
+
+  it('carries forward optional create fields present in the design JSON', async () => {
+    const jsonWithOptions = { ...DESIGN_JSON, defaultTemplate: true, suppressZeroValueLine: true, templateFileName: 'x.html' };
+    mockReadFileSync.mockReturnValue(JSON.stringify(jsonWithOptions));
+    mockPost.mockResolvedValue({ id: 'bt-new', name: 'New Template', templateFormat: 'HTML' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'billing-template', 'New Template']);
+
+    const [, body] = mockPost.mock.calls[0];
+    expect(body.defaultTemplate).toBe(true);
+    expect(body.suppressZeroValueLine).toBe(true);
+    expect(body.templateFileName).toBe('x.html');
+  });
+
+  it('supports --file to override the default local file lookup and writes (not renames) on success', async () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify(DESIGN_JSON));
+    mockPost.mockResolvedValue({ id: 'bt-new', name: 'New Template', templateFormat: 'HTML' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'billing-template', 'New Template', '--file', '/tmp/custom.json']);
+
+    expect(mockReadFileSync).toHaveBeenCalledWith('/tmp/custom.json', 'utf-8');
+    expect(mockRename).not.toHaveBeenCalled();
+    expect(mockWrite).toHaveBeenCalledWith('billing-template', 'New-Template_bt-new', DESIGN_JSON);
+  });
+
+  it('errors and does not POST when the default local file is missing and --file is not provided', async () => {
+    mockExistsSync.mockReturnValue(false);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'create', 'billing-template', 'New Template'])
+    ).rejects.toThrow('exit');
+    expect(mockPost).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it('does not rename and exits non-zero when Zuora returns success:false', async () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify(DESIGN_JSON));
+    mockPost.mockResolvedValue({ success: false, reasons: [{ code: 'INVALID', message: 'Bad name.' }] });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'create', 'billing-template', 'New Template'])
+    ).rejects.toThrow('exit');
+    expect(mockRename).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+});
+
+describe('zdf delete billing-template', () => {
+  it('DELETEs /settings/invoice-templates/{id} (url-encoded) and removes the local file', async () => {
+    mockReaddirSync.mockReturnValue(['Invoice_Template_bt-1.json']);
+    mockDelete.mockResolvedValue({ id: 'bt-1' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'delete', 'billing-template', 'bt-1']);
+
+    expect(mockDelete).toHaveBeenCalledWith('/settings/invoice-templates/bt-1');
+    expect(mockUnlinkSync).toHaveBeenCalledWith('MOCK_OUTPUT/billing-templates/Invoice_Template_bt-1.json');
+  });
+
+  it('url-encodes an id with special characters in the DELETE path', async () => {
+    mockReaddirSync.mockReturnValue([]);
+    mockDelete.mockResolvedValue({ id: 'bt/1 2' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'delete', 'billing-template', 'bt/1 2']);
+
+    expect(mockDelete).toHaveBeenCalledWith(`/settings/invoice-templates/${encodeURIComponent('bt/1 2')}`);
+  });
+
+  it('still succeeds and skips unlink when no local file matches the id', async () => {
+    mockReaddirSync.mockReturnValue([]);
+    mockDelete.mockResolvedValue({ id: 'bt-9' });
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'delete', 'billing-template', 'bt-9'])
+    ).resolves.toBeDefined();
+    expect(mockUnlinkSync).not.toHaveBeenCalled();
+  });
+
+  it('does not unlink and exits non-zero when Zuora returns success:false', async () => {
+    mockReaddirSync.mockReturnValue(['Invoice_Template_bt-1.json']);
+    mockDelete.mockResolvedValue({ success: false, reasons: [{ code: 'INVALID', message: 'Cannot delete.' }] });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'delete', 'billing-template', 'bt-1'])
+    ).rejects.toThrow('exit');
+    expect(mockUnlinkSync).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
 });
