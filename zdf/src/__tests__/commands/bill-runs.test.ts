@@ -36,19 +36,37 @@ function makeProgram() {
 beforeEach(() => { vi.clearAllMocks(); });
 
 describe('zdf pull bill-run', () => {
-  it('calls resolveAndSync with pull', async () => {
-    mockResolve.mockResolvedValue(undefined);
+  it('calls resolveAndSync with pull and reports success when the top-level fetch succeeds', async () => {
+    mockResolve.mockResolvedValue(true);
     await makeProgram().parseAsync(['node', 'zdf', 'pull', 'bill-run', 'BR-001']);
     expect(mockResolve).toHaveBeenCalledWith('bill-run', 'BR-001', 'pull');
+  });
+
+  it('throws and exits non-zero without printing success when the top-level fetch fails (e.g. bogus id)', async () => {
+    mockResolve.mockResolvedValue(false);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'pull', 'bill-run', 'BR-00003509'])
+    ).rejects.toThrow('exit');
+    exitSpy.mockRestore();
   });
 });
 
 describe('zdf push bill-run', () => {
   it('re-fetches by calling resolveAndSync with pull (no PUT endpoint)', async () => {
-    mockResolve.mockResolvedValue(undefined);
+    mockResolve.mockResolvedValue(true);
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'bill-run', 'BR-001']);
     expect(mockPut).not.toHaveBeenCalled();
     expect(mockResolve).toHaveBeenCalledWith('bill-run', 'BR-001', 'pull');
+  });
+
+  it('throws and exits non-zero when the re-fetch fails', async () => {
+    mockResolve.mockResolvedValue(false);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'push', 'bill-run', 'BR-001'])
+    ).rejects.toThrow('exit');
+    exitSpy.mockRestore();
   });
 });
 

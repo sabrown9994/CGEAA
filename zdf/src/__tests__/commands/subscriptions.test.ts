@@ -39,10 +39,19 @@ function makeProgram() {
 beforeEach(() => { vi.clearAllMocks(); });
 
 describe('zdf pull subscription', () => {
-  it('calls resolveAndSync with pull action', async () => {
-    mockResolve.mockResolvedValue(undefined);
+  it('calls resolveAndSync with pull action and succeeds when the top-level fetch succeeds', async () => {
+    mockResolve.mockResolvedValue(true);
     await makeProgram().parseAsync(['node', 'zdf', 'pull', 'subscription', 'A-S00000001']);
     expect(mockResolve).toHaveBeenCalledWith('subscription', 'A-S00000001', 'pull');
+  });
+
+  it('throws and exits non-zero without printing success when the top-level fetch fails', async () => {
+    mockResolve.mockResolvedValue(false);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'pull', 'subscription', 'A-S00000001'])
+    ).rejects.toThrow('exit');
+    exitSpy.mockRestore();
   });
 });
 

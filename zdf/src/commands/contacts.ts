@@ -26,7 +26,10 @@ export function register(program: Command): void {
     .description('Fetch a contact from Zuora by internal ID')
     .action((id: string) =>
       runCommand(program, async () => {
-        await resolveAndSync(RESOURCE, id, 'pull');
+        const fetched = await resolveAndSync(RESOURCE, id, 'pull');
+        if (!fetched) {
+          throw new Error(`Failed to pull contact ${id} (see error above).`);
+        }
         output.success(`Contact ${id} written to ${resolveFilePath(RESOURCE, id)}`);
       })()
     );

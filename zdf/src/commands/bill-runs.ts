@@ -23,7 +23,10 @@ export function register(program: Command): void {
     .description('Fetch a bill run from Zuora by ID')
     .action((id: string) =>
       runCommand(program, async () => {
-        await resolveAndSync(RESOURCE, id, 'pull');
+        const fetched = await resolveAndSync(RESOURCE, id, 'pull');
+        if (!fetched) {
+          throw new Error(`Failed to pull bill-run ${id} (see error above).`);
+        }
         output.success(`Bill run ${id} written to ${resolveFilePath(RESOURCE, id)}`);
       })()
     );
@@ -33,7 +36,10 @@ export function register(program: Command): void {
     .description('Re-fetch a bill run from Zuora (no PUT endpoint; overwrites local file with latest data)')
     .action((id: string) =>
       runCommand(program, async () => {
-        await resolveAndSync(RESOURCE, id, 'pull');
+        const fetched = await resolveAndSync(RESOURCE, id, 'pull');
+        if (!fetched) {
+          throw new Error(`Failed to re-fetch bill-run ${id} (see error above).`);
+        }
         output.success(`Bill run ${id} re-fetched and written to ${resolveFilePath(RESOURCE, id)}`);
       })()
     );

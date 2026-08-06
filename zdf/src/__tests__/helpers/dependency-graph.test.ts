@@ -445,8 +445,9 @@ describe('rulesBillRun — child-lookup failures warn and continue instead of ab
       return []; // DebitMemo lookup
     });
 
-    // Must not throw — the whole pull would otherwise abort.
-    await expect(resolveAndSync('bill-run', 'BR-001', 'pull', new Set(['account:ACC-001']))).resolves.toBeUndefined();
+    // Must not throw — the whole pull would otherwise abort. The top-level bill-run fetch
+    // itself succeeded, so resolveAndSync reports true even though a child lookup warned.
+    await expect(resolveAndSync('bill-run', 'BR-001', 'pull', new Set(['account:ACC-001']))).resolves.toBe(true);
 
     expect(output.warn).toHaveBeenCalledTimes(1);
     expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/invoices for bill-run BR-001/);
@@ -460,7 +461,7 @@ describe('rulesBillRun — child-lookup failures warn and continue instead of ab
     });
     mockQuery.mockResolvedValue([]);
 
-    await expect(resolveAndSync('bill-run', 'BR-002', 'pull', new Set(['account:ACC-001']))).resolves.toBeUndefined();
+    await expect(resolveAndSync('bill-run', 'BR-002', 'pull', new Set(['account:ACC-001']))).resolves.toBe(true);
 
     expect(output.warn).toHaveBeenCalledTimes(1);
     expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/credit-memos for bill-run BR-002/);
@@ -480,7 +481,7 @@ describe('rulesBillRun — child-lookup failures warn and continue instead of ab
       return [];
     });
 
-    await expect(resolveAndSync('bill-run', 'BR-003', 'pull', new Set(['account:ACC-001']))).resolves.toBeUndefined();
+    await expect(resolveAndSync('bill-run', 'BR-003', 'pull', new Set(['account:ACC-001']))).resolves.toBe(true);
 
     expect(mockGet).toHaveBeenCalledWith('/v1/invoices/INV-001');
     expect(output.warn).toHaveBeenCalledTimes(1);
@@ -527,5 +528,56 @@ describe('resolveAndSync read-response guard', () => {
     mockGet.mockResolvedValueOnce({ id: 'CON-001', accountId: 'ACC-001', success: true });
     await resolveAndSync('contact', 'CON-001', 'pull', new Set());
     expect(mockWrite).toHaveBeenCalledWith('contact', 'CON-001', expect.objectContaining({ id: 'CON-001' }));
+  });
+});
+
+describe('resolveAndSync top-level return value (drives pull command success/exit code)', () => {
+  it('returns false for a top-level account that fails to fetch (200-with-error body), and writes nothing', async () => {
+    mockGet.mockResolvedValueOnce({
+      success: false,
+      reasons: [{ code: 58230015, message: 'Object not found.' }],
+    });
+    const result = await resolveAndSync('account', 'ACC-BOGUS', 'pull', new Set());
+    expect(result).toBe(false);
+    expect(mockWrite).not.toHaveBeenCalled();
+  });
+
+  it('returns false for a top-level bill-run whose fetch throws a non-404 error (e.g. Zuora rejects the id)', async () => {
+    mockGet.mockRejectedValueOnce(Object.assign(new Error('server error'), { statusCode: 500 }));
+    const result = await resolveAndSync('bill-run', 'BR-00003509', 'pull', new Set());
+    expect(result).toBe(false);
+    expect(mockWrite).not.toHaveBeenCalled();
+    expect(output.warn).toHaveBeenCalledWith(expect.stringContaining('Failed to re-fetch bill-run BR-00003509'));
+  });
+
+  it('returns false for a top-level resource whose id 404s (deleted upstream)', async () => {
+    mockGet.mockRejectedValueOnce(Object.assign(new Error('not found'), { statusCode: 404 }));
+    const result = await resolveAndSync('account', 'ACC-DELETED', 'pull', new Set());
+    expect(result).toBe(false);
+    expect(mockDeleteFile).toHaveBeenCalledWith('account', 'ACC-DELETED');
+  });
+
+  it('returns true for a successful top-level pull with no dependency traversal errors', async () => {
+    mockGet.mockResolvedValueOnce({ id: 'ACC-001', accountId: 'ACC-001', success: true });
+    mockQuery.mockResolvedValue([]);
+    const result = await resolveAndSync('contact', 'CON-001', 'pull', new Set());
+    expect(result).toBe(true);
+  });
+
+  it('a child traversal failure (bill-run child ZOQL throws) still warns + the parent (bill-run) pull reports success', async () => {
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/bill-runs/BR-100') return { id: 'BR-100', accountId: 'ACC-001', billRunNumber: 'BR-NUM-100', success: true };
+      if (url.startsWith('/v1/credit-memos?sourceId=')) return { creditMemos: [] };
+      return {};
+    });
+    mockQuery.mockImplementation(async (zoql: string) => {
+      if (zoql.includes('FROM Invoice')) throw Object.assign(new Error('invalid type specified: invoice'), { statusCode: 400 });
+      return [];
+    });
+
+    const result = await resolveAndSync('bill-run', 'BR-100', 'pull', new Set(['account:ACC-001']));
+
+    expect(result).toBe(true); // top-level bill-run fetch itself succeeded
+    expect(output.warn).toHaveBeenCalledWith(expect.stringContaining('invoices for bill-run BR-100'));
   });
 });

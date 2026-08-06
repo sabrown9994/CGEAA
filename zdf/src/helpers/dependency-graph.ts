@@ -145,14 +145,25 @@ async function fetchAndWrite(resource: string, id: string): Promise<ResourceReco
   }
 }
 
+/**
+ * Fetches `resource`/`id` and, unless `--no-dependency`, traverses its related records.
+ *
+ * Returns whether THIS call's own `fetchAndWrite` succeeded (i.e. a record was written for
+ * `resource`/`id`). Callers that invoke this at the top level (command actions, always with
+ * the default empty `visited` set) use the return value to decide whether to report success.
+ * Recursive calls made from the `rules*` functions below pass the shared `visited` set for a
+ * CHILD resource; those calls intentionally ignore the return value so a child fetch failure
+ * still warns (via `fetchAndWrite`) and traversal continues — only the top-level request's own
+ * result determines pull success/failure.
+ */
 export async function resolveAndSync(
   resource: string,
   id: string,
   action: Action,
   visited: Set<string> = new Set()
-): Promise<void> {
+): Promise<boolean> {
   const key = `${resource}:${id}`;
-  if (visited.has(key)) return;
+  if (visited.has(key)) return false;
 
   if (!noDependency && visited.size >= maxTraversalNodes) {
     if (!warnedVisitedSets.has(visited)) {
@@ -162,17 +173,18 @@ export async function resolveAndSync(
         `Some related records may not have been synced. Re-run with --no-dependency to skip traversal on a large account.`
       );
     }
-    return;
+    return false;
   }
 
   visited.add(key);
 
   const record = await fetchAndWrite(resource, id);
-  if (!record) return;
+  if (!record) return false;
 
   if (!noDependency) {
     await applyRules(resource, id, action, record, visited);
   }
+  return true;
 }
 
 async function applyRules(

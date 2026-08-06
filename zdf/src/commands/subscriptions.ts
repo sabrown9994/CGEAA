@@ -27,7 +27,10 @@ export function register(program: Command): void {
     .description('Fetch a subscription from Zuora by internal ID')
     .action((id: string) =>
       runCommand(program, async () => {
-        await resolveAndSync(RESOURCE, id, 'pull');
+        const fetched = await resolveAndSync(RESOURCE, id, 'pull');
+        if (!fetched) {
+          throw new Error(`Failed to pull subscription ${id} (see error above).`);
+        }
         output.success(`Subscription ${id} written to ${resolveFilePath(RESOURCE, id)}`);
       })()
     );

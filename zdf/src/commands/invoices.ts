@@ -24,7 +24,10 @@ export function register(program: Command): void {
     .description('Fetch an invoice from Zuora by ID, including all line items')
     .action((id: string) =>
       runCommand(program, async () => {
-        await resolveAndSync(RESOURCE, id, 'pull');
+        const fetched = await resolveAndSync(RESOURCE, id, 'pull');
+        if (!fetched) {
+          throw new Error(`Failed to pull invoice ${id} (see error above).`);
+        }
         output.success(`Invoice ${id} written to ${resolveFilePath(RESOURCE, id)}`);
       })()
     );

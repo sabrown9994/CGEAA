@@ -23,7 +23,10 @@ export function register(program: Command): void {
     .description('Fetch a product rate plan charge from Zuora by internal ID')
     .action((id: string) =>
       runCommand(program, async () => {
-        await resolveAndSync(RESOURCE, id, 'pull');
+        const fetched = await resolveAndSync(RESOURCE, id, 'pull');
+        if (!fetched) {
+          throw new Error(`Failed to pull product-rate-plan-charge ${id} (see error above).`);
+        }
         output.success(`Product rate plan charge ${id} written to ${resolveFilePath(RESOURCE, id)}`);
       })()
     );

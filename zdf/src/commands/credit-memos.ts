@@ -24,7 +24,10 @@ export function register(program: Command): void {
     .description('Fetch a credit memo from Zuora by ID, including all line items')
     .action((id: string) =>
       runCommand(program, async () => {
-        await resolveAndSync(RESOURCE, id, 'pull');
+        const fetched = await resolveAndSync(RESOURCE, id, 'pull');
+        if (!fetched) {
+          throw new Error(`Failed to pull credit-memo ${id} (see error above).`);
+        }
         output.success(`Credit memo ${id} written to ${resolveFilePath(RESOURCE, id)}`);
       })()
     );

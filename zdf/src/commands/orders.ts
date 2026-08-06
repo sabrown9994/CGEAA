@@ -27,7 +27,10 @@ export function register(program: Command): void {
     .description('Fetch an order from Zuora by order number, including all line items')
     .action((orderNumber: string) =>
       runCommand(program, async () => {
-        await resolveAndSync(RESOURCE, orderNumber, 'pull');
+        const fetched = await resolveAndSync(RESOURCE, orderNumber, 'pull');
+        if (!fetched) {
+          throw new Error(`Failed to pull order ${orderNumber} (see error above).`);
+        }
         output.success(`Order ${orderNumber} written to ${resolveFilePath(RESOURCE, orderNumber)}`);
       })()
     );
@@ -37,7 +40,10 @@ export function register(program: Command): void {
     .description('Fetch an order line item from Zuora by internal ID')
     .action((id: string) =>
       runCommand(program, async () => {
-        await resolveAndSync('order-line-item', id, 'pull');
+        const fetched = await resolveAndSync('order-line-item', id, 'pull');
+        if (!fetched) {
+          throw new Error(`Failed to pull order-line-item ${id} (see error above).`);
+        }
         output.success(`Order line item ${id} written to ${resolveFilePath('order-line-item', id)}`);
       })()
     );
