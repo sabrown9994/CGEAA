@@ -2,10 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Command } from 'commander';
 
 const mockPut = vi.hoisted(() => vi.fn());
-vi.mock('../../api/client.js', () => ({ apiGet: vi.fn(), apiPost: vi.fn(), apiPut: mockPut, apiDelete: vi.fn(), apiQuery: vi.fn(), setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
+const mockPost = vi.hoisted(() => vi.fn());
+const mockDelete = vi.hoisted(() => vi.fn());
+vi.mock('../../api/client.js', () => ({ apiGet: vi.fn(), apiPost: mockPost, apiPut: mockPut, apiDelete: mockDelete, apiQuery: vi.fn(), setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
 
 const mockRead = vi.hoisted(() => vi.fn());
-vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: vi.fn(), readResourceFile: mockRead, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
+const mockRename = vi.hoisted(() => vi.fn());
+vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: vi.fn(), readResourceFile: mockRead, renameResourceFile: mockRename, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
 
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
@@ -69,6 +72,47 @@ describe('zdf push product-rate-plan-charge', () => {
     await expect(
       makeProgram().parseAsync(['node', 'zdf', 'push', 'product-rate-plan-charge', 'prpc-001'])
     ).rejects.toThrow('exit');
+    exitSpy.mockRestore();
+  });
+});
+
+describe('zdf create product-rate-plan-charge', () => {
+  it('posts the file body to the create endpoint and renames the local file to the returned Id', async () => {
+    mockRead.mockReturnValue({ Name: 'Monthly Charge', ProductRatePlanId: 'prp-001', ChargeType: 'Recurring' });
+    mockPost.mockResolvedValue({ Id: 'prpc-999', Success: true });
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'product-rate-plan-charge', 'new-charge']);
+    expect(mockPost).toHaveBeenCalledWith('/v1/object/product-rate-plan-charge', { Name: 'Monthly Charge', ProductRatePlanId: 'prp-001', ChargeType: 'Recurring' });
+    expect(mockRename).toHaveBeenCalledWith('product-rate-plan-charge', 'new-charge', 'prpc-999');
+  });
+
+  it('exits with error and does not rename when Zuora returns Success false', async () => {
+    mockRead.mockReturnValue({ Name: 'Bad Charge' });
+    mockPost.mockResolvedValue({ Success: false, Errors: [{ Code: 'INVALID_VALUE', Message: 'ProductRatePlanId is required' }] });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'create', 'product-rate-plan-charge', 'new-charge'])
+    ).rejects.toThrow('exit');
+    expect(mockRename).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+});
+
+describe('zdf delete product-rate-plan-charge', () => {
+  it('deletes the object endpoint and calls resolveAndSync with delete action', async () => {
+    mockDelete.mockResolvedValue({ Success: true });
+    mockResolve.mockResolvedValue(undefined);
+    await makeProgram().parseAsync(['node', 'zdf', 'delete', 'product-rate-plan-charge', 'prpc-001']);
+    expect(mockDelete).toHaveBeenCalledWith('/v1/object/product-rate-plan-charge/prpc-001');
+    expect(mockResolve).toHaveBeenCalledWith('product-rate-plan-charge', 'prpc-001', 'delete');
+  });
+
+  it('exits with error when Zuora returns Success false', async () => {
+    mockDelete.mockResolvedValue({ Success: false, Errors: [{ Code: 'INVALID_ID', Message: 'not found' }] });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'delete', 'product-rate-plan-charge', 'prpc-001'])
+    ).rejects.toThrow('exit');
+    expect(mockResolve).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
 });
