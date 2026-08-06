@@ -2,10 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Command } from 'commander';
 
 const mockGet = vi.hoisted(() => vi.fn());
+const mockPost = vi.hoisted(() => vi.fn());
 const mockPut = vi.hoisted(() => vi.fn());
 const mockDelete = vi.hoisted(() => vi.fn());
 const mockQuery = vi.hoisted(() => vi.fn());
-vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiPut: mockPut, apiDelete: mockDelete, apiQuery: mockQuery, setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
+vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiPost: mockPost, apiPut: mockPut, apiDelete: mockDelete, apiQuery: mockQuery, setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
+
+const mockWarn = vi.hoisted(() => vi.fn());
+vi.mock('../../helpers/output.js', () => ({
+  output: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warn: mockWarn },
+}));
 
 const mockResolve = vi.hoisted(() => vi.fn());
 vi.mock('../../helpers/dependency-graph.js', () => ({
@@ -20,7 +26,8 @@ vi.mock('../../helpers/dependency-graph.js', () => ({
 
 const mockWrite = vi.hoisted(() => vi.fn());
 const mockRead = vi.hoisted(() => vi.fn());
-vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
+const mockRename = vi.hoisted(() => vi.fn());
+vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, renameResourceFile: mockRename, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
 
@@ -48,6 +55,32 @@ describe('zdf pull bill-run', () => {
     await expect(
       makeProgram().parseAsync(['node', 'zdf', 'pull', 'bill-run', 'BR-00003509'])
     ).rejects.toThrow('exit');
+    exitSpy.mockRestore();
+  });
+});
+
+describe('zdf create bill-run', () => {
+  it('warns before executing billing, then posts to /v1/bill-runs and renames file to Zuora ID', async () => {
+    mockRead.mockReturnValue({ accountId: 'acct-1', billRunType: 'AutoDetection' });
+    mockPost.mockResolvedValue({ success: true, id: 'new-br-id' });
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'bill-run', 'my-bill-run']);
+    expect(mockPost).toHaveBeenCalledWith('/v1/bill-runs', { accountId: 'acct-1', billRunType: 'AutoDetection' });
+    expect(mockRename).toHaveBeenCalledWith('bill-run', 'my-bill-run', 'new-br-id');
+    expect(mockWarn).toHaveBeenCalledTimes(1);
+    expect(mockWarn.mock.calls[0][0]).toMatch(/EXECUTES BILLING/);
+    // the warning must be emitted before the POST, since creating a bill run
+    // triggers real billing in the target tenant
+    expect(mockWarn.mock.invocationCallOrder[0]).toBeLessThan(mockPost.mock.invocationCallOrder[0]);
+  });
+
+  it('exits with error when Zuora returns success false', async () => {
+    mockRead.mockReturnValue({ accountId: 'acct-1' });
+    mockPost.mockResolvedValue({ success: false, reasons: [{ code: 53100320, message: 'Invalid account' }] });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'create', 'bill-run', 'my-bill-run'])
+    ).rejects.toThrow('exit');
+    expect(mockRename).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
 });

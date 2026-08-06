@@ -1,6 +1,7 @@
 import { Command } from 'commander';
-import { apiGet, apiPut, apiDelete } from '../api/client.js';
-import { readResourceFile, resolveFilePath } from '../helpers/file-io.js';
+import { readFileSync } from 'fs';
+import { apiGet, apiPost, apiPut, apiDelete } from '../api/client.js';
+import { readResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
@@ -16,6 +17,7 @@ function getOrCreate(program: Command, name: string, description: string): Comma
 
 export function register(program: Command): void {
   const pullCmd = getOrCreate(program, 'pull', 'Fetch a resource from Zuora');
+  const createCmd = getOrCreate(program, 'create', 'Create a resource in Zuora from a local file');
   const pushCmd = getOrCreate(program, 'push', 'Update a resource in Zuora from a local file');
   const deleteCmd = getOrCreate(program, 'delete', 'Delete a resource in Zuora');
 
@@ -29,6 +31,22 @@ export function register(program: Command): void {
           throw new Error(`Failed to pull invoice ${id} (see error above).`);
         }
         output.success(`Invoice ${id} written to ${resolveFilePath(RESOURCE, id)}`);
+      })()
+    );
+
+  createCmd
+    .command('invoice <name>')
+    .description('Create a standalone invoice in Zuora from a local file')
+    .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/invoices/<name>.json)`)
+    .action((name: string, opts: { file?: string }) =>
+      runCommand(program, async () => {
+        const body: unknown = opts.file
+          ? JSON.parse(readFileSync(opts.file, 'utf-8')) as unknown
+          : readResourceFile(RESOURCE, name);
+        const res = await apiPost<ZuoraWriteResponse & { id: string }>(ENDPOINT, body);
+        assertSuccess(res, 'invoice create');
+        if (!opts.file) renameResourceFile(RESOURCE, name, res.id);
+        output.success(`Invoice created. Zuora ID: ${res.id}`);
       })()
     );
 

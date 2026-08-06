@@ -1,6 +1,7 @@
 import { Command } from 'commander';
-import { apiDelete } from '../api/client.js';
-import { resolveFilePath } from '../helpers/file-io.js';
+import { readFileSync } from 'fs';
+import { apiPost, apiDelete } from '../api/client.js';
+import { readResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
@@ -15,6 +16,7 @@ function getOrCreate(program: Command, name: string, description: string): Comma
 
 export function register(program: Command): void {
   const pullCmd = getOrCreate(program, 'pull', 'Fetch a resource from Zuora');
+  const createCmd = getOrCreate(program, 'create', 'Create a resource in Zuora from a local file');
   const pushCmd = getOrCreate(program, 'push', 'Update a resource in Zuora from a local file');
   const deleteCmd = getOrCreate(program, 'delete', 'Delete a resource in Zuora');
 
@@ -28,6 +30,26 @@ export function register(program: Command): void {
           throw new Error(`Failed to pull bill-run ${id} (see error above).`);
         }
         output.success(`Bill run ${id} written to ${resolveFilePath(RESOURCE, id)}`);
+      })()
+    );
+
+  createCmd
+    .command('bill-run <name>')
+    .description('Create a bill run in Zuora from a local file (WARNING: executes real billing)')
+    .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/bill-runs/<name>.json)`)
+    .action((name: string, opts: { file?: string }) =>
+      runCommand(program, async () => {
+        const body: unknown = opts.file
+          ? JSON.parse(readFileSync(opts.file, 'utf-8')) as unknown
+          : readResourceFile(RESOURCE, name);
+        output.warn(
+          'Creating a bill run EXECUTES BILLING in the target tenant: it generates real invoices ' +
+          'and/or credit memos for the accounts/subscriptions in scope. This is not a dry run.'
+        );
+        const res = await apiPost<ZuoraWriteResponse & { id: string; billRunNumber?: string }>(ENDPOINT, body);
+        assertSuccess(res, 'bill-run create');
+        if (!opts.file) renameResourceFile(RESOURCE, name, res.id);
+        output.success(`Bill run created. Zuora ID: ${res.id}`);
       })()
     );
 

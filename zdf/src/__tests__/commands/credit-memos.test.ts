@@ -2,10 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Command } from 'commander';
 
 const mockGet = vi.hoisted(() => vi.fn());
+const mockPost = vi.hoisted(() => vi.fn());
 const mockPut = vi.hoisted(() => vi.fn());
 const mockDelete = vi.hoisted(() => vi.fn());
 const mockQuery = vi.hoisted(() => vi.fn());
-vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiPut: mockPut, apiDelete: mockDelete, apiQuery: mockQuery, setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
+vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiPost: mockPost, apiPut: mockPut, apiDelete: mockDelete, apiQuery: mockQuery, setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
 
 const mockResolve = vi.hoisted(() => vi.fn());
 vi.mock('../../helpers/dependency-graph.js', () => ({
@@ -20,7 +21,8 @@ vi.mock('../../helpers/dependency-graph.js', () => ({
 
 const mockWrite = vi.hoisted(() => vi.fn());
 const mockRead = vi.hoisted(() => vi.fn());
-vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
+const mockRename = vi.hoisted(() => vi.fn());
+vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, renameResourceFile: mockRename, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
 
@@ -48,6 +50,27 @@ describe('zdf pull credit-memo', () => {
     await expect(
       makeProgram().parseAsync(['node', 'zdf', 'pull', 'credit-memo', 'CM-001'])
     ).rejects.toThrow('exit');
+    exitSpy.mockRestore();
+  });
+});
+
+describe('zdf create credit-memo', () => {
+  it('reads local file, posts to /v1/credit-memos, renames file to Zuora ID', async () => {
+    mockRead.mockReturnValue({ accountId: 'acct-1', invoiceId: 'INV-001' });
+    mockPost.mockResolvedValue({ success: true, id: 'new-cm-id' });
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'credit-memo', 'my-cm']);
+    expect(mockPost).toHaveBeenCalledWith('/v1/credit-memos', { accountId: 'acct-1', invoiceId: 'INV-001' });
+    expect(mockRename).toHaveBeenCalledWith('credit-memo', 'my-cm', 'new-cm-id');
+  });
+
+  it('exits with error when Zuora returns success false', async () => {
+    mockRead.mockReturnValue({ accountId: 'acct-1' });
+    mockPost.mockResolvedValue({ success: false, reasons: [{ code: 53100320, message: 'Invalid account' }] });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'create', 'credit-memo', 'my-cm'])
+    ).rejects.toThrow('exit');
+    expect(mockRename).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
 });
