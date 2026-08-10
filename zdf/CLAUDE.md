@@ -35,7 +35,7 @@ product rate plan charges. The legacy `/v1/object/` endpoints must be used for u
 |----------|------|------------------------|
 | product | `GET /v1/object/product/{id}` | push: `PUT /v1/object/product/{id}` · create: `POST /v1/catalog/products` · delete: `DELETE /v1/catalog/products/{id}` |
 | product-rate-plan | `GET /v1/object/product-rate-plan/{id}` | push: `PUT /v1/object/product-rate-plan/{id}` · create: `POST /v1/object/product-rate-plan` · delete: `DELETE /v1/object/product-rate-plan/{id}` (Note: `/v1/rateplan` does not exist on intQA — live-verified 2026-08-07) |
-| product-rate-plan-charge | `GET /v1/object/product-rate-plan-charge/{id}` | push: `PUT /v1/object/product-rate-plan-charge/{id}` · no create/delete |
+| product-rate-plan-charge | `GET /v1/object/product-rate-plan-charge/{id}` | push: `PUT /v1/object/product-rate-plan-charge/{id}` · create: `POST /v1/object/product-rate-plan-charge` (requires `ProductRatePlanId`, `POBIdentifier__c`, `ProductRatePlanChargeTierData`) · delete: `DELETE /v1/object/product-rate-plan-charge/{id}` (also cascades from parent PRP delete) |
 
 The object endpoints return **PascalCase** field names (`Name`, `ProductId`,
 `EffectiveStartDate`). The `filterUpdatableFields` allowlists are written in PascalCase
@@ -117,14 +117,20 @@ exitSpy.mockRestore();
 | Resource | pull | push | create | delete | list |
 |----------|------|------|--------|--------|------|
 | account | ✓ | ✓ | ✓ | ✓ | |
-| contact | ✓ | ✓ | ✓ | ✓ | |
-| subscription | ✓ | ✓ | ✓ | blocked | |
+| contact | ✓ | ✓ | ✓ (direct object response, no envelope) | ✓ | |
+| subscription | ✓ | ✓ | blocked (order-enabled tenant) | blocked | |
 | order | ✓ | ✓ | ✓ | ✓ | ✓ |
 | order-line-item | ✓ | ✓ | | | |
-| product | ✓ | ✓ | ✓ | ✓ | |
-| product-rate-plan | ✓ | ✓ | ✓ | ✓ | |
-| product-rate-plan-charge | ✓ | ✓ | | | |
-| invoice | ✓ | ✓ | | ✓ async | |
-| credit-memo | ✓ | ✓ | | ✓ | |
-| debit-memo | ✓ | ✓ | | ✓ | |
-| bill-run | ✓ | re-fetch | | ✓ | |
+| product | ✓ | ✓ | blocked (405 on intQA) | ✓ | |
+| product-rate-plan | ✓ | ✓ | ✓ (`/v1/object/product-rate-plan`) | ✓ | |
+| product-rate-plan-charge | ✓ | ✓ | ✓ | ✓ (cascade via parent PRP) | |
+| invoice | ✓ | ✓ | blocked-by-tenant-config | ✓ async | |
+| credit-memo | ✓ | ✓ | untested (tenant-gated) | ✓ | |
+| debit-memo | ✓ | ✓ | untested (tenant-gated) | ✓ | |
+| bill-run | ✓ | re-fetch | ✓ (executes real billing) | ✓ (Pending/Canceled only) | |
+| workflow | ✓ | ✓ | ✓ | ✓ | |
+| billing-template | ✓ (HTML-only) | ✓ | ✓ | ✓ | ✓ |
+
+See `zdf/TODO.md` "Push side cycle test results (2026-08-07)" for the live-verification detail
+behind the create/delete column above, and "Known tenant-config limitations" for the blocked/
+untested entries.

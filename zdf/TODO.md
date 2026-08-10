@@ -132,42 +132,62 @@ point). Added `!zdf/bin/` / `!zdf/bin/*.ts`; the CLI entry point is now tracked.
 
 ## VALIDATION — full framework live sweep against intQA
 
-### Pull side (in progress)
-Comprehensive adversarial live sweep of all 15 `pull` resource types against intQA on the current
-build (HEAD `0199b6a`), read-only, output to a temp dir. Reason: prior pull verifications happened
-at different commit points during their own tasks; shared read code (`request`, `fetchAndWrite`,
-`fetchAllItems`, `resolveAndSync`, the 401 path, cap plumbing) has changed since, so a single fresh
-sweep is needed to claim the whole pull surface works on the current build. Produces a per-resource
-PASS/FAIL table. Note: `billing-template` pull is HTML-only by design; `data-query` guard was
+### Pull side: COMPLETE
+Comprehensive adversarial live sweep of all 15 `pull` resource types against intQA, read-only,
+output to a temp dir — HEAD `41a9be3`, 2026-08-06. All 15 resource types verified live; one defect
+found and fixed (top-level pull now reports exit 1 when the fetch fails, instead of silently
+exiting 0). Note: `billing-template` pull is HTML-only by design; `data-query` guard was
 unit-tested but not recently re-verified live; a bill-run's debit-memo child branch is expected to
 warn+skip (intQA rejects that ZOQL).
 
-### Push side (NOT STARTED — do after pull is fully validated)
-Validate every `push` (update) path live against intQA. **Preferred method — self-contained via
-create-then-push:** for each pushable resource, if the framework supports a `create` action for it,
-the validation should CREATE a fresh record first (so we own it and can safely mutate/round-trip),
-then `push` an edit to that created record, then confirm via `pull`. This avoids touching
-pre-existing tenant data.
+### Push side cycle test results (2026-08-07)
+Live create/push/delete cycle test against intQA for the 6 newly-implemented resources plus the
+corrected `product-rate-plan` endpoints. Each cycle used a self-contained created-then-mutated
+record (marked `TEST ZDF POC` where applicable) and was torn down after confirmation, per the
+"Preferred method" contract below.
+
+| resource | create | push | delete | notes |
+|----------|--------|------|--------|-------|
+| product-rate-plan | PASS | — | PASS | endpoint corrected to `/v1/object/product-rate-plan` (see below); live-verified |
+| product-rate-plan-charge | PASS | — | PASS (cascade) | requires `ProductRatePlanId` + `POBIdentifier__c` + `ProductRatePlanChargeTierData`; delete is cascade via parent PRP deletion, not a direct DELETE call |
+| billing-template | PASS | PASS | PASS | full cycle PASS: create / confirm / push / delete / confirm-deletion all live-verified |
+| bill-run | PASS | PASS (re-fetch) | BLOCKED (business rule) | create + pull + push-as-refetch verified; delete blocked because the created bill-run reached Completed status — Zuora only allows deleting Pending/Canceled bill-runs (not a ZDF defect) |
+| invoice | BLOCKED-BY-TENANT-CONFIG | N/A | N/A | `POST /v1/invoices` requires Finance > Manage Non-Subscription Items settings (revenue recognition accounting codes) not configured on intQA |
+| credit-memo | SKIP | N/A | N/A | tenant-gated (Invoice Settlement feature + source invoice); not live-tested on intQA |
+| debit-memo | SKIP | N/A | N/A | same tenant gating as credit-memo; not live-tested on intQA |
+
+### Push side (self-contained validation method, for reference)
+**Preferred method — self-contained via create-then-push:** for each pushable resource, if the
+framework supports a `create` action for it, the validation should CREATE a fresh record first (so
+we own it and can safely mutate/round-trip), then `push` an edit to that created record, then
+confirm via `pull`. This avoids touching pre-existing tenant data.
 
 - Resources WITH create (per resource-coverage table): account, contact, subscription, order,
-  product, product-rate-plan, workflow — use create-then-push.
-- Resources WITHOUT a create action (product-rate-plan-charge, invoice, credit-memo, debit-memo,
-  bill-run, order-line-item, billing-template): create-then-push is NOT possible. For these, **ASK
-  the user to create/provide a reference record in intQA** to push against (as was done for
-  billing-template `8a8aa02e9fd1baf0019fd2ea46473db6` and OLI order `O-01339581`). Do NOT push
-  against arbitrary pre-existing tenant records without explicit authorization.
+  product, product-rate-plan, product-rate-plan-charge, billing-template, invoice, credit-memo,
+  debit-memo, bill-run, workflow — use create-then-push.
+- Resources WITHOUT a create action (order-line-item): create-then-push is NOT possible. For these,
+  **ASK the user to create/provide a reference record in intQA** to push against (as was done for
+  OLI order `O-01339581`). Do NOT push against arbitrary pre-existing tenant records without
+  explicit authorization.
 - All created/mutated records must carry a clear test marker (e.g. name/description contains
   `TEST ZDF POC`) and each push must be a controlled, reversible/lossless change where possible.
 - Note: `push bill-run` is a re-fetch (no PUT endpoint) — validate accordingly; `delete
   subscription` is blocked by design.
 
+### Endpoint corrections (live discovery, 2026-08-07)
+- **`product-rate-plan` create**: was `POST /v1/rateplan` — this path does not exist on the intQA
+  tenant. Corrected to `POST /v1/object/product-rate-plan` (the legacy object endpoint, PascalCase
+  `{Id,Success,Errors?}` response). Live-verified.
+- **`product-rate-plan` delete**: was `DELETE /v1/rateplan/{id}` — corrected to
+  `DELETE /v1/object/product-rate-plan/{id}`. Live-verified.
+- **`contact` create**: the response is a direct contact object with no `{success}` envelope (unlike
+  every other write endpoint in this framework). Corrected to use `assertReadSuccess` and read
+  `res.id` (lowercase). Live-verified.
+
 ---
 
 ## Backlog (deferred minors from the fix effort)
 
-- Exit code is non-zero only for direct-`apiGet` pulls (workflow/billing-template/data-query);
-  dependency-graph-routed pulls warn + return null and still exit 0 (matches pre-existing 404
-  behavior). The read-guard still prevents error-body writes everywhere.
 - Secondary `apiGet` calls that only feed traversal decisions (`rulesBillRun`'s
   credit-memo-by-sourceId lookup) are unguarded — worst case is under-traversal (`?? []`), not
   a corrupt file.
@@ -176,6 +196,18 @@ pre-existing tenant data.
 - Cosmetic: a "truncated / more may remain" warning can print in exact-boundary cases where
   nothing was actually truncated (`fetchAllItems` exact-cap single page; `list orders --limit`
   landing exactly at page end).
+
+### Known tenant-config limitations (intQA, discovered 2026-08-07)
+- `create invoice` (standalone `POST /v1/invoices`) — BLOCKED: requires Finance > Manage
+  Non-Subscription Items settings (revenue recognition accounting codes) not configured on
+  intQA. Framework-correct; not a code defect.
+- `create subscription` — BLOCKED: `53000010: Subscription api cannot be used when order is
+  enabled.` This tenant uses the Orders API for subscription creation instead.
+- `create product` — BLOCKED (405): `POST /v1/catalog/products` disabled on intQA.
+- `create credit-memo` / `create debit-memo` — SKIP: tenant-gated (Invoice Settlement feature +
+  a source invoice required); not live-tested on intQA.
+- `delete bill-run` on a Completed bill-run — Zuora rejects by business rule; only
+  Pending/Canceled bill-runs can be deleted. Not a ZDF defect.
 
 ---
 
