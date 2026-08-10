@@ -100,9 +100,9 @@ const UPDATABLE_FIELDS: Record<string, string[]> = {
     'transferredToAccounting',
   ],
   'credit-memo': [
-    'autoApplyUponPosting',
+    // autoApplyUponPosting rejected on Posted memos (live-verified 2026-08-07)
+    // creditMemoDate rejected on Posted memos (live-verified 2026-08-07)
     'comment',
-    'creditMemoDate',
     'excludeFromAutoApplyRules',
     'reasonCode',
     'transferredToAccounting',
@@ -110,8 +110,8 @@ const UPDATABLE_FIELDS: Record<string, string[]> = {
   'debit-memo': [
     'autoPay',
     'comment',
-    'debitMemoDate',
-    'dueDate',
+    // debitMemoDate rejected on Posted memos (live-verified 2026-08-07)
+    // dueDate rejected on Posted memos (live-verified 2026-08-07)
     'paymentTerm',
     'reasonCode',
     'transferredToAccounting',
