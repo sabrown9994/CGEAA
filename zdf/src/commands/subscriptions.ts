@@ -37,7 +37,7 @@ export function register(program: Command): void {
 
   createCmd
     .command('subscription <name>')
-    .description('Create a subscription in Zuora from a local file')
+    .description('Create a subscription [NOT SUPPORTED: Orders is enabled on this tenant — legacy Subscriptions API is disabled]')
     .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/subscriptions/<name>.json)`)
     .action((name: string, opts: { file?: string }) =>
       runCommand(program, async () => {
@@ -71,7 +71,7 @@ export function register(program: Command): void {
 
   deleteCmd
     .command('subscription <id>')
-    .description('Delete a subscription in Zuora')
+    .description('Delete a subscription [NOT SUPPORTED: Zuora has no DELETE endpoint for subscriptions — cancel via the Zuora UI or Orders API]')
     .action((_id: string) =>
       runCommand(program, async () => {
         checkDeleteAllowed(RESOURCE);

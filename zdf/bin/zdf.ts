@@ -21,7 +21,7 @@ program
   .name('zdf')
   .description('Zuora Development Framework CLI')
   .version('1.0.0')
-  .option('--debug', 'print full stack traces on error')
+  .option('--debug', 'print every HTTP request URL and response body')
   .option('--no-dependency', 'skip dependency tree traversal')
   .option('--max-rows <n>', 'override the apiQuery pagination row cap for this run')
   .option('--max-nodes <n>', 'override the dependency traversal node ceiling for this run')

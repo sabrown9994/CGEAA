@@ -38,7 +38,7 @@ export function register(program: Command): void {
 
   createCmd
     .command('product <name>')
-    .description('Create a product in Zuora from a local file')
+    .description('Create a product [NOT SUPPORTED: POST /v1/catalog/products is disabled on this tenant — see TODO.md]')
     .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/products/<name>.json)`)
     .action((name: string, opts: { file?: string }) =>
       runCommand(program, async () => {

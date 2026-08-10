@@ -37,7 +37,7 @@ export function register(program: Command): void {
 
   createCmd
     .command('invoice <name>')
-    .description('Create a standalone invoice in Zuora from a local file')
+    .description('Create a standalone invoice [NOT SUPPORTED: Finance settings not configured on this tenant — see TODO.md]')
     .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/invoices/<name>.json)`)
     .action((name: string, opts: { file?: string }) =>
       runCommand(program, async () => {

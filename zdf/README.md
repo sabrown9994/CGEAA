@@ -286,6 +286,7 @@ zdf list billing-templates
 **Limitations:**
 - Credit memo line items (`creditMemoItems`) are embedded for reference but stripped from the push body.
 - Deletion requires the memo to be in **Draft** status.
+- `creditMemoDate` and `autoApplyUponPosting` are **not updatable** on Posted memos (live-verified: Zuora rejects them). These fields are excluded from the push allowlist.
 - `create credit-memo` requires `--invoice <invoiceId>` (the source invoice) — the bare `POST /v1/credit-memos` endpoint is unreliable on this tenant (live-verified); the CLI posts to the invoice-scoped `POST /v1/credit-memos/invoice/{invoiceKey}` endpoint instead. Omitting `--invoice` fails fast with a clear error before any network call. The caller is responsible for including `skuName` in each line item (live-verified requirement on this tenant).
 - `push credit-memo` and `delete credit-memo` re-pull the parent account.
 
@@ -303,6 +304,7 @@ zdf list billing-templates
 **Limitations:**
 - Debit memo line items (`debitMemoItems`) are embedded for reference but stripped from the push body.
 - Deletion requires the memo to be in **Canceled** status.
+- `debitMemoDate` and `dueDate` are **not updatable** on Posted memos (live-verified: Zuora rejects them). These fields are excluded from the push allowlist.
 - `create debit-memo` requires `--invoice <invoiceId>` (the source invoice) — the bare `POST /v1/debit-memos` endpoint is unreliable on this tenant (live-verified); the CLI posts to the invoice-scoped `POST /v1/debit-memos/invoice/{invoiceKey}` endpoint instead. Omitting `--invoice` fails fast with a clear error before any network call. The caller is responsible for including `skuName` in each line item (live-verified requirement on this tenant).
 - `push debit-memo` and `delete debit-memo` re-pull the parent account.
 
@@ -448,8 +450,8 @@ A visited-set prevents loops: if a resource has already been processed in the cu
 | product-rate-plan | `Name`, `Description`, `EffectiveStartDate`, `EffectiveEndDate` |
 | product-rate-plan-charge | `Name`, `Description`, `BillingPeriod`, `AccountingCode`, `TaxCode`, `UOM` |
 | invoice | `autoPay`, `comments`, `dueDate`, `invoiceDate`, `paymentTerm` |
-| credit-memo | `comment`, `creditMemoDate`, `reasonCode`, `autoApplyUponPosting` |
-| debit-memo | `comment`, `debitMemoDate`, `dueDate`, `paymentTerm`, `reasonCode` |
+| credit-memo | `comment`, `excludeFromAutoApplyRules`, `reasonCode`, `transferredToAccounting` |
+| debit-memo | `autoPay`, `comment`, `paymentTerm`, `reasonCode`, `transferredToAccounting` |
 
 Note: product, product-rate-plan, and product-rate-plan-charge use the legacy `/v1/object/` API which requires **PascalCase** field names.
 
