@@ -9,8 +9,9 @@ import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync } from '../helpers/dependency-graph.js';
 
 const RESOURCE = 'product-rate-plan';
+// Both create (POST) and delete (DELETE) use the legacy object endpoint.
+// The modern /v1/rateplan path does not exist on this tenant (returns 50000040).
 const OBJECT_ENDPOINT = '/v1/object/product-rate-plan';
-const CREATE_ENDPOINT = '/v1/rateplan';
 
 function getOrCreate(program: Command, name: string, description: string): Command {
   return program.commands.find((c) => c.name() === name) ?? program.command(name).description(description);
@@ -44,10 +45,15 @@ export function register(program: Command): void {
         const body: unknown = opts.file
           ? JSON.parse(readFileSync(opts.file, 'utf-8')) as unknown
           : readResourceFile(RESOURCE, name);
-        const res = await apiPost<ZuoraWriteResponse & { id: string }>(`${CREATE_ENDPOINT}`, body);
-        assertSuccess(res, 'product rate plan create');
-        if (!opts.file) renameResourceFile(RESOURCE, name, res.id);
-        output.success(`Product rate plan created. Zuora ID: ${res.id}`);
+        // POST to the legacy object endpoint — returns PascalCase {Id, Success, Errors?}
+        const res = await apiPost<{ Id: string; Success: boolean; Errors?: Array<{ Code: string; Message: string }> }>(`${OBJECT_ENDPOINT}`, body);
+        if (!res.Success) {
+          const msg = res.Errors?.map(e => `${e.Code}: ${e.Message}`).join(', ') ?? 'Unknown error';
+          output.error(`Zuora rejected the product rate plan create.\n  ${msg}`);
+          process.exit(1);
+        }
+        if (!opts.file) renameResourceFile(RESOURCE, name, res.Id);
+        output.success(`Product rate plan created. Zuora ID: ${res.Id}`);
       })()
     );
 
@@ -77,7 +83,8 @@ export function register(program: Command): void {
     .description('Delete a product rate plan in Zuora')
     .action((id: string) =>
       runCommand(program, async () => {
-        const res = await apiDelete<ZuoraWriteResponse>(`${CREATE_ENDPOINT}/${id}`);
+        // DELETE via the legacy object endpoint — returns {success, id} (lowercase)
+        const res = await apiDelete<ZuoraWriteResponse>(`${OBJECT_ENDPOINT}/${id}`);
         assertSuccess(res, 'product rate plan delete');
         await resolveAndSync(RESOURCE, id, 'delete');
         output.success(`Product rate plan ${id} deleted.`);

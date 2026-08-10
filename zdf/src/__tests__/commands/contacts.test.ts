@@ -62,9 +62,10 @@ describe('zdf pull contact', () => {
 });
 
 describe('zdf create contact', () => {
-  it('reads local file, posts to Zuora, renames file to Zuora ID', async () => {
+  it('reads local file, posts to Zuora, renames file to lowercase id (direct resource response)', async () => {
     mockRead.mockReturnValue({ firstName: 'Jane' });
-    mockPost.mockResolvedValue({ Id: 'new-contact-id', success: true });
+    // POST /v1/contacts returns the contact object directly (no {success} envelope)
+    mockPost.mockResolvedValue({ id: 'new-contact-id', firstName: 'Jane', accountId: 'acct-1' });
     await makeProgram().parseAsync(['node', 'zdf', 'create', 'contact', 'my-draft']);
     expect(mockPost).toHaveBeenCalledWith('/v1/contacts', { firstName: 'Jane' });
     expect(mockRename).toHaveBeenCalledWith('contact', 'my-draft', 'new-contact-id');
@@ -72,7 +73,7 @@ describe('zdf create contact', () => {
 
   it('reads from --file path and skips rename', async () => {
     mockReadFileSync.mockReturnValue(JSON.stringify({ firstName: 'John' }));
-    mockPost.mockResolvedValue({ Id: 'new-id', success: true });
+    mockPost.mockResolvedValue({ id: 'new-id', firstName: 'John' });
     await makeProgram().parseAsync(['node', 'zdf', 'create', 'contact', 'my-contact', '--file', '/tmp/contact.json']);
     expect(mockPost).toHaveBeenCalledWith('/v1/contacts', { firstName: 'John' });
     expect(mockRename).not.toHaveBeenCalled();

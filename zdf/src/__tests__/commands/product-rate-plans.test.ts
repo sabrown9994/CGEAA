@@ -53,12 +53,23 @@ describe('zdf pull product-rate-plan', () => {
 });
 
 describe('zdf create product-rate-plan', () => {
-  it('reads local file, posts to rateplan endpoint, renames file to Zuora ID', async () => {
+  it('reads local file, posts to object endpoint, renames file to PascalCase Zuora Id', async () => {
     mockRead.mockReturnValue({ Name: 'Test Rate Plan', ProductId: 'prod-001' });
-    mockPost.mockResolvedValue({ success: true, id: 'new-prp-id' });
+    // Object endpoint returns PascalCase {Id, Success}
+    mockPost.mockResolvedValue({ Id: 'new-prp-id', Success: true });
     await makeProgram().parseAsync(['node', 'zdf', 'create', 'product-rate-plan', 'my-plan']);
-    expect(mockPost).toHaveBeenCalledWith('/v1/rateplan', expect.any(Object));
+    expect(mockPost).toHaveBeenCalledWith('/v1/object/product-rate-plan', expect.any(Object));
     expect(mockRename).toHaveBeenCalledWith('product-rate-plan', 'my-plan', 'new-prp-id');
+  });
+
+  it('exits with error when Zuora returns Success false', async () => {
+    mockRead.mockReturnValue({ Name: 'Test Rate Plan' });
+    mockPost.mockResolvedValue({ Id: '', Success: false, Errors: [{ Code: 'ERR', Message: 'bad' }] });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'create', 'product-rate-plan', 'my-plan'])
+    ).rejects.toThrow('exit');
+    exitSpy.mockRestore();
   });
 });
 
@@ -90,7 +101,7 @@ describe('zdf delete product-rate-plan', () => {
     mockDelete.mockResolvedValue({ success: true });
     mockResolve.mockResolvedValue(undefined);
     await makeProgram().parseAsync(['node', 'zdf', 'delete', 'product-rate-plan', 'prp-001']);
-    expect(mockDelete).toHaveBeenCalledWith('/v1/rateplan/prp-001');
+    expect(mockDelete).toHaveBeenCalledWith('/v1/object/product-rate-plan/prp-001');
     expect(mockResolve).toHaveBeenCalledWith('product-rate-plan', 'prp-001', 'delete');
   });
 });

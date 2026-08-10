@@ -34,7 +34,7 @@ product rate plan charges. The legacy `/v1/object/` endpoints must be used for u
 | Resource | pull | push / create / delete |
 |----------|------|------------------------|
 | product | `GET /v1/object/product/{id}` | push: `PUT /v1/object/product/{id}` · create: `POST /v1/catalog/products` · delete: `DELETE /v1/catalog/products/{id}` |
-| product-rate-plan | `GET /v1/object/product-rate-plan/{id}` | push: `PUT /v1/object/product-rate-plan/{id}` · create: `POST /v1/rateplan` · delete: `DELETE /v1/rateplan/{id}` |
+| product-rate-plan | `GET /v1/object/product-rate-plan/{id}` | push: `PUT /v1/object/product-rate-plan/{id}` · create: `POST /v1/object/product-rate-plan` · delete: `DELETE /v1/object/product-rate-plan/{id}` (Note: `/v1/rateplan` does not exist on intQA — live-verified 2026-08-07) |
 | product-rate-plan-charge | `GET /v1/object/product-rate-plan-charge/{id}` | push: `PUT /v1/object/product-rate-plan-charge/{id}` · no create/delete |
 
 The object endpoints return **PascalCase** field names (`Name`, `ProductId`,

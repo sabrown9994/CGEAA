@@ -4,7 +4,7 @@ import { apiPost, apiPut, apiDelete } from '../api/client.js';
 import { readResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
-import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
+import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync } from '../helpers/dependency-graph.js';
 
@@ -43,10 +43,11 @@ export function register(program: Command): void {
         const body: unknown = opts.file
           ? JSON.parse(readFileSync(opts.file, 'utf-8')) as unknown
           : readResourceFile(RESOURCE, name);
-        const res = await apiPost<ZuoraWriteResponse & { Id: string }>(`${ENDPOINT}`, body);
-        assertSuccess(res, 'contact create');
-        if (!opts.file) renameResourceFile(RESOURCE, name, res.Id);
-        output.success(`Contact created. Zuora ID: ${res.Id}`);
+        // POST /v1/contacts returns the contact object directly (no {success} envelope)
+        const res = await apiPost<{ id: string } & Record<string, unknown>>(`${ENDPOINT}`, body);
+        assertReadSuccess(res as Record<string, unknown>, 'contact create');
+        if (!opts.file) renameResourceFile(RESOURCE, name, res.id);
+        output.success(`Contact created. Zuora ID: ${res.id}`);
       })()
     );
 
