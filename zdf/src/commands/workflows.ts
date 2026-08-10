@@ -59,8 +59,9 @@ export function register(program: Command): void {
           ? JSON.parse(readFileSync(opts.file, 'utf-8')) as Record<string, unknown>
           : readResourceFile(RESOURCE, id) as Record<string, unknown>;
         const body = filterUpdatableFields(RESOURCE, rawBody);
-        const res = await apiPut<ZuoraWriteResponse>(`${ENDPOINT}/${id}`, body);
-        assertSuccess(res, 'workflow update');
+        // Workflows API PUT returns the updated workflow object directly (no {success} envelope)
+        const res = await apiPut<Record<string, unknown>>(`${ENDPOINT}/${id}`, body);
+        assertReadSuccess(res, 'workflow update');
         output.success(`Workflow ${id} updated.`);
       })()
     );
@@ -70,8 +71,9 @@ export function register(program: Command): void {
     .description('Delete a workflow in Zuora')
     .action((id: string) =>
       runCommand(program, async () => {
-        const res = await apiDelete<ZuoraWriteResponse>(`${ENDPOINT}/${id}`);
-        assertSuccess(res, 'workflow delete');
+        // Workflows API DELETE returns no {success} envelope
+        const res = await apiDelete<Record<string, unknown>>(`${ENDPOINT}/${id}`);
+        assertReadSuccess(res, 'workflow delete');
         output.success(`Workflow ${id} deleted.`);
       })()
     );

@@ -74,7 +74,8 @@ describe('zdf create workflow', () => {
 describe('zdf push workflow', () => {
   it('puts to the corrected /workflows/{id} path', async () => {
     mockRead.mockReturnValue({ name: 'My Workflow' });
-    mockPut.mockResolvedValue({ success: true });
+    // Workflows API PUT returns the workflow object directly (no {success} envelope)
+    mockPut.mockResolvedValue({ id: 123, name: 'My Workflow', status: 'Active' });
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'workflow', '123']);
     expect(mockPut).toHaveBeenCalledWith('/workflows/123', expect.any(Object));
   });
@@ -82,7 +83,8 @@ describe('zdf push workflow', () => {
 
 describe('zdf delete workflow', () => {
   it('deletes via the corrected /workflows/{id} path', async () => {
-    mockDelete.mockResolvedValue({ success: true });
+    // Workflows API DELETE returns no {success} envelope on success (empty or 204)
+    mockDelete.mockResolvedValue({});
     await makeProgram().parseAsync(['node', 'zdf', 'delete', 'workflow', '123']);
     expect(mockDelete).toHaveBeenCalledWith('/workflows/123');
   });
