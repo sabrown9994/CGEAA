@@ -55,11 +55,11 @@ describe('zdf pull debit-memo', () => {
 });
 
 describe('zdf create debit-memo', () => {
-  it('reads local file, posts to /v1/debit-memos, renames file to Zuora ID', async () => {
+  it('reads local file, posts to invoice-scoped endpoint, renames file to Zuora ID', async () => {
     mockRead.mockReturnValue({ accountId: 'acct-1', invoiceId: 'INV-001' });
     mockPost.mockResolvedValue({ success: true, id: 'new-dm-id' });
-    await makeProgram().parseAsync(['node', 'zdf', 'create', 'debit-memo', 'my-dm']);
-    expect(mockPost).toHaveBeenCalledWith('/v1/debit-memos', { accountId: 'acct-1', invoiceId: 'INV-001' });
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'debit-memo', 'my-dm', '--invoice', 'inv-001']);
+    expect(mockPost).toHaveBeenCalledWith('/v1/debit-memos/invoice/inv-001', { accountId: 'acct-1', invoiceId: 'INV-001' });
     expect(mockRename).toHaveBeenCalledWith('debit-memo', 'my-dm', 'new-dm-id');
   });
 
@@ -68,9 +68,19 @@ describe('zdf create debit-memo', () => {
     mockPost.mockResolvedValue({ success: false, reasons: [{ code: 53100320, message: 'Invalid account' }] });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
     await expect(
-      makeProgram().parseAsync(['node', 'zdf', 'create', 'debit-memo', 'my-dm'])
+      makeProgram().parseAsync(['node', 'zdf', 'create', 'debit-memo', 'my-dm', '--invoice', 'inv-001'])
     ).rejects.toThrow('exit');
     expect(mockRename).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it('throws and exits non-zero when --invoice is missing', async () => {
+    mockRead.mockReturnValue({ accountId: 'acct-1' });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'create', 'debit-memo', 'my-dm'])
+    ).rejects.toThrow('exit');
+    expect(mockPost).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
 });

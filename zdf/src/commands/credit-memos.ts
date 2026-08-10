@@ -34,22 +34,26 @@ export function register(program: Command): void {
       })()
     );
 
-  // Primary create endpoint is POST /v1/credit-memos, which supports both the
-  // from-invoice shape ({ invoiceId, items: [...] }) and the from-charge shape
-  // ({ accountId, charges: [...] }) depending on what the local file contains.
-  // Zuora also exposes an invoice-scoped alternative, POST
-  // /v1/credit-memos/invoice/{invoiceKey}, but this CLI always posts the file
-  // body verbatim to the primary /v1/credit-memos endpoint.
+  // Bare POST /v1/credit-memos is unreliable on this tenant (live-verified). Credit
+  // memos must be created from a source invoice via the invoice-scoped endpoint,
+  // POST /v1/credit-memos/invoice/{invoiceKey}. The caller must pass --invoice and
+  // is responsible for including skuName in each item (live-verified requirement).
   createCmd
     .command('credit-memo <name>')
-    .description('Create a credit memo in Zuora from a local file')
+    .description('Create a credit memo in Zuora from a local file, scoped to a source invoice (--invoice)')
     .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/credit-memos/<name>.json)`)
-    .action((name: string, opts: { file?: string }) =>
+    .option('--invoice <invoiceId>', 'source invoice ID to create the credit memo from')
+    .action((name: string, opts: { file?: string; invoice?: string }) =>
       runCommand(program, async () => {
+        if (!opts.invoice) {
+          throw new Error(
+            'create credit-memo requires --invoice <invoiceId>. Credit memos must be created from a source invoice.'
+          );
+        }
         const body: unknown = opts.file
           ? JSON.parse(readFileSync(opts.file, 'utf-8')) as unknown
           : readResourceFile(RESOURCE, name);
-        const res = await apiPost<ZuoraWriteResponse & { id: string }>(ENDPOINT, body);
+        const res = await apiPost<ZuoraWriteResponse & { id: string }>(`${ENDPOINT}/invoice/${opts.invoice}`, body);
         assertSuccess(res, 'credit-memo create');
         if (!opts.file) renameResourceFile(RESOURCE, name, res.id);
         output.success(`Credit memo created. Zuora ID: ${res.id}`);

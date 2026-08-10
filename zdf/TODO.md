@@ -152,9 +152,11 @@ record (marked `TEST ZDF POC` where applicable) and was torn down after confirma
 | product-rate-plan-charge | PASS | — | PASS (cascade) | requires `ProductRatePlanId` + `POBIdentifier__c` + `ProductRatePlanChargeTierData`; delete is cascade via parent PRP deletion, not a direct DELETE call |
 | billing-template | PASS | PASS | PASS | full cycle PASS: create / confirm / push / delete / confirm-deletion all live-verified |
 | bill-run | PASS | PASS (re-fetch) | BLOCKED (business rule) | create + pull + push-as-refetch verified; delete blocked because the created bill-run reached Completed status — Zuora only allows deleting Pending/Canceled bill-runs (not a ZDF defect) |
-| invoice | BLOCKED-BY-TENANT-CONFIG | N/A | N/A | `POST /v1/invoices` requires Finance > Manage Non-Subscription Items settings (revenue recognition accounting codes) not configured on intQA |
-| credit-memo | SKIP | N/A | N/A | tenant-gated (Invoice Settlement feature + source invoice); not live-tested on intQA |
-| debit-memo | SKIP | N/A | N/A | same tenant gating as credit-memo; not live-tested on intQA |
+| invoice | BLOCKED-BY-TENANT-CONFIG (CLI-guarded) | N/A | N/A | `POST /v1/invoices` requires Finance > Manage Non-Subscription Items settings (revenue recognition accounting codes) not configured on intQA; `zdf create invoice` now fails fast with `checkTenantSupported` before any network call |
+| credit-memo | invoice-scoped endpoint | N/A | N/A | bare `POST /v1/credit-memos` is unreliable on this tenant (live-verified); create now requires `--invoice <invoiceId>` and posts to `POST /v1/credit-memos/invoice/{invoiceKey}` |
+| debit-memo | invoice-scoped endpoint | N/A | N/A | same as credit-memo: create now requires `--invoice <invoiceId>` and posts to `POST /v1/debit-memos/invoice/{invoiceKey}` |
+| product | BLOCKED-BY-TENANT-CONFIG (CLI-guarded) | N/A | N/A | `POST /v1/catalog/products` disabled (405); legacy object endpoint needs unconfigured tenant fields; `zdf create product` now fails fast with `checkTenantSupported` before any network call |
+| subscription | BLOCKED-BY-TENANT-CONFIG (CLI-guarded) | N/A | N/A | legacy Subscriptions API disabled because Orders is enabled on this tenant; `zdf create subscription` now fails fast with `checkTenantSupported` before any network call |
 
 ### Push side (self-contained validation method, for reference)
 **Preferred method — self-contained via create-then-push:** for each pushable resource, if the
@@ -183,6 +185,58 @@ confirm via `pull`. This avoids touching pre-existing tenant data.
 - **`contact` create**: the response is a direct contact object with no `{success}` envelope (unlike
   every other write endpoint in this framework). Corrected to use `assertReadSuccess` and read
   `res.id` (lowercase). Live-verified.
+
+---
+
+## Tenant-config limitations (not currently supported)
+
+The following actions are blocked by **tenant configuration** on this Zuora environment
+(intQA), not by a limitation of the Zuora API or of ZDF itself. Each is guarded in the CLI
+(`src/helpers/delete-guard.ts` — `checkTenantSupported` / `checkDeleteAllowed`) so the command
+fails immediately with a clear message instead of making a network call that returns a
+confusing Zuora error.
+
+### `create product`
+- **What it is:** Creating a new product catalog entry.
+- **Root cause:** `POST /v1/catalog/products` returns HTTP 405 (disabled) on this tenant; the
+  legacy `POST /v1/object/product` endpoint requires unconfigured tenant-specific required
+  custom fields.
+- **What would need to change:** Zuora support/admin would need to re-enable the catalog
+  create endpoint, or the tenant's required custom fields on the legacy object endpoint would
+  need to be identified and populated.
+- **CLI behavior:** `zdf create product` throws immediately, before any network call, with a
+  message pointing here.
+
+### `create subscription`
+- **What it is:** Creating a subscription directly via the legacy Subscriptions API.
+- **Root cause:** `53000010: Subscription api cannot be used when order is enabled.` — this
+  tenant has the Orders feature enabled, which disables the legacy subscription-create API.
+- **What would need to change:** Nothing to "fix" — this is expected behavior for an
+  Orders-enabled tenant. Use the Orders API (`create order`) to establish new subscriptions
+  instead.
+- **CLI behavior:** `zdf create subscription` throws immediately, before any network call,
+  with a message pointing here.
+
+### `delete subscription`
+- **What it is:** Deleting a subscription record.
+- **Root cause:** The Zuora REST API does not expose a DELETE endpoint for subscriptions at
+  all — this is a Zuora API limitation, not tenant configuration, but it is guarded the same
+  way for a consistent user experience.
+- **What would need to change:** N/A — not exposed by Zuora. To cancel a subscription, use the
+  Zuora UI or the Orders API.
+- **CLI behavior:** `zdf delete subscription` throws immediately, before any network call,
+  with a message pointing here.
+
+### `create invoice`
+- **What it is:** Standalone invoice creation (independent of a bill run).
+- **Root cause:** `POST /v1/invoices` requires Finance > Manage Non-Subscription Items
+  settings (revenue recognition accounting codes) to be configured; they are not configured
+  on this tenant.
+- **What would need to change:** A Zuora admin would need to configure Manage
+  Non-Subscription Items / the relevant revenue recognition accounting codes in Finance
+  settings.
+- **CLI behavior:** `zdf create invoice` throws immediately, before any network call, with a
+  message pointing here.
 
 ---
 

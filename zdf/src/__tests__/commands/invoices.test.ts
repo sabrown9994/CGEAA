@@ -55,21 +55,13 @@ describe('zdf pull invoice', () => {
 });
 
 describe('zdf create invoice', () => {
-  it('reads local file, posts to /v1/invoices, renames file to Zuora ID', async () => {
+  it('throws and exits non-zero without calling apiPost — tenant-blocked', async () => {
     mockRead.mockReturnValue({ accountId: 'acct-1', invoiceDate: '2026-08-06' });
-    mockPost.mockResolvedValue({ success: true, id: 'new-inv-id' });
-    await makeProgram().parseAsync(['node', 'zdf', 'create', 'invoice', 'my-invoice']);
-    expect(mockPost).toHaveBeenCalledWith('/v1/invoices', { accountId: 'acct-1', invoiceDate: '2026-08-06' });
-    expect(mockRename).toHaveBeenCalledWith('invoice', 'my-invoice', 'new-inv-id');
-  });
-
-  it('exits with error when Zuora returns success false', async () => {
-    mockRead.mockReturnValue({ accountId: 'acct-1' });
-    mockPost.mockResolvedValue({ success: false, reasons: [{ code: 53100320, message: 'Invalid account' }] });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
     await expect(
       makeProgram().parseAsync(['node', 'zdf', 'create', 'invoice', 'my-invoice'])
     ).rejects.toThrow('exit');
+    expect(mockPost).not.toHaveBeenCalled();
     expect(mockRename).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });

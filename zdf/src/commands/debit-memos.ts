@@ -34,19 +34,26 @@ export function register(program: Command): void {
       })()
     );
 
-  // Same request shape as credit-memo create: the local file is posted
-  // verbatim to /v1/debit-memos, supporting both the from-invoice and
-  // from-charge create shapes.
+  // Bare POST /v1/debit-memos is unreliable on this tenant (live-verified). Debit
+  // memos must be created from a source invoice via the invoice-scoped endpoint,
+  // POST /v1/debit-memos/invoice/{invoiceKey}. The caller must pass --invoice and
+  // is responsible for including skuName in each item (live-verified requirement).
   createCmd
     .command('debit-memo <name>')
-    .description('Create a debit memo in Zuora from a local file')
+    .description('Create a debit memo in Zuora from a local file, scoped to a source invoice (--invoice)')
     .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/debit-memos/<name>.json)`)
-    .action((name: string, opts: { file?: string }) =>
+    .option('--invoice <invoiceId>', 'source invoice ID to create the debit memo from')
+    .action((name: string, opts: { file?: string; invoice?: string }) =>
       runCommand(program, async () => {
+        if (!opts.invoice) {
+          throw new Error(
+            'create debit-memo requires --invoice <invoiceId>. Debit memos must be created from a source invoice.'
+          );
+        }
         const body: unknown = opts.file
           ? JSON.parse(readFileSync(opts.file, 'utf-8')) as unknown
           : readResourceFile(RESOURCE, name);
-        const res = await apiPost<ZuoraWriteResponse & { id: string }>(ENDPOINT, body);
+        const res = await apiPost<ZuoraWriteResponse & { id: string }>(`${ENDPOINT}/invoice/${opts.invoice}`, body);
         assertSuccess(res, 'debit-memo create');
         if (!opts.file) renameResourceFile(RESOURCE, name, res.id);
         output.success(`Debit memo created. Zuora ID: ${res.id}`);

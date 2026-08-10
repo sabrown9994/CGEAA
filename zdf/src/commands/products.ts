@@ -7,6 +7,7 @@ import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync } from '../helpers/dependency-graph.js';
+import { checkTenantSupported } from '../helpers/delete-guard.js';
 
 const RESOURCE = 'product';
 const OBJECT_ENDPOINT = '/v1/object/product';
@@ -41,6 +42,7 @@ export function register(program: Command): void {
     .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/products/<name>.json)`)
     .action((name: string, opts: { file?: string }) =>
       runCommand(program, async () => {
+        checkTenantSupported(RESOURCE, 'create');
         const body: unknown = opts.file
           ? JSON.parse(readFileSync(opts.file, 'utf-8')) as unknown
           : readResourceFile(RESOURCE, name);

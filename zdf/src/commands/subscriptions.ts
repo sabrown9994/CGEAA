@@ -4,7 +4,7 @@ import { apiPost, apiPut } from '../api/client.js';
 import { readResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
-import { checkDeleteAllowed } from '../helpers/delete-guard.js';
+import { checkDeleteAllowed, checkTenantSupported } from '../helpers/delete-guard.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync } from '../helpers/dependency-graph.js';
@@ -41,6 +41,7 @@ export function register(program: Command): void {
     .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/subscriptions/<name>.json)`)
     .action((name: string, opts: { file?: string }) =>
       runCommand(program, async () => {
+        checkTenantSupported(RESOURCE, 'create');
         const body: unknown = opts.file
           ? JSON.parse(readFileSync(opts.file, 'utf-8')) as unknown
           : readResourceFile(RESOURCE, name);

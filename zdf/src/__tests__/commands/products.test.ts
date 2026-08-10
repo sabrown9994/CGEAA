@@ -53,12 +53,14 @@ describe('zdf pull product', () => {
 });
 
 describe('zdf create product', () => {
-  it('reads local file, posts to catalog endpoint, renames file to Zuora ID', async () => {
+  it('throws and exits non-zero without calling apiPost — tenant-blocked', async () => {
     mockRead.mockReturnValue({ Name: 'Test Product', SKU: 'SKU-001' });
-    mockPost.mockResolvedValue({ success: true, id: 'new-prod-id' });
-    await makeProgram().parseAsync(['node', 'zdf', 'create', 'product', 'my-product']);
-    expect(mockPost).toHaveBeenCalledWith('/v1/catalog/products', expect.any(Object));
-    expect(mockRename).toHaveBeenCalledWith('product', 'my-product', 'new-prod-id');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'create', 'product', 'my-product'])
+    ).rejects.toThrow('exit');
+    expect(mockPost).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
   });
 });
 

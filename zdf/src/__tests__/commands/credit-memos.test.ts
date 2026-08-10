@@ -55,11 +55,11 @@ describe('zdf pull credit-memo', () => {
 });
 
 describe('zdf create credit-memo', () => {
-  it('reads local file, posts to /v1/credit-memos, renames file to Zuora ID', async () => {
+  it('reads local file, posts to invoice-scoped endpoint, renames file to Zuora ID', async () => {
     mockRead.mockReturnValue({ accountId: 'acct-1', invoiceId: 'INV-001' });
     mockPost.mockResolvedValue({ success: true, id: 'new-cm-id' });
-    await makeProgram().parseAsync(['node', 'zdf', 'create', 'credit-memo', 'my-cm']);
-    expect(mockPost).toHaveBeenCalledWith('/v1/credit-memos', { accountId: 'acct-1', invoiceId: 'INV-001' });
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'credit-memo', 'my-cm', '--invoice', 'inv-001']);
+    expect(mockPost).toHaveBeenCalledWith('/v1/credit-memos/invoice/inv-001', { accountId: 'acct-1', invoiceId: 'INV-001' });
     expect(mockRename).toHaveBeenCalledWith('credit-memo', 'my-cm', 'new-cm-id');
   });
 
@@ -68,9 +68,19 @@ describe('zdf create credit-memo', () => {
     mockPost.mockResolvedValue({ success: false, reasons: [{ code: 53100320, message: 'Invalid account' }] });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
     await expect(
-      makeProgram().parseAsync(['node', 'zdf', 'create', 'credit-memo', 'my-cm'])
+      makeProgram().parseAsync(['node', 'zdf', 'create', 'credit-memo', 'my-cm', '--invoice', 'inv-001'])
     ).rejects.toThrow('exit');
     expect(mockRename).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it('throws and exits non-zero when --invoice is missing', async () => {
+    mockRead.mockReturnValue({ accountId: 'acct-1' });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'create', 'credit-memo', 'my-cm'])
+    ).rejects.toThrow('exit');
+    expect(mockPost).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
 });
