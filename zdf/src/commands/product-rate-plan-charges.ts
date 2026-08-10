@@ -4,6 +4,7 @@ import { apiPost, apiPut, apiDelete } from '../api/client.js';
 import { readResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
+import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync } from '../helpers/dependency-graph.js';
 
@@ -79,12 +80,10 @@ export function register(program: Command): void {
     .description('Delete a product rate plan charge in Zuora')
     .action((id: string) =>
       runCommand(program, async () => {
-        const res = await apiDelete<{ Success: boolean; Errors?: Array<{ Code: string; Message: string }> }>(`${OBJECT_ENDPOINT}/${id}`);
-        if (!res.Success) {
-          const msg = res.Errors?.map(e => `${e.Code}: ${e.Message}`).join(', ') ?? 'Unknown error';
-          output.error(`Zuora rejected the product rate plan charge delete.\n  ${msg}`);
-          process.exit(1);
-        }
+        // DELETE /v1/object/product-rate-plan-charge/{id} returns lowercase {success, id}
+        // (same envelope as the sibling /v1/object/product-rate-plan delete — live-verified)
+        const res = await apiDelete<ZuoraWriteResponse>(`${OBJECT_ENDPOINT}/${id}`);
+        assertSuccess(res, 'product rate plan charge delete');
         await resolveAndSync(RESOURCE, id, 'delete');
         output.success(`Product rate plan charge ${id} deleted.`);
       })()

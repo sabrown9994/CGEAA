@@ -99,15 +99,16 @@ describe('zdf create product-rate-plan-charge', () => {
 
 describe('zdf delete product-rate-plan-charge', () => {
   it('deletes the object endpoint and calls resolveAndSync with delete action', async () => {
-    mockDelete.mockResolvedValue({ Success: true });
+    // DELETE /v1/object/product-rate-plan-charge returns lowercase {success,id} — same as PRP delete
+    mockDelete.mockResolvedValue({ success: true, id: 'prpc-001' });
     mockResolve.mockResolvedValue(undefined);
     await makeProgram().parseAsync(['node', 'zdf', 'delete', 'product-rate-plan-charge', 'prpc-001']);
     expect(mockDelete).toHaveBeenCalledWith('/v1/object/product-rate-plan-charge/prpc-001');
     expect(mockResolve).toHaveBeenCalledWith('product-rate-plan-charge', 'prpc-001', 'delete');
   });
 
-  it('exits with error when Zuora returns Success false', async () => {
-    mockDelete.mockResolvedValue({ Success: false, Errors: [{ Code: 'INVALID_ID', Message: 'not found' }] });
+  it('exits with error when Zuora returns success false', async () => {
+    mockDelete.mockResolvedValue({ success: false, reasons: [{ code: 'CANNOT_DELETE', message: 'not found' }] });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
     await expect(
       makeProgram().parseAsync(['node', 'zdf', 'delete', 'product-rate-plan-charge', 'prpc-001'])
