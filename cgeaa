@@ -144,7 +144,8 @@ EXAMPLES:
     cgeaa diff -o BRStaging --direction org-to-org --source-org BRInt -m package.xml
     cgeaa update                                      # Update CGEAA from main branch
     cgeaa update -b beta                              # Update CGEAA from beta branch (test new features)
-    cgeaa zuora auth login --name sandbox --url https://rest.sandbox.na.zuora.com --client-id <id> --client-secret <secret>
+    cgeaa zuora auth add --name sandbox --url https://rest.sandbox.na.zuora.com --client-id <id> --client-secret <secret>
+    cgeaa zuora auth use sandbox
     cgeaa zuora pull account <id>                     # Fetch account + all child records
     cgeaa zuora push product-rate-plan <id>           # Push a product rate plan update
     cgeaa zuora list orders                           # Fetch all orders to local storage

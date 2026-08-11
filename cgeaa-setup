@@ -446,3 +446,41 @@ echo "4. Try running CGEAA:"
 echo "   cgeaa validate --dry-run"
 echo
 echo "For help, run: cgeaa help"
+
+# --- Configure Zuora (ZDF) authentication ---
+if command_exists node && [ -f "/usr/local/share/cgeaa/zdf/dist/zdf.js" ]; then
+    echo
+    echo -e "${YELLOW}--- Zuora (ZDF) Authentication ---${NC}"
+    echo "To use 'cgeaa zuora' commands you need to authenticate with a Zuora environment."
+    echo "You will need: the Zuora REST API base URL, an OAuth client ID, and a client secret."
+    echo "(These come from your Zuora tenant admin or the API Credentials page in the Zuora UI.)"
+    echo
+    read -p "Configure Zuora credentials now? (y/n) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        read -p "Environment name (e.g. intQA, sandbox, production): " ZDF_ENV_NAME
+        ZDF_ENV_NAME="${ZDF_ENV_NAME:-intQA}"
+        read -p "Zuora REST base URL (e.g. https://rest.test.zuora.com): " ZDF_BASE_URL
+        read -p "OAuth client ID: " ZDF_CLIENT_ID
+        read -s -p "OAuth client secret: " ZDF_CLIENT_SECRET
+        echo
+
+        if [ -n "$ZDF_ENV_NAME" ] && [ -n "$ZDF_BASE_URL" ] && [ -n "$ZDF_CLIENT_ID" ] && [ -n "$ZDF_CLIENT_SECRET" ]; then
+            node /usr/local/share/cgeaa/zdf/dist/zdf.js auth add \
+                --name "$ZDF_ENV_NAME" \
+                --url "$ZDF_BASE_URL" \
+                --client-id "$ZDF_CLIENT_ID" \
+                --client-secret "$ZDF_CLIENT_SECRET" && \
+            node /usr/local/share/cgeaa/zdf/dist/zdf.js auth use "$ZDF_ENV_NAME" && \
+            log_success "Zuora environment '$ZDF_ENV_NAME' configured and set as active." || \
+            log_warning "Zuora auth setup failed. Run manually: cgeaa zuora auth add --name <name> --url <url> --client-id <id> --client-secret <secret>"
+        else
+            log_warning "Incomplete credentials — skipping Zuora auth setup."
+            echo "  Run later: cgeaa zuora auth add --name <name> --url <url> --client-id <id> --client-secret <secret>"
+        fi
+    else
+        echo "Skipping Zuora auth setup."
+        echo "  Run later: cgeaa zuora auth add --name <name> --url <url> --client-id <id> --client-secret <secret>"
+        echo "  Then:      cgeaa zuora auth use <name>"
+    fi
+fi
