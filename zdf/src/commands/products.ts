@@ -4,14 +4,13 @@ import { apiGet, apiPost, apiPut, apiDelete } from '../api/client.js';
 import { writeResourceFile, readResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
-import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
+import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync } from '../helpers/dependency-graph.js';
-import { checkTenantSupported } from '../helpers/delete-guard.js';
 
 const RESOURCE = 'product';
 const OBJECT_ENDPOINT = '/v1/object/product';
-const CREATE_ENDPOINT = '/v1/catalog/products';
+const COMMERCE_ENDPOINT = '/commerce/products';
 
 function getOrCreate(program: Command, name: string, description: string): Command {
   return program.commands.find((c) => c.name() === name) ?? program.command(name).description(description);
@@ -38,16 +37,19 @@ export function register(program: Command): void {
 
   createCmd
     .command('product <name>')
-    .description('Create a product [NOT SUPPORTED: POST /v1/catalog/products is disabled on this tenant — see TODO.md]')
+    .description('Create a product in Zuora from a local file (Commerce API)')
     .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/products/<name>.json)`)
     .action((name: string, opts: { file?: string }) =>
       runCommand(program, async () => {
-        checkTenantSupported(RESOURCE, 'create');
         const body: unknown = opts.file
           ? JSON.parse(readFileSync(opts.file, 'utf-8')) as unknown
           : readResourceFile(RESOURCE, name);
-        const res = await apiPost<ZuoraWriteResponse & { id: string }>(`${CREATE_ENDPOINT}`, body);
-        assertSuccess(res, 'product create');
+        // POST /commerce/products returns the product object directly (no {success} envelope)
+        const res = await apiPost<{ id: string } & Record<string, unknown>>(`${COMMERCE_ENDPOINT}`, body);
+        assertReadSuccess(res as Record<string, unknown>, 'product create');
+        if (!res.id) {
+          throw new Error('Zuora product create response is missing an id.');
+        }
         if (!opts.file) renameResourceFile(RESOURCE, name, res.id);
         output.success(`Product created. Zuora ID: ${res.id}`);
       })()
@@ -79,7 +81,7 @@ export function register(program: Command): void {
     .description('Delete a product in Zuora')
     .action((id: string) =>
       runCommand(program, async () => {
-        const res = await apiDelete<ZuoraWriteResponse>(`${CREATE_ENDPOINT}/${id}`);
+        const res = await apiDelete<ZuoraWriteResponse>(`${OBJECT_ENDPOINT}/${id}`);
         assertSuccess(res, 'product delete');
         await resolveAndSync(RESOURCE, id, 'delete');
         output.success(`Product ${id} deleted.`);
