@@ -7,7 +7,6 @@ import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync } from '../helpers/dependency-graph.js';
-import { checkTenantSupported } from '../helpers/delete-guard.js';
 
 const RESOURCE = 'invoice';
 const ENDPOINT = '/v1/invoices';
@@ -37,11 +36,10 @@ export function register(program: Command): void {
 
   createCmd
     .command('invoice <name>')
-    .description('Create a standalone invoice [NOT SUPPORTED: Finance settings not configured on this tenant — see TODO.md]')
+    .description('Create a standalone invoice in Zuora from a local file')
     .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/invoices/<name>.json)`)
     .action((name: string, opts: { file?: string }) =>
       runCommand(program, async () => {
-        checkTenantSupported(RESOURCE, 'create');
         const body: unknown = opts.file
           ? JSON.parse(readFileSync(opts.file, 'utf-8')) as unknown
           : readResourceFile(RESOURCE, name);
@@ -71,6 +69,13 @@ export function register(program: Command): void {
     .description('Delete an invoice in Zuora')
     .action((id: string) =>
       runCommand(program, async () => {
+        output.info(`Cancelling invoice ${id} before delete...`);
+        const cancelRes = await apiPut<ZuoraWriteResponse>(`${ENDPOINT}/${id}/cancel`, {});
+        if (!cancelRes.success) {
+          const reasons = cancelRes.reasons ?? cancelRes.errors ?? [];
+          const detail = reasons.length ? reasons.map((r) => r.message).join('; ') : 'unknown reason';
+          output.warn(`Could not cancel invoice ${id} before delete: ${detail} — attempting delete anyway.`);
+        }
         const res = await apiDelete<ZuoraWriteResponse & { jobId?: string }>(`${ENDPOINT}/${id}`);
         assertSuccess(res, 'invoice delete');
         if (res.jobId) {

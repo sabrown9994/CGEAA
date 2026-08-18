@@ -19,11 +19,6 @@ const TENANT_BLOCKED: Record<string, Record<string, string>> = {
       'Subscriptions API is disabled because Orders is enabled on this tenant. Use the Orders ' +
       "API to manage subscription lifecycle. See zdf/TODO.md under 'Tenant-config limitations' " +
       'for details.',
-    invoice:
-      'create invoice is not currently supported on this Zuora environment. Standalone invoice ' +
-      'creation requires Finance > Manage Non-Subscription Items settings (revenue recognition ' +
-      "accounting codes) which are not configured. See zdf/TODO.md under 'Tenant-config " +
-      "limitations' for details.",
   },
 };
 

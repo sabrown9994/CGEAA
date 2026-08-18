@@ -24,8 +24,8 @@ describe('checkTenantSupported', () => {
     expect(() => checkTenantSupported('subscription', 'create')).toThrow('not currently supported');
   });
 
-  it('throws for create invoice', () => {
-    expect(() => checkTenantSupported('invoice', 'create')).toThrow('not currently supported');
+  it('does not throw for create invoice (now supported — accounting fields required in body)', () => {
+    expect(() => checkTenantSupported('invoice', 'create')).not.toThrow();
   });
 
   it('does not throw for create account', () => {

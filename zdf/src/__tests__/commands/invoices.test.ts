@@ -55,15 +55,13 @@ describe('zdf pull invoice', () => {
 });
 
 describe('zdf create invoice', () => {
-  it('throws and exits non-zero without calling apiPost — tenant-blocked', async () => {
-    mockRead.mockReturnValue({ accountId: 'acct-1', invoiceDate: '2026-08-06' });
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
-    await expect(
-      makeProgram().parseAsync(['node', 'zdf', 'create', 'invoice', 'my-invoice'])
-    ).rejects.toThrow('exit');
-    expect(mockPost).not.toHaveBeenCalled();
-    expect(mockRename).not.toHaveBeenCalled();
-    exitSpy.mockRestore();
+  it('posts the file body verbatim to /v1/invoices and renames the local file to res.id', async () => {
+    const body = { accountNumber: 'A00000001', invoiceDate: '2026-08-18', invoiceItems: [{ amount: 10 }] };
+    mockRead.mockReturnValue(body);
+    mockPost.mockResolvedValue({ success: true, id: 'INV-1' });
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'invoice', 'my-invoice']);
+    expect(mockPost).toHaveBeenCalledWith('/v1/invoices', body);
+    expect(mockRename).toHaveBeenCalledWith('invoice', 'my-invoice', 'INV-1');
   });
 });
 
@@ -78,12 +76,35 @@ describe('zdf push invoice', () => {
 });
 
 describe('zdf delete invoice', () => {
-  it('calls delete and resolveAndSync with delete', async () => {
+  it('cancels the invoice, then deletes it, then resolves and syncs', async () => {
+    mockPut.mockResolvedValue({ success: true });
     mockDelete.mockResolvedValue({ success: true });
     mockResolve.mockResolvedValue(undefined);
+    const callOrder: string[] = [];
+    mockPut.mockImplementation(async () => { callOrder.push('cancel'); return { success: true }; });
+    mockDelete.mockImplementation(async () => { callOrder.push('delete'); return { success: true }; });
+    mockResolve.mockImplementation(async () => { callOrder.push('resolveAndSync'); return undefined; });
+
     await makeProgram().parseAsync(['node', 'zdf', 'delete', 'invoice', 'INV-001']);
+
+    expect(mockPut).toHaveBeenCalledWith('/v1/invoices/INV-001/cancel', {});
     expect(mockDelete).toHaveBeenCalledWith('/v1/invoices/INV-001');
     expect(mockResolve).toHaveBeenCalledWith('invoice', 'INV-001', 'delete');
+    expect(callOrder).toEqual(['cancel', 'delete', 'resolveAndSync']);
+  });
+
+  it('warns but still deletes when cancel fails (already-cancelled invoice)', async () => {
+    mockPut.mockResolvedValue({ success: false, reasons: [{ code: 123, message: 'already cancelled' }] });
+    mockDelete.mockResolvedValue({ success: true });
+    mockResolve.mockResolvedValue(undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await makeProgram().parseAsync(['node', 'zdf', 'delete', 'invoice', 'INV-001']);
+
+    expect(mockPut).toHaveBeenCalledWith('/v1/invoices/INV-001/cancel', {});
+    expect(mockDelete).toHaveBeenCalledWith('/v1/invoices/INV-001');
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });
 
@@ -92,6 +113,7 @@ describe('zdf delete invoice — async (jobId returned)', () => {
   afterEach(() => { vi.useRealTimers(); });
 
   it('polls async-jobs endpoint until Completed', async () => {
+    mockPut.mockResolvedValue({ success: true });
     mockDelete.mockResolvedValue({ success: true, jobId: 'job-123' });
     mockGet
       .mockResolvedValueOnce({ jobStatus: 'Processing' })
