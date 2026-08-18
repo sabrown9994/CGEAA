@@ -38,11 +38,18 @@ export function register(program: Command): void {
     .command('invoice <name>')
     .description('Create a standalone invoice in Zuora from a local file')
     .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/invoices/<name>.json)`)
-    .action((name: string, opts: { file?: string }) =>
+    .option('--post', 'create the invoice in Posted status (a Posted invoice cannot be deleted via zdf on this tenant)')
+    .action((name: string, opts: { file?: string; post?: boolean }) =>
       runCommand(program, async () => {
         const body: unknown = opts.file
           ? JSON.parse(readFileSync(opts.file, 'utf-8')) as unknown
           : readResourceFile(RESOURCE, name);
+        if (opts.post && typeof body === 'object' && body !== null) {
+          (body as Record<string, unknown>).status = 'Posted';
+        }
+        if (opts.post) {
+          output.warn('--post creates the invoice in Posted status; a Posted invoice cannot be cancelled or deleted via zdf on this tenant.');
+        }
         const res = await apiPost<ZuoraWriteResponse & { id: string }>(ENDPOINT, body);
         assertSuccess(res, 'invoice create');
         if (!opts.file) renameResourceFile(RESOURCE, name, res.id);
@@ -69,6 +76,15 @@ export function register(program: Command): void {
     .description('Delete an invoice in Zuora')
     .action((id: string) =>
       runCommand(program, async () => {
+        const current = await apiGet<{ status?: string; success?: boolean }>(`${ENDPOINT}/${id}`);
+        if (current.success === false) {
+          throw new Error(`Invoice ${id} not found.`);
+        }
+        if (current.status === 'Posted') {
+          throw new Error(
+            `Invoice ${id} has status Posted and cannot be deleted on this tenant (only Draft invoices can be cancelled and deleted). Reverse a posted invoice with a credit memo instead.`
+          );
+        }
         output.info(`Cancelling invoice ${id} before delete...`);
         const cancelRes = await apiPut<ZuoraWriteResponse>(`${ENDPOINT}/${id}/cancel`, {});
         if (!cancelRes.success) {
