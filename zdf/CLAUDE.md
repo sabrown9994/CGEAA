@@ -102,9 +102,10 @@ endpoint actually returns before choosing a guard.
 
 `checkTenantSupported(resource, 'create')` is called at the top of the action body (before
 any network call) for creates that are blocked by tenant configuration on intQA. Currently
-blocked: `create subscription`, `create invoice`. (`create product` was previously blocked but
-is now **supported** via the Commerce API — see above.) The guard throws immediately with a
-clear message directing the user to `TODO.md`.
+blocked: `create subscription`. (`create product` and `create invoice` were previously blocked
+but are now **supported** — product via the Commerce API, invoice by passing the accounting
+fields in the body; see above.) The guard throws immediately with a clear message directing the
+user to `TODO.md`.
 
 `checkDeleteAllowed(resource)` blocks `delete subscription` — no Zuora DELETE endpoint
 exists for subscriptions at all (Zuora API limitation, not tenant-specific).
@@ -140,11 +141,29 @@ The bare endpoint is unreliable on this tenant. `--invoice <invoiceId>` is requi
 omitting it throws before any network call. Each line item must include `skuName`
 (live-verified tenant requirement).
 
-### Async invoice delete
+### Invoice create / delete
 
-`DELETE /v1/invoices/{id}` returns a `jobId`. The CLI polls
-`GET /v1/async-jobs/{jobId}` every 2 seconds (max 30 attempts) until
-`jobStatus === 'Completed'`.
+**Create** (`create invoice`): `POST /v1/invoices` with a **flat single-invoice object**
+(`{ accountNumber, invoiceDate, invoiceItems: [...] }` — NOT an `invoices: [...]` wrapper). The
+success response is a flat invoice object that includes `success: true` AND `id` → guarded with
+`assertSuccess`, then read `res.id`. The body is posted **verbatim** from the local file. The
+tenant does not default the accounting settings, so **each invoice item must carry** (live-verified):
+`amount` (the amount field is `amount`, not `chargeAmount`/`unitPrice`); date fields in
+`yyyy-MM-dd HH:mm:ss` format; a `revenueRecognitionRuleName` (e.g. `"Recognize upon invoicing"`);
+and 8 accounting codes (`deferredRevenueAccountingCode`, `recognizedRevenueAccountingCode`,
+`unbilledReceivablesAccountingCode`, `contractAssetAccountingCode`, `contractLiabilityAccountingCode`,
+`contractRecognizedRevenueAccountingCode`, `adjustmentLiabilityAccountingCode`,
+`adjustmentRevenueAccountingCode`). This is the caller's responsibility in the JSON file — the CLI
+injects nothing.
+
+**Delete** (`delete invoice`): a created invoice is in **Draft** status, and Zuora only deletes
+Cancelled/Split invoices (`50000020: Only Cancelled or Split invoices can be deleted`). So delete is
+**two steps**: (1) `PUT /v1/invoices/{id}/cancel` — on `success:false` it warns and continues (an
+already-cancelled invoice still deletes); (2) `DELETE /v1/invoices/{id}`. The DELETE returns a
+`jobId`, but that job is **NOT** queryable at `/v1/async-jobs/{jobId}` (live-confirmed: always
+`success:false` "Cannot find response for job"). So completion is confirmed by **polling the invoice
+resource for disappearance** — `GET /v1/invoices/{id}` every 2s (max 30) until it returns
+`success: false` ("Cannot find entity"). Do NOT reintroduce async-jobs polling for invoices.
 
 ### order push body unwrapping
 
@@ -224,7 +243,7 @@ Use `--no-dependency` to skip all traversal. Essential for large accounts.
 | product | ✓ | ✓ | ✓ (Commerce API `POST /commerce/products`) | ✓ (`DELETE /v1/object/product/{id}`) | |
 | product-rate-plan | ✓ | ✓ | ✓ (`POST /v1/object/product-rate-plan`) | ✓ | |
 | product-rate-plan-charge | ✓ | ✓ | ✓ (requires `POBIdentifier__c` + `ProductRatePlanChargeTierData`) | ✓ | |
-| invoice | ✓ | ✓ | ✗ blocked (Finance settings not configured) | ✓ async | |
+| invoice | ✓ | ✓ | ✓ (`POST /v1/invoices`; accounting fields required in body) | ✓ (cancel-then-delete; disappearance poll) | |
 | credit-memo | ✓ | ✓ | ✓ (`--invoice <id>` required; `skuName` per item) | ✓ (Draft only) | |
 | debit-memo | ✓ | ✓ | ✓ (`--invoice <id>` required; `skuName` per item) | ✓ (Canceled only) | |
 | bill-run | ✓ | re-fetch (no PUT) | ✓ (⚠ executes real billing) | ✓ (Canceled/Error only) | |
@@ -234,6 +253,59 @@ Use `--no-dependency` to skip all traversal. Essential for large accounts.
 
 See `TODO.md` "Tenant-config limitations" for details on the ✗ blocked entries and what
 would need to change to enable them.
+
+## sync-diff feature (implementation context)
+
+`zdf sync-diff` is the **next feature to build** — full spec in `TODO.md` → "🆕 PROPOSED
+FEATURE … `zdf sync-diff`", user-facing CLI contract in `README.md` → "sync-diff (CI/CD)".
+It maps a `git diff --name-status` of the committed `zdf-output/` tree to zdf create/push/delete
+actions for the GitHub↔Zuora CI/CD pipeline. This section is the wiring guide; the spec is
+authoritative for behavior.
+
+**Reuse, do not reinvent — the pieces already exist:**
+- `RESOURCE_SUBFOLDERS` (`src/constants.ts`) — resource → output subfolder. Build the **reverse
+  map** (`accounts`→`account`, `product-rate-plans`→`product-rate-plan`, …) for path→resource.
+- `checkTenantSupported(resource, 'create')` and `checkDeleteAllowed(resource)`
+  (`src/helpers/delete-guard.ts`) — call these to decide op eligibility. They already throw with
+  a clear message for tenant-blocked creates (currently only `create subscription`) and delete
+  subscription; catch and turn into **skip + warn** (never fail the run).
+- `getOutputDir()` / `resolveFilePath()` (`src/helpers/file-io.ts`) — resolve the zdf-output root
+  (honors `ZDF_OUTPUT_DIR`) and per-resource paths; use for the `--root` default and for finding
+  the on-disk file to read for a create/push.
+- `resolveAndSync(resource, id, op)` + `setNoDependency(true)` (`src/helpers/dependency-graph.ts`)
+  and the existing per-resource command bodies — sync-diff MUST run every action with
+  `--no-dependency` semantics.
+- `output.success/warn/error` (`src/helpers/output.ts`) — for plan/apply logging.
+- `runCommand` (`src/helpers/command-runner.ts`) — the global-flag + error-to-exit-code wrapper;
+  register `sync-diff` the same way as other commands (`getOrCreate`, `runCommand`).
+
+**Filename → id gotchas (must handle):**
+- `order`: filename IS the order number (`O-01339581`) — that's the identifier the order command
+  uses, not a UUID.
+- `billing-template`: file is written as `<sanitizedName>_<id>.json` (see
+  `billing-templates.ts` / `sanitizeNameForFilename`); the id is the segment **after the last
+  `_`** (Zuora ids contain no `_`; names may).
+- `data-query`: **excluded** from sync (job artifact, not a config object — no push endpoint).
+
+**Ordering:** static resource precedence (parents-first for create/push, reversed for delete) —
+see the spec for the exact list. Do NOT try to resolve the live dependency graph for ordering.
+
+**Execution model:** either extract each command's action body into an exported in-process
+`run<Resource><Op>()` (preferred, testable) or spawn `node dist/zdf.js <op> <resource> <id>
+--no-dependency` as a child process (acceptable). Same guards either way; capture per-action
+pass/fail for the exit-code accumulator (exit 1 iff an *eligible* action fails; skips/warns
+never fail).
+
+**Suggested files:** `src/helpers/sync-diff.ts` (pure, I/O-free: parse name-status, path→action
+resolution, reverse-subfolder map, precedence, eligibility) + `src/commands/sync-diff.ts`
+(command registration, stdin/`--diff-file` read, text/markdown/json rendering, executor).
+Register in `bin/zdf.ts`.
+
+**Testing:** unit-test the pure `sync-diff.ts` functions exhaustively (mapping, status decode
+incl. rename→delete+create, eligibility, ordering) with no mocks; test the command with the
+usual `vi.hoisted` mocks for the executor/child-process and `process.exit` (see below). Live
+validation: `--dry-run` is read-only (safe on intQA); `--apply` uses the self-contained
+create-then-delete + `TEST ZDF POC` method (see `TODO.md`).
 
 ## Test conventions
 

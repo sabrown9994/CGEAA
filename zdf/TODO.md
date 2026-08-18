@@ -27,6 +27,145 @@ the "Required development flow" section at the end of this file:
 
 ---
 
+## 🆕 PROPOSED FEATURE (2026-08-18) — `zdf sync-diff`: git-diff → zdf actions for CI/CD
+
+> **Status: NOT STARTED. This is the next feature to build.** Spec is complete and approved by
+> the product owner. Implement it via the "Required development flow" above (multi-agent,
+> adversarial tester, live intQA, Vitest). Read this whole section before starting; see
+> `CLAUDE.md` → "sync-diff feature (implementation context)" for where it hooks into existing
+> helpers, and `README.md` → "sync-diff (CI/CD)" for the user-facing CLI contract.
+
+### Why
+ZDF's primary purpose is a CI/CD pipeline between GitHub and Zuora. The `zdf-output/` tree is
+committed to git and treated as the source of truth. When a commit changes a file under
+`zdf-output/`, the pipeline should fire the **appropriate zdf action** to reconcile that one
+object in Zuora. This feature is the engine that maps a `git diff` to zdf commands. A GitHub
+Actions workflow (built later, in the **FinSys** repo — NOT here) is the consumer.
+
+### What to build — a new `sync-diff` subcommand
+A planner/executor that takes a set of changed `zdf-output/` files (as `git diff --name-status`
+output) and, per file, resolves a **resource + id + operation**, then either prints the plan
+(dry-run) or executes it. Keep ZDF **git-agnostic**: the caller computes the diff and pipes it
+in; the subcommand does NOT shell out to git (this keeps it unit-testable without a repo).
+
+**CLI surface** (register like every other command via `getOrCreate`):
+```
+zdf sync-diff [--dry-run | --apply]
+              [--diff-file <path>]           # git diff --name-status output; default: read stdin
+              [--format text|markdown|json]  # default text; markdown = PR-comment table
+              [--root <dir>]                 # zdf-output root; default resolves via getOutputDir()
+```
+- `--dry-run` (DEFAULT): resolve + print the plan. **No network calls.** Exit 0 unless an
+  internal/parse error.
+- `--apply`: execute each planned+eligible action in dependency order (see Ordering). Accumulate
+  results; exit 1 if any eligible action fails (skips/warns never fail the run) — mirror the
+  error-accumulator pattern in FinSys `zuora-deploy-all.yml`.
+
+### Mapping rules (file path → resource / id / operation)
+1. Consider only paths inside the zdf-output root under a known subfolder in
+   `RESOURCE_SUBFOLDERS` (`src/constants.ts`). Anything else → warn + ignore.
+2. **subfolder → resource**: reverse of `RESOURCE_SUBFOLDERS` (e.g. `accounts`→`account`,
+   `product-rate-plans`→`product-rate-plan`, `bill-runs`→`bill-run`). Build the reverse map once.
+3. **id from filename** (strip `.json`):
+   - Default: basename without extension is the id.
+   - `order`: basename is the **order number** (e.g. `O-01339581`) — that IS the identifier
+     `resolveAndSync`/the order command uses.
+   - `billing-template`: filename is `<name>_<id>.json` → the id is the substring **after the
+     last `_`** (names can contain `_`; the Zuora id has none). Matches how
+     `billing-templates.ts` writes files.
+   - `data-query`: **EXCLUDE entirely** — these are job artifacts, not config objects (no push
+     endpoint; create needs a `.sql`; delete cancels a job). Warn + skip.
+4. **git status → operation**: `A`→create, `M`→push, `D`→delete. `R<score>` (rename) →
+   decompose into delete(old path) + create(new path). `C` (copy) → create(new path). Parse the
+   two-column / three-column name-status format accordingly.
+
+### Eligibility / guardrails (all approved) — skip+warn, never hard-fail
+- Reuse the existing guards: `checkTenantSupported(resource, 'create')` and
+  `checkDeleteAllowed(resource)` (`src/helpers/delete-guard.ts`). If a mapped op is blocked
+  (tenant-config create for product/subscription/invoice; delete subscription) → **skip + warn**,
+  do not fail the run.
+- **Exclude `create bill-run` explicitly** — it executes REAL billing (generates invoices/memos).
+  Even though the CLI supports it, `sync-diff` must never fire it automatically. Skip + warn.
+- `push bill-run` is a re-fetch no-op (no PUT endpoint) → skip + warn.
+- `data-query` (any op) → excluded (see mapping rule 3).
+- **All executed ops run with `--no-dependency` semantics** — object only, no child re-pull, so
+  local files are never rewritten (avoids the `github-actions[bot]` commit loop). This was an
+  explicit product decision.
+
+### Ordering (Full CRUD is in scope: A→create, M→push, D→delete)
+Use a **static, documented resource precedence** (simplest deterministic option — no need to
+resolve the live graph):
+- **create / push order (parents first):** account, contact, product, product-rate-plan,
+  product-rate-plan-charge, order, order-line-item, subscription, bill-run, invoice, credit-memo,
+  debit-memo, workflow, billing-template.
+- **delete order:** the exact reverse (children first).
+Within a resource, order is stable/insertion order.
+
+### Execution model
+Executed actions MUST reuse existing per-resource command logic and its guards — do not
+re-implement endpoints. Two acceptable implementations (implementer's choice, state which in the
+PR):
+- **Preferred:** extract each command's action body into an exported `run<Resource><Op>()`
+  (or a small dispatch table) and call it in-process with `noDependency = true`.
+- **Acceptable fallback:** spawn the compiled CLI as a child process
+  (`node dist/zdf.js <op> <resource> <id> --no-dependency`), inheriting auth env vars, and
+  collect exit codes.
+Either way: same guards, same `--no-dependency`, per-action pass/fail captured for the summary.
+
+### Output
+- `--format markdown`: a table for the PR comment — columns
+  `file | status | resource | id | op | eligible | reason` — plus a summary line
+  (`N to create, N to push, N to delete, N skipped`).
+- `--format text` (default): human-readable log lines.
+- `--format json`: machine-readable plan array (for other tooling).
+
+### Suggested file layout (match existing conventions)
+- `src/helpers/sync-diff.ts` — **pure functions**: `parseNameStatus(str)`,
+  `resolveFileToAction(path)`, `planFromDiff(entries)`, the reverse-subfolder map, precedence
+  arrays, eligibility check. No I/O — fully unit-testable.
+- `src/commands/sync-diff.ts` — command registration, stdin/`--diff-file` reading, format
+  rendering, and the executor (in-process runners or child-process spawn). Register it in
+  `bin/zdf.ts`.
+
+### Tests required (Vitest, `vi.hoisted` mocks — see CLAUDE.md "Test conventions")
+- Path mapping: every subfolder→resource; billing-template `<name>_<id>`; order-number id;
+  unknown subfolder ignored; `data-query` excluded.
+- Status mapping: A/M/D and rename→delete+create, copy→create; malformed lines.
+- Eligibility: tenant-blocked create skip+warn; delete subscription skip+warn; `create bill-run`
+  excluded; `push bill-run` skipped.
+- Ordering: creates parent-first, deletes child-first, mixed diff sorted correctly.
+- Dry-run: prints plan, makes **zero** network/exec calls; markdown table shape.
+- Apply: invokes runners/spawns in planned order; exit-code accumulation (1 iff an eligible
+  action fails; skips don't fail).
+
+### Live validation (follow the repo's existing contract)
+- `sync-diff --dry-run` is fully **read-only** → safe to run live against intQA.
+- For `--apply`, use the **self-contained create-then-delete** method with a `TEST ZDF POC`
+  marker (see "Push side (self-contained validation method)" below) — build a tiny diff that
+  creates a throwaway record, applies it, then a diff that deletes it. Never mutate pre-existing
+  tenant data.
+
+### Consumer contract — GitHub Actions workflow (built LATER in FinSys, documented here so the CLI I/O matches)
+The FinSys repo (`cargurus-ea/FinTech`) will get a new `.github/workflows/zdf-deploy.yml`,
+**separate** from the existing `zuora-deploy-all.yml` (which deploys the other `Zuora/**`
+template folders via the Deployment Manager API and does NOT touch `zdf-output/`). Approved shape:
+- **Triggers:** `pull_request` into `qa`/`staging`/`main` → **dry-run** + post the markdown plan
+  as a PR comment. `push` to `qa`/`staging`/`main` → **apply**.
+- **Path scope:** `Zuora/zdf-output/**`.
+- **Env mapping (reuse existing secrets):** qa/staging → sandbox (`rest.test.zuora.com`),
+  main → prod (`rest.na.zuora.com`); map the branch's `ZUORA_*_CLIENT_ID/SECRET` secrets onto
+  zdf's env-var auth (`ZDF_CLIENT_ID` / `ZDF_CLIENT_SECRET` / `ZDF_BASE_URL` — see CLAUDE.md
+  "Authentication — environment variables").
+- **Guardrails:** PRs touching `Zuora/zdf-output/**` must carry the existing `allow-zuora-edits`
+  label (same gate as `zuora-guard.yml`); the **main/prod apply job is wrapped in a GitHub
+  Environment (`zuora-production`) requiring manual reviewer approval**; keep the
+  `if: github.actor != 'github-actions[bot]'` loop guard.
+- The workflow computes `git diff --name-status <base> <head> -- Zuora/zdf-output` and pipes it
+  to `zdf sync-diff`. **This CLI feature is the deliverable; the workflow itself is out of scope
+  for this task and will be authored in FinSys after this lands.**
+
+---
+
 ## COMPLETED (2026-07-30) — all verified live-PASS against intQA
 
 ### ✅ P0 — Error responses no longer written to disk as "success"
@@ -152,7 +291,7 @@ record (marked `TEST ZDF POC` where applicable) and was torn down after confirma
 | product-rate-plan-charge | PASS | — | PASS (cascade) | requires `ProductRatePlanId` + `POBIdentifier__c` + `ProductRatePlanChargeTierData`; delete is cascade via parent PRP deletion, not a direct DELETE call |
 | billing-template | PASS | PASS | PASS | full cycle PASS: create / confirm / push / delete / confirm-deletion all live-verified |
 | bill-run | PASS | PASS (re-fetch) | BLOCKED (business rule) | create + pull + push-as-refetch verified; delete blocked because the created bill-run reached Completed status — Zuora only allows deleting Pending/Canceled bill-runs (not a ZDF defect) |
-| invoice | BLOCKED-BY-TENANT-CONFIG (CLI-guarded) | N/A | N/A | `POST /v1/invoices` requires Finance > Manage Non-Subscription Items settings (revenue recognition accounting codes) not configured on intQA; `zdf create invoice` now fails fast with `checkTenantSupported` before any network call |
+| invoice | ✅ RESOLVED (2026-08-18) | PASS | PASS (cancel-then-delete) | `create` via `POST /v1/invoices` (flat body; accounting fields supplied per item — the "pass the fields" path, not a wall). `delete` cancels first then deletes, confirming via invoice-disappearance poll (async-jobs endpoint doesn't track the job). Full create→delete cycle live-verified on intQA. See "Resolved" note below. |
 | credit-memo | invoice-scoped endpoint | N/A | N/A | bare `POST /v1/credit-memos` is unreliable on this tenant (live-verified); create now requires `--invoice <invoiceId>` and posts to `POST /v1/credit-memos/invoice/{invoiceKey}` |
 | debit-memo | invoice-scoped endpoint | N/A | N/A | same as credit-memo: create now requires `--invoice <invoiceId>` and posts to `POST /v1/debit-memos/invoice/{invoiceKey}` |
 | product | ✅ RESOLVED (Commerce API, 2026-08-18) | — | PASS | `create product` now uses `POST /commerce/products` (legacy `/v1/catalog/products` was 405-disabled); delete uses `DELETE /v1/object/product/{id}`. Full create→pull→delete cycle live-verified on intQA. See "Resolved" note below. |
@@ -229,16 +368,20 @@ confusing Zuora error.
 - **CLI behavior:** `zdf delete subscription` throws immediately, before any network call,
   with a message pointing here.
 
-### `create invoice`
+### `create invoice` — ✅ RESOLVED (2026-08-18)
 - **What it is:** Standalone invoice creation (independent of a bill run).
-- **Root cause:** `POST /v1/invoices` requires Finance > Manage Non-Subscription Items
-  settings (revenue recognition accounting codes) to be configured; they are not configured
-  on this tenant.
-- **What would need to change:** A Zuora admin would need to configure Manage
-  Non-Subscription Items / the relevant revenue recognition accounting codes in Finance
-  settings.
-- **CLI behavior:** `zdf create invoice` throws immediately, before any network call, with a
-  message pointing here.
+- **Previously blocked because:** `POST /v1/invoices` returned `68000022` — the tenant does not
+  default the Finance > Manage Non-Subscription Items accounting settings.
+- **Resolution:** the `68000022` error explicitly says "*either pass the fields or configure the
+  defaults*." We reached that accounting-validation step (not a permission/403), so the OAuth
+  client already has standalone-invoice permission — the only gap was the accounting fields.
+  `create invoice` now posts the body verbatim (guard removed); the **caller supplies** the
+  accounting fields per invoice item (`revenueRecognitionRuleName` + 8 accounting codes, plus
+  `amount` and `yyyy-MM-dd HH:mm:ss` date fields). Full create→cancel→delete cycle live-verified
+  on intQA. See `CLAUDE.md` → "Invoice create / delete" for the reference body.
+- **Also fixed:** `delete invoice` now cancels the (Draft) invoice before deleting, and confirms
+  completion by polling the invoice resource for disappearance (the DELETE `jobId` is not trackable
+  via `/v1/async-jobs/{jobId}` — that endpoint returns "Cannot find response for job").
 
 ---
 
@@ -254,9 +397,10 @@ confusing Zuora error.
   landing exactly at page end).
 
 ### Known tenant-config limitations (intQA, discovered 2026-08-07)
-- `create invoice` (standalone `POST /v1/invoices`) — BLOCKED: requires Finance > Manage
-  Non-Subscription Items settings (revenue recognition accounting codes) not configured on
-  intQA. Framework-correct; not a code defect.
+- `create invoice` (standalone `POST /v1/invoices`) — ✅ RESOLVED (2026-08-18): the tenant doesn't
+  default the accounting settings, but the API accepts them per invoice item ("pass the fields"
+  path). Create now posts the caller-supplied accounting fields; `delete invoice` cancels-then-deletes.
+  Live-verified. No longer blocked.
 - `create subscription` — BLOCKED: `53000010: Subscription api cannot be used when order is
   enabled.` This tenant uses the Orders API for subscription creation instead.
 - `create product` — ✅ RESOLVED (2026-08-18): the legacy `/v1/catalog/products` is 405-disabled,
