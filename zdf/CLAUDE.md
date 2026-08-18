@@ -52,15 +52,37 @@ product rate plan charges. The legacy `/v1/object/` endpoints must be used for a
 
 | Resource | pull | push / create / delete |
 |----------|------|------------------------|
-| product | `GET /v1/object/product/{id}` | push: `PUT /v1/object/product/{id}` · create: blocked (tenant config) · delete: `DELETE /v1/catalog/products/{id}` |
+| product | `GET /v1/object/product/{id}` | push: `PUT /v1/object/product/{id}` · create: `POST /commerce/products` (Commerce API — see below) · delete: `DELETE /v1/object/product/{id}` |
 | product-rate-plan | `GET /v1/object/product-rate-plan/{id}` | push: `PUT /v1/object/product-rate-plan/{id}` · create: `POST /v1/object/product-rate-plan` · delete: `DELETE /v1/object/product-rate-plan/{id}` |
 | product-rate-plan-charge | `GET /v1/object/product-rate-plan-charge/{id}` | push: `PUT /v1/object/product-rate-plan-charge/{id}` · create: `POST /v1/object/product-rate-plan-charge` · delete: `DELETE /v1/object/product-rate-plan-charge/{id}` |
 
 The object endpoints return **PascalCase** field names (`Name`, `ProductId`,
 `EffectiveStartDate`). The `filterUpdatableFields` allowlists are written in PascalCase.
-The create/push response uses `{ Success: boolean; Errors?: [...] }` (PascalCase) — handled
+The push response uses `{ Success: boolean; Errors?: [...] }` (PascalCase) — handled
 inline in each command (not via `assertSuccess` which checks lowercase `success`).
 The delete response returns lowercase `{ success, id }` — handled via `assertSuccess`.
+
+### Product create — Commerce API (not the legacy catalog endpoint)
+
+The legacy `POST /v1/catalog/products` is **disabled (405)** on the intQA tenant. `create product`
+instead uses the modern **Commerce API** `POST /commerce/products`, which creates the product, its
+plan, and its charge in a single call:
+- **Body is snake_case** (`start_date`, `charge_model`, `end_date_condition`, `bill_cycle`, …) — a
+  distinct schema from the legacy PascalCase object model. It is posted **verbatim** from the local
+  file; `filterUpdatableFields` is NOT applied.
+- **Response is the product object directly** — HTTP 200 with `{ id, state, plans: [{ id,
+  productRatePlanCharges: [{ id }] }] }` and **no `success` field**. Guarded with
+  `assertReadSuccess` (like `contact` create), then read the lowercase `res.id`.
+- **Tenant requires** (live-verified 2026-08-14): `pricing` as an object keyed by currency
+  (`{ "flatAmounts": { "USD": 10 } }`, not an array); a full `accounting` block with all 8 finance
+  accounts non-blank (`accounting_code`, `deferred_revenue_account`, `recognized_revenue_account`,
+  `unbilled_receivables_account`, `contract_asset_account`, `contract_liability_account`,
+  `contract_recognized_revenue_account`, `adjustment_liability_account`, `adjustment_revenue_account`);
+  and required custom fields (product: `item__c`, `productfamily__c`; charge: `pobidentifier__c`,
+  `pobname__c`). The caller supplies these in the local JSON file. Valid accounting-code names and
+  custom-field values are tenant-specific (query `/v1/accounting-codes` and existing products).
+- **Delete** uses the legacy `DELETE /v1/object/product/{id}` (live-verified to remove a
+  Commerce-created product) — the Commerce API has no delete endpoint.
 
 ### Response envelope patterns
 
@@ -80,8 +102,9 @@ endpoint actually returns before choosing a guard.
 
 `checkTenantSupported(resource, 'create')` is called at the top of the action body (before
 any network call) for creates that are blocked by tenant configuration on intQA. Currently
-blocked: `create product`, `create subscription`, `create invoice`. The guard throws
-immediately with a clear message directing the user to `TODO.md`.
+blocked: `create subscription`, `create invoice`. (`create product` was previously blocked but
+is now **supported** via the Commerce API — see above.) The guard throws immediately with a
+clear message directing the user to `TODO.md`.
 
 `checkDeleteAllowed(resource)` blocks `delete subscription` — no Zuora DELETE endpoint
 exists for subscriptions at all (Zuora API limitation, not tenant-specific).
@@ -198,7 +221,7 @@ Use `--no-dependency` to skip all traversal. Essential for large accounts.
 | subscription | ✓ | ✓ | ✗ blocked (Orders enabled — use Orders API) | ✗ blocked (no Zuora DELETE endpoint) | |
 | order | ✓ | ✓ (Draft/Scheduled only) | ✓ | ✓ | ✓ |
 | order-line-item | ✓ | ✓ | | | |
-| product | ✓ | ✓ | ✗ blocked (tenant config — 405) | ✓ | |
+| product | ✓ | ✓ | ✓ (Commerce API `POST /commerce/products`) | ✓ (`DELETE /v1/object/product/{id}`) | |
 | product-rate-plan | ✓ | ✓ | ✓ (`POST /v1/object/product-rate-plan`) | ✓ | |
 | product-rate-plan-charge | ✓ | ✓ | ✓ (requires `POBIdentifier__c` + `ProductRatePlanChargeTierData`) | ✓ | |
 | invoice | ✓ | ✓ | ✗ blocked (Finance settings not configured) | ✓ async | |

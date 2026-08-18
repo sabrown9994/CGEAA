@@ -207,14 +207,24 @@ zdf list billing-templates
 |-----------|----------|-------|
 | pull | `GET /v1/object/product/{id}` | Legacy object endpoint; returns PascalCase field names |
 | push | `PUT /v1/object/product/{id}` | Legacy object endpoint; response uses `Success`/`Errors` (PascalCase) |
-| create | `POST /v1/catalog/products` | not supported (tenant config — see TODO.md) |
-| delete | `DELETE /v1/catalog/products/{id}` | Modern catalog endpoint |
+| create | `POST /commerce/products` | Commerce API — creates product + plan + charge in one call. Body is snake_case. Live-verified on intQA. |
+| delete | `DELETE /v1/object/product/{id}` | Legacy object endpoint (returns `{success, id}`); also removes Commerce-created products |
 
 **Limitations:**
-- `create product` is not currently supported on this Zuora environment: `POST /v1/catalog/products` returns HTTP 405 (disabled), and the legacy object endpoint requires tenant-specific required custom fields that are not configured. The CLI fails fast with a clear error before making any network call. See `TODO.md` under "Tenant-config limitations" for details.
-- The Zuora v1 REST API does not support `PUT` for products; the legacy `/v1/object/` endpoint must be used for updates.
-- Fields returned by the object endpoint are PascalCase (`Name`, `SKU`, `EffectiveStartDate`). The allowlist is configured accordingly.
-- Tenant-specific required custom fields (e.g. `Item__c`) must be present in the push body. If your tenant requires them, ensure they are in the local file before pushing.
+- **`create product` uses the Commerce API** (`POST /commerce/products`), not the legacy
+  `/v1/catalog/products` (which is disabled/405 on this tenant). The request body is **snake_case**
+  and posted verbatim from your local JSON file — it is a distinct schema from pull/push (which use
+  the PascalCase object model). The response is the created product object (with lowercase `id`),
+  not a `{success}` envelope.
+- The Commerce create request must include (tenant requirements, live-verified): `pricing` as an
+  object keyed by currency (e.g. `{"flatAmounts": {"USD": 10}}`); a full `accounting` block with all
+  8 finance accounts non-blank; and required custom fields (product: `item__c`, `productfamily__c`;
+  charge: `pobidentifier__c`, `pobname__c`). Valid accounting-code names and custom-field values are
+  tenant-specific — query `/v1/accounting-codes` and inspect an existing product for valid values.
+  See `CLAUDE.md` ("Product create — Commerce API") for the full reference body.
+- The Zuora v1 REST API does not support `PUT` for products; the legacy `/v1/object/` endpoint must be used for pull/push/delete.
+- Fields returned by pull/push (object endpoint) are PascalCase (`Name`, `SKU`, `EffectiveStartDate`). The push allowlist is configured accordingly.
+- Tenant-specific required custom fields (e.g. `Item__c`) must be present in the push body too. If your tenant requires them, ensure they are in the local file before pushing.
 - `pull product` traverses to all child product-rate-plans and their charges via ZOQL.
 
 ---

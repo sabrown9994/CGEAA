@@ -12,10 +12,8 @@ export function checkDeleteAllowed(resource: string): void {
 
 const TENANT_BLOCKED: Record<string, Record<string, string>> = {
   create: {
-    product:
-      'create product is not currently supported on this Zuora environment. POST ' +
-      '/v1/catalog/products is disabled (405) and the legacy object endpoint requires ' +
-      "unconfigured tenant fields. See zdf/TODO.md under 'Tenant-config limitations' for details.",
+    // NOTE: `create product` is now SUPPORTED via the Commerce API (POST /commerce/products) —
+    // it is intentionally NOT listed here anymore. See src/commands/products.ts.
     subscription:
       'create subscription is not currently supported on this Zuora environment. The legacy ' +
       'Subscriptions API is disabled because Orders is enabled on this tenant. Use the Orders ' +

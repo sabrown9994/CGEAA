@@ -16,8 +16,8 @@ describe('checkDeleteAllowed', () => {
 });
 
 describe('checkTenantSupported', () => {
-  it('throws for create product', () => {
-    expect(() => checkTenantSupported('product', 'create')).toThrow('not currently supported');
+  it('does not throw for create product (now supported via Commerce API)', () => {
+    expect(() => checkTenantSupported('product', 'create')).not.toThrow();
   });
 
   it('throws for create subscription', () => {

@@ -155,7 +155,7 @@ record (marked `TEST ZDF POC` where applicable) and was torn down after confirma
 | invoice | BLOCKED-BY-TENANT-CONFIG (CLI-guarded) | N/A | N/A | `POST /v1/invoices` requires Finance > Manage Non-Subscription Items settings (revenue recognition accounting codes) not configured on intQA; `zdf create invoice` now fails fast with `checkTenantSupported` before any network call |
 | credit-memo | invoice-scoped endpoint | N/A | N/A | bare `POST /v1/credit-memos` is unreliable on this tenant (live-verified); create now requires `--invoice <invoiceId>` and posts to `POST /v1/credit-memos/invoice/{invoiceKey}` |
 | debit-memo | invoice-scoped endpoint | N/A | N/A | same as credit-memo: create now requires `--invoice <invoiceId>` and posts to `POST /v1/debit-memos/invoice/{invoiceKey}` |
-| product | BLOCKED-BY-TENANT-CONFIG (CLI-guarded) | N/A | N/A | `POST /v1/catalog/products` disabled (405); legacy object endpoint needs unconfigured tenant fields; `zdf create product` now fails fast with `checkTenantSupported` before any network call |
+| product | ✅ RESOLVED (Commerce API, 2026-08-18) | — | PASS | `create product` now uses `POST /commerce/products` (legacy `/v1/catalog/products` was 405-disabled); delete uses `DELETE /v1/object/product/{id}`. Full create→pull→delete cycle live-verified on intQA. See "Resolved" note below. |
 | subscription | BLOCKED-BY-TENANT-CONFIG (CLI-guarded) | N/A | N/A | legacy Subscriptions API disabled because Orders is enabled on this tenant; `zdf create subscription` now fails fast with `checkTenantSupported` before any network call |
 
 ### Push side (self-contained validation method, for reference)
@@ -196,16 +196,18 @@ The following actions are blocked by **tenant configuration** on this Zuora envi
 fails immediately with a clear message instead of making a network call that returns a
 confusing Zuora error.
 
-### `create product`
-- **What it is:** Creating a new product catalog entry.
-- **Root cause:** `POST /v1/catalog/products` returns HTTP 405 (disabled) on this tenant; the
-  legacy `POST /v1/object/product` endpoint requires unconfigured tenant-specific required
-  custom fields.
-- **What would need to change:** Zuora support/admin would need to re-enable the catalog
-  create endpoint, or the tenant's required custom fields on the legacy object endpoint would
-  need to be identified and populated.
-- **CLI behavior:** `zdf create product` throws immediately, before any network call, with a
-  message pointing here.
+### `create product` — ✅ RESOLVED (2026-08-18, Commerce API)
+- **Previously blocked because:** `POST /v1/catalog/products` returns HTTP 405 (disabled) on
+  this tenant.
+- **Resolution:** re-pointed `create product` to the modern **Commerce API**
+  `POST /commerce/products` (which IS enabled on intQA and creates product + plan + charge in
+  one call). Delete uses `DELETE /v1/object/product/{id}`. The tenant `checkTenantSupported`
+  block for product was removed. Full create → pull → delete cycle live-verified on intQA.
+- **Caller responsibility:** the Commerce request body (snake_case) must include `pricing`
+  (object keyed by currency), a full `accounting` block (8 finance accounts non-blank), and the
+  tenant-required custom fields (`item__c`, `productfamily__c` on the product;
+  `pobidentifier__c`, `pobname__c` on the charge). See `CLAUDE.md` → "Product create — Commerce
+  API" for the reference body.
 
 ### `create subscription`
 - **What it is:** Creating a subscription directly via the legacy Subscriptions API.
@@ -257,7 +259,9 @@ confusing Zuora error.
   intQA. Framework-correct; not a code defect.
 - `create subscription` — BLOCKED: `53000010: Subscription api cannot be used when order is
   enabled.` This tenant uses the Orders API for subscription creation instead.
-- `create product` — BLOCKED (405): `POST /v1/catalog/products` disabled on intQA.
+- `create product` — ✅ RESOLVED (2026-08-18): the legacy `/v1/catalog/products` is 405-disabled,
+  but `create product` now uses the Commerce API `POST /commerce/products` (enabled on intQA).
+  Live-verified. No longer blocked.
 - `create credit-memo` / `create debit-memo` — SKIP: tenant-gated (Invoice Settlement feature +
   a source invoice required); not live-tested on intQA.
 - `delete bill-run` on a Completed bill-run — Zuora rejects by business rule; only
