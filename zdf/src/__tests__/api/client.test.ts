@@ -24,7 +24,7 @@ vi.mock('../../auth/token.js', () => ({ ensureToken: mockEnsureToken }));
 const mockWarn = vi.hoisted(() => vi.fn());
 vi.mock('../../helpers/output.js', () => ({ output: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warn: mockWarn } }));
 
-import { apiGet, apiPost, apiPut, apiPatch, apiDelete, apiQuery, APIQUERY_MAX_ROWS, setMaxRows } from '../../api/client.js';
+import { apiGet, apiPost, apiPut, apiPatch, apiDelete, apiQuery, APIQUERY_MAX_ROWS, setMaxRows, extractZuoraErrors } from '../../api/client.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -220,5 +220,75 @@ describe('request() reactive 401 refresh-and-retry', () => {
     expect(mockRequest).toHaveBeenCalledTimes(1);
     expect(mockEnsureToken).toHaveBeenCalledTimes(1);
     expect(mockEnsureToken).toHaveBeenCalledWith(expect.anything());
+  });
+});
+
+describe('extractZuoraErrors', () => {
+  it('extracts v1 lowercase reasons', () => {
+    expect(extractZuoraErrors({ reasons: [{ code: 1, message: 'a' }] })).toEqual([
+      { code: '1', message: 'a' },
+    ]);
+  });
+
+  it('extracts v1 lowercase errors', () => {
+    expect(extractZuoraErrors({ errors: [{ code: 'x', message: 'b' }] })).toEqual(
+      expect.arrayContaining([{ code: 'x', message: 'b' }])
+    );
+  });
+
+  it('extracts legacy PascalCase Errors', () => {
+    expect(extractZuoraErrors({ Success: false, Errors: [{ Code: 'E', Message: 'c' }] })).toEqual([
+      { code: 'E', message: 'c' },
+    ]);
+  });
+
+  it('extracts Settings API messages[] paired with top-level errorCode', () => {
+    expect(
+      extractZuoraErrors({ errorCode: 'NOT_FOUND', messages: ['no template with key=z'] })
+    ).toEqual([{ code: 'NOT_FOUND', message: 'no template with key=z' }]);
+  });
+
+  it('extracts SOAP/ZOQL-style FaultCode/FaultMessage', () => {
+    expect(extractZuoraErrors({ FaultCode: 'INVALID_TYPE', FaultMessage: 'bad zoql' })).toEqual([
+      { code: 'INVALID_TYPE', message: 'bad zoql' },
+    ]);
+  });
+
+  it('extracts lowercase faultcode/faultstring variant', () => {
+    expect(extractZuoraErrors({ faultcode: 'INVALID_TYPE', faultstring: 'bad zoql' })).toEqual([
+      { code: 'INVALID_TYPE', message: 'bad zoql' },
+    ]);
+  });
+
+  it.each([null, {}, 'string'])('returns [] for %p', (body) => {
+    expect(extractZuoraErrors(body)).toEqual([]);
+  });
+});
+
+describe('handleAxiosError message selection via request()', () => {
+  it('Settings-API messages body: errors is non-empty and message is the detail, not "HTTP 400"', async () => {
+    mockRequest.mockRejectedValueOnce(
+      axiosErrorWithStatus(400, {
+        errorCode: 'REMOTE_HTTP_CLIENT_ERROR',
+        remoteHttpStatus: 404,
+        messages: ['No invoice template with key=bogus-id'],
+      })
+    );
+
+    await expect(apiGet('/settings/invoice-templates/bogus-id')).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'No invoice template with key=bogus-id',
+      errors: [{ code: 'REMOTE_HTTP_CLIENT_ERROR', message: 'No invoice template with key=bogus-id' }],
+    });
+  });
+
+  it('falls back to "HTTP {status}" only when the body has no message and no extractable errors', async () => {
+    mockRequest.mockRejectedValueOnce(axiosErrorWithStatus(500, {}));
+
+    await expect(apiGet('/v1/accounts/999')).rejects.toMatchObject({
+      statusCode: 500,
+      message: 'HTTP 500',
+      errors: [],
+    });
   });
 });
