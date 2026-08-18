@@ -142,9 +142,15 @@ theirs under `items`. The `fetchAllItems` call in `dependency-graph.ts` uses dif
 
 The CLI uses the **invoice-scoped** endpoint (`POST /v1/credit-memos/invoice/{invoiceKey}`,
 `POST /v1/debit-memos/invoice/{invoiceKey}`) rather than the bare `POST /v1/credit-memos`.
-The bare endpoint is unreliable on this tenant. `--invoice <invoiceId>` is required;
-omitting it throws before any network call. Each line item must include `skuName`
-(live-verified tenant requirement).
+The bare endpoint is unreliable on this tenant. `--invoice <invoiceId>` is required (throws before
+any network call if omitted) and must point at a **Posted** invoice (a Draft source is rejected:
+"Invoice is not posted"). The file is posted verbatim and must be
+`{ "items": [ { "invoiceItemId, amount, skuName } ] }` — **each item requires `invoiceItemId`,
+`amount`, and a non-blank `skuName`** ("SKU name is blank" otherwise). Get `invoiceItemId` from
+`GET /v1/invoices/{id}/items`. **Create is live-verified** (Draft memo with items). **Known gap:**
+`delete credit-memo`/`delete debit-memo` on an invoice-sourced Draft memo is rejected live (the memo
+is applied to its invoice; deletion likely needs a cancel/unapply step first — not yet implemented;
+see TODO.md).
 
 ### Invoice create / delete
 
@@ -159,16 +165,28 @@ and 8 accounting codes (`deferredRevenueAccountingCode`, `recognizedRevenueAccou
 `unbilledReceivablesAccountingCode`, `contractAssetAccountingCode`, `contractLiabilityAccountingCode`,
 `contractRecognizedRevenueAccountingCode`, `adjustmentLiabilityAccountingCode`,
 `adjustmentRevenueAccountingCode`). This is the caller's responsibility in the JSON file — the CLI
-injects nothing.
+injects nothing EXCEPT: the `--post` flag injects `status: "Posted"` into the body so the invoice is
+created Posted. Default (no flag) creates a **Draft** invoice. `--post` prints a warning because a
+Posted invoice is not deletable (see below). Posting only works at create time — there is no working
+endpoint to post an already-existing Draft invoice on this tenant (`PUT status`/`invoiceStatus`
+rejected, `/post` 405).
 
-**Delete** (`delete invoice`): a created invoice is in **Draft** status, and Zuora only deletes
-Cancelled/Split invoices (`50000020: Only Cancelled or Split invoices can be deleted`). So delete is
-**two steps**: (1) `PUT /v1/invoices/{id}/cancel` — on `success:false` it warns and continues (an
-already-cancelled invoice still deletes); (2) `DELETE /v1/invoices/{id}`. The DELETE returns a
-`jobId`, but that job is **NOT** queryable at `/v1/async-jobs/{jobId}` (live-confirmed: always
-`success:false` "Cannot find response for job"). So completion is confirmed by **polling the invoice
-resource for disappearance** — `GET /v1/invoices/{id}` every 2s (max 30) until it returns
-`success: false` ("Cannot find entity"). Do NOT reintroduce async-jobs polling for invoices.
+**Invoice lifecycle on this tenant (live-verified — note it's inverted from intuition):**
+- `PUT /v1/invoices/{id}/cancel` succeeds ONLY on **Draft** (Draft → Cancelled); it FAILS on Posted
+  ("Only invoices with Draft status can be cancelled").
+- `DELETE /v1/invoices/{id}` succeeds ONLY on Cancelled/Split.
+- Net: **Draft invoices are deletable** (cancel → delete); **Posted invoices are NOT deletable at
+  all** (reverse them with a credit memo).
+
+**Delete** (`delete invoice`): first `GET /v1/invoices/{id}` to check status. If not-found
+(`success:false`) → throw not-found. If `status === 'Posted'` → throw a clear "cannot delete Posted;
+reverse via credit memo" error (no cancel/delete attempted). Otherwise (Draft/Cancelled): (1)
+`PUT /v1/invoices/{id}/cancel` — on `success:false` warn and continue (an already-cancelled invoice
+still deletes); (2) `DELETE /v1/invoices/{id}`. The DELETE returns a `jobId`, but that job is **NOT**
+queryable at `/v1/async-jobs/{jobId}` (live-confirmed: always `success:false` "Cannot find response
+for job"). Completion is confirmed by **polling the invoice resource for disappearance** —
+`GET /v1/invoices/{id}` every 2s (max 30) until it returns `success:false`. Do NOT reintroduce
+async-jobs polling for invoices.
 
 ### order push body unwrapping
 

@@ -295,8 +295,8 @@ record (marked `TEST ZDF POC` where applicable) and was torn down after confirma
 | billing-template | PASS | PASS | PASS | full cycle PASS: create / confirm / push / delete / confirm-deletion all live-verified |
 | bill-run | PASS | PASS (re-fetch) | BLOCKED (business rule) | create + pull + push-as-refetch verified; delete blocked because the created bill-run reached Completed status — Zuora only allows deleting Pending/Canceled bill-runs (not a ZDF defect) |
 | invoice | ✅ RESOLVED (2026-08-18) | PASS | PASS (cancel-then-delete) | `create` via `POST /v1/invoices` (flat body; accounting fields supplied per item — the "pass the fields" path, not a wall). `delete` cancels first then deletes, confirming via invoice-disappearance poll (async-jobs endpoint doesn't track the job). Full create→delete cycle live-verified on intQA. See "Resolved" note below. |
-| credit-memo | invoice-scoped endpoint | N/A | N/A | bare `POST /v1/credit-memos` is unreliable on this tenant (live-verified); create now requires `--invoice <invoiceId>` and posts to `POST /v1/credit-memos/invoice/{invoiceKey}` |
-| debit-memo | invoice-scoped endpoint | N/A | N/A | same as credit-memo: create now requires `--invoice <invoiceId>` and posts to `POST /v1/debit-memos/invoice/{invoiceKey}` |
+| credit-memo | ✅ VERIFIED (2026-08-19) | N/A | ⚠ gap | create `POST /v1/credit-memos/invoice/{invoiceKey}` requires `--invoice` (a **Posted** invoice) + body `{items:[{invoiceItemId,amount,skuName}]}` — live create→pull confirmed. delete rejected on an invoice-sourced Draft memo (needs cancel/unapply first — follow-up). |
+| debit-memo | ✅ VERIFIED (2026-08-19) | N/A | ⚠ gap | same as credit-memo (`POST /v1/debit-memos/invoice/{invoiceKey}`). Create live-verified; delete gap tracked below. |
 | product | ✅ RESOLVED (Commerce API, 2026-08-18) | — | PASS | `create product` now uses `POST /commerce/products` (legacy `/v1/catalog/products` was 405-disabled); delete uses `DELETE /v1/object/product/{id}`. Full create→pull→delete cycle live-verified on intQA. See "Resolved" note below. |
 | subscription | ❌ REMOVED (2026-08-18) | PASS | ❌ REMOVED (2026-08-18) | create/delete subcommands removed as permanently unsupported (Orders-enabled tenant disables legacy create; Zuora has no subscription DELETE endpoint). pull + push only. Use the Orders API for lifecycle. |
 
@@ -401,13 +401,25 @@ Both subcommands were removed from ZDF entirely (commit dbee8c1). `subscription`
   but `create product` now uses the Commerce API `POST /commerce/products` (enabled on intQA).
   Live-verified. No longer blocked.
 - `create invoice` — ✅ RESOLVED (2026-08-18): "pass the fields" path; not tenant-blocked. See above.
-- `create credit-memo` / `create debit-memo` — **NOT blocked by Invoice Settlement** (that feature
-  IS enabled — the endpoints return field-validation errors, not feature errors; probed
-  2026-08-18). The creates are already wired (invoice-scoped `POST /v1/{memo}s/invoice/{invoiceKey}`
-  requiring `--invoice`, and a from-charge `POST /v1/{memo}s`). Remaining work is to supply the
-  correct body (source invoice `items`, or account + `charges`/`memoItems` with amounts +
-  accounting fields, same pattern as `create invoice`) and live-verify. Currently unverified, not
-  blocked.
+- `create credit-memo` / `create debit-memo` — ✅ VERIFIED (2026-08-19). NOT blocked by Invoice
+  Settlement (it's enabled). Create posts the local file verbatim to
+  `POST /v1/{memo}s/invoice/{invoiceKey}`; requires `--invoice <id>` pointing at a **Posted** invoice
+  and body `{ items: [ { invoiceItemId, amount, skuName } ] }` (each item needs all three; `skuName`
+  must be non-blank). Live create→pull confirmed (Draft memo with items). Source invoices can be made
+  Posted with `create invoice --post`.
+- **⚠ FOLLOW-UP — `delete credit-memo` / `delete debit-memo` fail on invoice-sourced memos.** Live:
+  deleting a Draft memo created from an invoice was rejected ("Zuora rejected the ... delete"). The
+  memo is applied to its source invoice; deletion likely needs a cancel and/or unapply step first
+  (analogous to the invoice cancel-then-delete). Currently `delete {memo}` just does
+  `DELETE /v1/{memo}s/{id}`. To fix: inspect the reject reason, add the required pre-step(s).
+  (Cleanup in the meantime: deleting the parent account cascades its memos.)
+- ✅ Error logging (2026-08-19): `handleAxiosError` now surfaces the real Zuora detail for all body
+  shapes (reasons/errors/PascalCase Errors/Settings messages+errorCode/FaultMessage) via
+  `extractZuoraErrors` — no more bare "HTTP 400". This is how the memo `skuName`/`not posted` errors
+  were diagnosed.
+- ✅ `create invoice --post` (2026-08-19): injects `status:Posted` at create (warns it's then
+  non-deletable). `delete invoice` now rejects Posted invoices up front. Note: no API path posts an
+  already-existing Draft invoice on this tenant.
 - `delete bill-run` on a Completed bill-run — Zuora rejects by business rule; only
   Pending/Canceled bill-runs can be deleted. Not a ZDF defect.
 
