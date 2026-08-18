@@ -81,9 +81,12 @@ zdf sync-diff [--dry-run | --apply]
 
 ### Eligibility / guardrails (all approved) — skip+warn, never hard-fail
 - Reuse the existing guards: `checkTenantSupported(resource, 'create')` and
-  `checkDeleteAllowed(resource)` (`src/helpers/delete-guard.ts`). If a mapped op is blocked
-  (tenant-config create for product/subscription/invoice; delete subscription) → **skip + warn**,
-  do not fail the run.
+  `checkDeleteAllowed(resource)` (`src/helpers/delete-guard.ts`). Their block-maps are currently
+  empty (no resource is tenant-blocked today — product/invoice creates were resolved), but keep
+  calling them so any future block → **skip + warn**, not a hard fail.
+- **`subscription` has no `create`/`delete` command** (removed). A mapped `A` (create) or `D`
+  (delete) on a `subscriptions/` file must **skip + warn** — there is no command to invoke.
+  (`push` on a `M` is still valid.)
 - **Exclude `create bill-run` explicitly** — it executes REAL billing (generates invoices/memos).
   Even though the CLI supports it, `sync-diff` must never fire it automatically. Skip + warn.
 - `push bill-run` is a re-fetch no-op (no PUT endpoint) → skip + warn.
@@ -131,8 +134,8 @@ Either way: same guards, same `--no-dependency`, per-action pass/fail captured f
 - Path mapping: every subfolder→resource; billing-template `<name>_<id>`; order-number id;
   unknown subfolder ignored; `data-query` excluded.
 - Status mapping: A/M/D and rename→delete+create, copy→create; malformed lines.
-- Eligibility: tenant-blocked create skip+warn; delete subscription skip+warn; `create bill-run`
-  excluded; `push bill-run` skipped.
+- Eligibility: any future tenant-blocked create skip+warn; subscription create/delete skip+warn
+  (no such command); `create bill-run` excluded; `push bill-run` skipped.
 - Ordering: creates parent-first, deletes child-first, mixed diff sorted correctly.
 - Dry-run: prints plan, makes **zero** network/exec calls; markdown table shape.
 - Apply: invokes runners/spawns in planned order; exit-code accumulation (1 iff an eligible
@@ -295,7 +298,7 @@ record (marked `TEST ZDF POC` where applicable) and was torn down after confirma
 | credit-memo | invoice-scoped endpoint | N/A | N/A | bare `POST /v1/credit-memos` is unreliable on this tenant (live-verified); create now requires `--invoice <invoiceId>` and posts to `POST /v1/credit-memos/invoice/{invoiceKey}` |
 | debit-memo | invoice-scoped endpoint | N/A | N/A | same as credit-memo: create now requires `--invoice <invoiceId>` and posts to `POST /v1/debit-memos/invoice/{invoiceKey}` |
 | product | ✅ RESOLVED (Commerce API, 2026-08-18) | — | PASS | `create product` now uses `POST /commerce/products` (legacy `/v1/catalog/products` was 405-disabled); delete uses `DELETE /v1/object/product/{id}`. Full create→pull→delete cycle live-verified on intQA. See "Resolved" note below. |
-| subscription | BLOCKED-BY-TENANT-CONFIG (CLI-guarded) | N/A | N/A | legacy Subscriptions API disabled because Orders is enabled on this tenant; `zdf create subscription` now fails fast with `checkTenantSupported` before any network call |
+| subscription | ❌ REMOVED (2026-08-18) | PASS | ❌ REMOVED (2026-08-18) | create/delete subcommands removed as permanently unsupported (Orders-enabled tenant disables legacy create; Zuora has no subscription DELETE endpoint). pull + push only. Use the Orders API for lifecycle. |
 
 ### Push side (self-contained validation method, for reference)
 **Preferred method — self-contained via create-then-push:** for each pushable resource, if the
@@ -303,17 +306,16 @@ framework supports a `create` action for it, the validation should CREATE a fres
 we own it and can safely mutate/round-trip), then `push` an edit to that created record, then
 confirm via `pull`. This avoids touching pre-existing tenant data.
 
-- Resources WITH create (per resource-coverage table): account, contact, subscription, order,
+- Resources WITH create (per resource-coverage table): account, contact, order,
   product, product-rate-plan, product-rate-plan-charge, billing-template, invoice, credit-memo,
   debit-memo, bill-run, workflow — use create-then-push.
-- Resources WITHOUT a create action (order-line-item): create-then-push is NOT possible. For these,
-  **ASK the user to create/provide a reference record in intQA** to push against (as was done for
-  OLI order `O-01339581`). Do NOT push against arbitrary pre-existing tenant records without
-  explicit authorization.
+- Resources WITHOUT a create action (order-line-item, subscription): create-then-push is NOT
+  possible. For these, **ASK the user to create/provide a reference record in intQA** to push
+  against (as was done for OLI order `O-01339581`). Do NOT push against arbitrary pre-existing
+  tenant records without explicit authorization. (subscription has pull/push only — no create/delete.)
 - All created/mutated records must carry a clear test marker (e.g. name/description contains
   `TEST ZDF POC`) and each push must be a controlled, reversible/lossless change where possible.
-- Note: `push bill-run` is a re-fetch (no PUT endpoint) — validate accordingly; `delete
-  subscription` is blocked by design.
+- Note: `push bill-run` is a re-fetch (no PUT endpoint) — validate accordingly.
 
 ### Endpoint corrections (live discovery, 2026-08-07)
 - **`product-rate-plan` create**: was `POST /v1/rateplan` — this path does not exist on the intQA
@@ -348,25 +350,17 @@ confusing Zuora error.
   `pobidentifier__c`, `pobname__c` on the charge). See `CLAUDE.md` → "Product create — Commerce
   API" for the reference body.
 
-### `create subscription`
-- **What it is:** Creating a subscription directly via the legacy Subscriptions API.
-- **Root cause:** `53000010: Subscription api cannot be used when order is enabled.` — this
-  tenant has the Orders feature enabled, which disables the legacy subscription-create API.
-- **What would need to change:** Nothing to "fix" — this is expected behavior for an
-  Orders-enabled tenant. Use the Orders API (`create order`) to establish new subscriptions
-  instead.
-- **CLI behavior:** `zdf create subscription` throws immediately, before any network call,
-  with a message pointing here.
-
-### `delete subscription`
-- **What it is:** Deleting a subscription record.
-- **Root cause:** The Zuora REST API does not expose a DELETE endpoint for subscriptions at
-  all — this is a Zuora API limitation, not tenant configuration, but it is guarded the same
-  way for a consistent user experience.
-- **What would need to change:** N/A — not exposed by Zuora. To cancel a subscription, use the
-  Zuora UI or the Orders API.
-- **CLI behavior:** `zdf delete subscription` throws immediately, before any network call,
-  with a message pointing here.
+### `create subscription` / `delete subscription` — ❌ REMOVED (2026-08-18, permanently unsupported)
+Both subcommands were removed from ZDF entirely (commit dbee8c1). `subscription` now supports
+**pull and push only**.
+- **`create subscription`**: Orders-enabled tenants disable the legacy Subscriptions-create API
+  (`53000010: Subscription api cannot be used when order is enabled.`). This is not a tenant
+  toggle to flip — it's the intended behavior for Orders tenants. Use the Orders API
+  (`create order`) to establish subscriptions.
+- **`delete subscription`**: the Zuora REST API exposes no DELETE endpoint for subscriptions at
+  all (a permanent API limitation). Cancel via the Orders API or the Zuora UI.
+- Because these are permanently unsupported (not "waiting on a tenant setting"), the commands and
+  their guard entries were deleted rather than left as fail-fast stubs.
 
 ### `create invoice` — ✅ RESOLVED (2026-08-18)
 - **What it is:** Standalone invoice creation (independent of a bill run).
@@ -401,13 +395,19 @@ confusing Zuora error.
   default the accounting settings, but the API accepts them per invoice item ("pass the fields"
   path). Create now posts the caller-supplied accounting fields; `delete invoice` cancels-then-deletes.
   Live-verified. No longer blocked.
-- `create subscription` — BLOCKED: `53000010: Subscription api cannot be used when order is
-  enabled.` This tenant uses the Orders API for subscription creation instead.
+- `create subscription` / `delete subscription` — ❌ REMOVED (2026-08-18), permanently
+  unsupported (Orders-enabled create block + no Zuora subscription DELETE endpoint). pull/push only.
 - `create product` — ✅ RESOLVED (2026-08-18): the legacy `/v1/catalog/products` is 405-disabled,
   but `create product` now uses the Commerce API `POST /commerce/products` (enabled on intQA).
   Live-verified. No longer blocked.
-- `create credit-memo` / `create debit-memo` — SKIP: tenant-gated (Invoice Settlement feature +
-  a source invoice required); not live-tested on intQA.
+- `create invoice` — ✅ RESOLVED (2026-08-18): "pass the fields" path; not tenant-blocked. See above.
+- `create credit-memo` / `create debit-memo` — **NOT blocked by Invoice Settlement** (that feature
+  IS enabled — the endpoints return field-validation errors, not feature errors; probed
+  2026-08-18). The creates are already wired (invoice-scoped `POST /v1/{memo}s/invoice/{invoiceKey}`
+  requiring `--invoice`, and a from-charge `POST /v1/{memo}s`). Remaining work is to supply the
+  correct body (source invoice `items`, or account + `charges`/`memoItems` with amounts +
+  accounting fields, same pattern as `create invoice`) and live-verify. Currently unverified, not
+  blocked.
 - `delete bill-run` on a Completed bill-run — Zuora rejects by business rule; only
   Pending/Canceled bill-runs can be deleted. Not a ZDF defect.
 

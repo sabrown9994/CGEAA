@@ -100,15 +100,20 @@ endpoint actually returns before choosing a guard.
 
 ### Tenant-config guards
 
-`checkTenantSupported(resource, 'create')` is called at the top of the action body (before
-any network call) for creates that are blocked by tenant configuration on intQA. Currently
-blocked: `create subscription`. (`create product` and `create invoice` were previously blocked
-but are now **supported** — product via the Commerce API, invoice by passing the accounting
-fields in the body; see above.) The guard throws immediately with a clear message directing the
-user to `TODO.md`.
+`src/helpers/delete-guard.ts` exports two guard functions — `checkTenantSupported(resource, verb)`
+and `checkDeleteAllowed(resource)`. **Both maps are currently empty** (no resource is blocked): the
+formerly-blocked creates were all resolved — `create product` via the Commerce API and
+`create invoice` by passing accounting fields in the body — and `create subscription` /
+`delete subscription` were removed entirely (see below). The functions and their (empty) maps are
+retained as the eligibility hook the planned `sync-diff` feature will call, and so future
+tenant-blocked resources can be added in one place.
 
-`checkDeleteAllowed(resource)` blocks `delete subscription` — no Zuora DELETE endpoint
-exists for subscriptions at all (Zuora API limitation, not tenant-specific).
+### Subscription: no create / no delete (removed)
+
+`subscription` supports **pull and push only**. `create subscription` and `delete subscription`
+were removed as permanently unsupported: Orders-enabled tenants disable the legacy
+Subscriptions-API create (`53000010`), and Zuora exposes no DELETE endpoint for subscriptions at
+all. Manage subscription lifecycle via the Orders API (`create order`) / the Zuora UI.
 
 ### ZOQL queries
 
@@ -237,7 +242,7 @@ Use `--no-dependency` to skip all traversal. Essential for large accounts.
 |----------|------|------|--------|--------|------|
 | account | ✓ | ✓ | ✓ | ✓ | |
 | contact | ✓ | ✓ | ✓ (direct object response, no envelope; uses `assertReadSuccess`) | ✓ | |
-| subscription | ✓ | ✓ | ✗ blocked (Orders enabled — use Orders API) | ✗ blocked (no Zuora DELETE endpoint) | |
+| subscription | ✓ | ✓ | — (removed; use Orders API) | — (removed; no Zuora DELETE endpoint) | |
 | order | ✓ | ✓ (Draft/Scheduled only) | ✓ | ✓ | ✓ |
 | order-line-item | ✓ | ✓ | | | |
 | product | ✓ | ✓ | ✓ (Commerce API `POST /commerce/products`) | ✓ (`DELETE /v1/object/product/{id}`) | |
@@ -266,9 +271,11 @@ authoritative for behavior.
 - `RESOURCE_SUBFOLDERS` (`src/constants.ts`) — resource → output subfolder. Build the **reverse
   map** (`accounts`→`account`, `product-rate-plans`→`product-rate-plan`, …) for path→resource.
 - `checkTenantSupported(resource, 'create')` and `checkDeleteAllowed(resource)`
-  (`src/helpers/delete-guard.ts`) — call these to decide op eligibility. They already throw with
-  a clear message for tenant-blocked creates (currently only `create subscription`) and delete
-  subscription; catch and turn into **skip + warn** (never fail the run).
+  (`src/helpers/delete-guard.ts`) — call these to decide op eligibility. Their block-maps are
+  currently empty (no resource is blocked today), but they are the designated hook: if a future
+  tenant block is added there, catch the throw and turn it into **skip + warn** (never fail the
+  run). Note `subscription` has no create/delete commands at all, so a `sync-diff` mapping for
+  `A`/`D` on a `subscriptions/` file should itself skip+warn (no-op path), independent of the guards.
 - `getOutputDir()` / `resolveFilePath()` (`src/helpers/file-io.ts`) — resolve the zdf-output root
   (honors `ZDF_OUTPUT_DIR`) and per-resource paths; use for the `--root` default and for finding
   the on-disk file to read for a create/push.

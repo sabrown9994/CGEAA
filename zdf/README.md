@@ -156,9 +156,10 @@ git diff --name-status <base> <head> -- Zuora/zdf-output | zdf sync-diff --apply
 - Maps each changed file to a resource + id + operation: **A**dded → `create`, **M**odified →
   `push`, **D**eleted → `delete` (renames → delete old + create new).
 - All actions run with `--no-dependency` (object only; no child re-pull, no local file churn).
-- **Guardrails:** never fires `create bill-run` (executes real billing); tenant-blocked creates
-  (product/subscription/invoice), `delete subscription`, `push bill-run`, and any `data-query`
-  op are **skipped with a warning**, not failed.
+- **Guardrails:** never fires `create bill-run` (executes real billing); operations with no
+  supported command — `create`/`delete subscription` (removed), `push bill-run` (re-fetch only),
+  and any `data-query` op — are **skipped with a warning**, not failed. (No resource is currently
+  tenant-blocked, but any future block in `delete-guard.ts` is skipped the same way.)
 - Exit `0` on a clean run (including skips); exit `1` if any *eligible* action fails.
 
 See `TODO.md` for the full spec and the GitHub Actions workflow it powers.
@@ -201,18 +202,19 @@ See `TODO.md` for the full spec and the GitHub Actions workflow it powers.
 
 ### subscription
 
+Subscriptions support **pull and push only**. There is no `create subscription` or
+`delete subscription` command.
+
 | Operation | Endpoint | Notes |
 |-----------|----------|-------|
 | pull | `GET /v1/subscriptions/{id}` | |
 | push | `PUT /v1/subscriptions/{id}` | |
-| create | `POST /v1/subscriptions` | not supported (tenant config — see TODO.md) |
-| delete | — | not supported (tenant config — see TODO.md) |
+| create | — | Not supported. Use the Orders API (`create order`) to establish subscriptions — Orders-enabled tenants disable the legacy Subscriptions-create API. |
+| delete | — | Not supported. Zuora exposes no DELETE endpoint for subscriptions; cancel via the Orders API or the Zuora UI. |
 
 **Limitations:**
-- `create subscription` is not currently supported on this Zuora environment: the legacy Subscriptions API is disabled because Orders is enabled on this tenant (`53000010: Subscription api cannot be used when order is enabled.`). The CLI fails fast with a clear error before making any network call. Use the Orders API instead. See `TODO.md` under "Tenant-config limitations" for details.
-- Subscriptions cannot be deleted via the API; `zdf delete subscription` is blocked by design.
 - Only a narrow set of header-level fields is updatable (term, auto-renew, notes, etc.). Rate plan and charge modifications require the Orders API.
-- `push subscription` and `delete subscription` re-pull the parent account and linked order.
+- `push subscription` re-pulls the parent account and linked order.
 
 ---
 
