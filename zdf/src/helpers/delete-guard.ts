@@ -1,25 +1,18 @@
-const BLOCKED: Record<string, string> = {
-  subscription:
-    'delete subscription is not supported in Zuora. The Zuora API does not expose a DELETE ' +
-    'endpoint for subscriptions. To cancel a subscription, use the Zuora UI or the Orders API. ' +
-    "See zdf/TODO.md under 'Tenant-config limitations' for details.",
-};
+// Intentionally empty — no resources are currently blocked from delete. Retained (along with
+// checkDeleteAllowed) as the eligibility hook the planned sync-diff feature will call, and for
+// future Zuora-API-level delete restrictions.
+const BLOCKED: Record<string, string> = {};
 
 export function checkDeleteAllowed(resource: string): void {
   const msg = BLOCKED[resource];
   if (msg) throw new Error(msg);
 }
 
+// Intentionally empty — no creates are currently blocked by tenant configuration. Retained
+// (along with checkTenantSupported) as the eligibility hook the planned sync-diff feature will
+// call, and for future tenant-config blocks.
 const TENANT_BLOCKED: Record<string, Record<string, string>> = {
-  create: {
-    // NOTE: `create product` is now SUPPORTED via the Commerce API (POST /commerce/products) —
-    // it is intentionally NOT listed here anymore. See src/commands/products.ts.
-    subscription:
-      'create subscription is not currently supported on this Zuora environment. The legacy ' +
-      'Subscriptions API is disabled because Orders is enabled on this tenant. Use the Orders ' +
-      "API to manage subscription lifecycle. See zdf/TODO.md under 'Tenant-config limitations' " +
-      'for details.',
-  },
+  create: {},
 };
 
 export function checkTenantSupported(resource: string, verb: string): void {

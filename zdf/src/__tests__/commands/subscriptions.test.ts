@@ -54,25 +54,3 @@ describe('zdf pull subscription', () => {
     exitSpy.mockRestore();
   });
 });
-
-describe('zdf create subscription', () => {
-  it('throws and exits non-zero without calling apiPost — tenant-blocked', async () => {
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
-    await expect(
-      makeProgram().parseAsync(['node', 'zdf', 'create', 'subscription', 'my-sub'])
-    ).rejects.toThrow('exit');
-    expect(mockPost).not.toHaveBeenCalled();
-    exitSpy.mockRestore();
-  });
-});
-
-describe('zdf delete subscription', () => {
-  it('blocks delete with error message', async () => {
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
-    await expect(
-      makeProgram().parseAsync(['node', 'zdf', 'delete', 'subscription', 'S-1'])
-    ).rejects.toThrow('exit');
-    expect(mockDelete).not.toHaveBeenCalled();
-    exitSpy.mockRestore();
-  });
-});

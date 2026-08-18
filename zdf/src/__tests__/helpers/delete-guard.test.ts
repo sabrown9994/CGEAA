@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { checkDeleteAllowed, checkTenantSupported } from '../../helpers/delete-guard.js';
 
 describe('checkDeleteAllowed', () => {
-  it('throws for subscription', () => {
-    expect(() => checkDeleteAllowed('subscription')).toThrow('not supported');
+  it('does not throw for subscription (no resources are currently blocked)', () => {
+    expect(() => checkDeleteAllowed('subscription')).not.toThrow();
   });
 
   it('does not throw for account', () => {
@@ -20,8 +20,8 @@ describe('checkTenantSupported', () => {
     expect(() => checkTenantSupported('product', 'create')).not.toThrow();
   });
 
-  it('throws for create subscription', () => {
-    expect(() => checkTenantSupported('subscription', 'create')).toThrow('not currently supported');
+  it('does not throw for create subscription (no resources are currently blocked)', () => {
+    expect(() => checkTenantSupported('subscription', 'create')).not.toThrow();
   });
 
   it('does not throw for create invoice (now supported — accounting fields required in body)', () => {
