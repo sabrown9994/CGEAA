@@ -79,8 +79,8 @@ export function register(program: Command): void {
         const res = await apiDelete<ZuoraWriteResponse & { jobId?: string }>(`${ENDPOINT}/${id}`);
         assertSuccess(res, 'invoice delete');
         if (res.jobId) {
-          output.info(`Async delete started. Job ID: ${res.jobId}. Polling for completion...`);
-          await pollAsyncJob(res.jobId);
+          output.info(`Async delete started. Job ID: ${res.jobId}. Confirming deletion...`);
+          await pollForDeletion(id);
         }
         await resolveAndSync(RESOURCE, id, 'delete');
         output.success(`Invoice ${id} deleted.`);
@@ -88,14 +88,18 @@ export function register(program: Command): void {
     );
 }
 
-async function pollAsyncJob(jobId: string): Promise<void> {
+// NOTE: DELETE /v1/invoices/{id} returns a jobId, but GET /v1/async-jobs/{jobId} does not
+// recognize this job type (live-confirmed: always 200 with success:false / "Cannot find
+// response for job..."). So instead of polling the async-jobs endpoint, we poll the invoice
+// resource itself for disappearance — Zuora returns HTTP 200 { success: false, reasons: [...] }
+// once the invoice is gone (live-confirmed).
+async function pollForDeletion(id: string): Promise<void> {
   const POLL_INTERVAL_MS = 2000;
   const MAX_ATTEMPTS = 30;
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
-    const job = await apiGet<{ jobStatus: string }>(`/v1/async-jobs/${jobId}`);
-    if (job.jobStatus === 'Completed') return;
-    if (job.jobStatus === 'Failed') throw new Error(`Async delete job ${jobId} failed.`);
+    const check = await apiGet<{ success?: boolean }>(`${ENDPOINT}/${id}`);
+    if (check.success === false) return;
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
-  throw new Error(`Async delete job ${jobId} timed out after ${MAX_ATTEMPTS} attempts.`);
+  throw new Error(`Timed out after ${MAX_ATTEMPTS} attempts waiting for invoice ${id} to be deleted.`);
 }

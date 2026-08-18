@@ -112,18 +112,31 @@ describe('zdf delete invoice — async (jobId returned)', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it('polls async-jobs endpoint until Completed', async () => {
+  it('confirms deletion by polling the invoice resource for disappearance (success:false)', async () => {
     mockPut.mockResolvedValue({ success: true });
     mockDelete.mockResolvedValue({ success: true, jobId: 'job-123' });
-    mockGet
-      .mockResolvedValueOnce({ jobStatus: 'Processing' })
-      .mockResolvedValueOnce({ jobStatus: 'Completed' });
+    mockGet.mockResolvedValueOnce({ success: false, reasons: [{ code: 1, message: "Cannot find entity by key: 'INV-001'." }] });
     mockResolve.mockResolvedValue(undefined);
     const promise = makeProgram().parseAsync(['node', 'zdf', 'delete', 'invoice', 'INV-001']);
     await vi.runAllTimersAsync();
     await promise;
-    expect(mockGet).toHaveBeenCalledWith('/v1/async-jobs/job-123');
-    expect(mockGet).toHaveBeenCalledTimes(2);
+    expect(mockGet).toHaveBeenCalledWith('/v1/invoices/INV-001');
+    expect(mockGet).toHaveBeenCalledTimes(1);
     expect(mockResolve).toHaveBeenCalledWith('invoice', 'INV-001', 'delete');
+  });
+
+  it('throws a timeout error if the invoice still exists after all polling attempts', async () => {
+    mockPut.mockResolvedValue({ success: true });
+    mockDelete.mockResolvedValue({ success: true, jobId: 'job-123' });
+    mockGet.mockResolvedValue({ id: 'INV-001', invoiceNumber: 'INV-001' }); // still exists — no success:false
+    mockResolve.mockResolvedValue(undefined);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    const promise = expect(
+      makeProgram().parseAsync(['node', 'zdf', 'delete', 'invoice', 'INV-001'])
+    ).rejects.toThrow('exit');
+    await vi.runAllTimersAsync();
+    await promise;
+    expect(mockGet).toHaveBeenCalledTimes(30);
+    exitSpy.mockRestore();
   });
 });
