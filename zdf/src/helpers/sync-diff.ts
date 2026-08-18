@@ -2,7 +2,7 @@
 // fully unit-testable without mocks. See TODO.md → "PROPOSED FEATURE ... zdf sync-diff"
 // for the authoritative spec and CLAUDE.md → "sync-diff feature (implementation context)"
 // for wiring notes.
-import { RESOURCE_SUBFOLDERS } from '../constants.js';
+import { RESOURCE_SUBFOLDERS, OUTPUT_DIR } from '../constants.js';
 import { checkTenantSupported, checkDeleteAllowed } from './delete-guard.js';
 
 /** subfolder (e.g. "accounts") -> resource (e.g. "account"). Reverse of RESOURCE_SUBFOLDERS. */
@@ -102,15 +102,40 @@ export function parseNameStatus(input: string): DiffEntry[] {
 }
 
 /**
- * Resolve a repo path (relative to the zdf-output root) to a resource + id, or an
- * ignored result with a reason. `root` is accepted per the CLI contract (the zdf-output
- * root the caller resolved) but the match itself only depends on locating a known
- * `<subfolder>/<filename>` pair anywhere in the path — no filesystem access is made.
+ * Split a root path into non-empty segments, normalizing away a leading `./` and any
+ * leading/trailing slashes (e.g. `./zdf-output/` -> `['zdf-output']`,
+ * `Zuora/zdf-output` -> `['Zuora', 'zdf-output']`).
  */
-export function resolveFileToAction(path: string, _root?: string): ResolvedAction | IgnoredAction {
+function normalizedRootSegments(root: string): string[] {
+  let r = root.trim();
+  if (r.startsWith('./')) r = r.slice(2);
+  return r.split('/').filter((s) => s.length > 0 && s !== '.');
+}
+
+/**
+ * Resolve a repo path to a resource + id, or an ignored result with a reason.
+ *
+ * Per spec rule 1 ("consider only paths inside the zdf-output root"), the path must be
+ * anchored at `root`: it must match exactly `<root>/<subfolder>/<filename>`, where
+ * `<subfolder>` is a known entry in REVERSE_SUBFOLDERS and `<filename>` sits directly
+ * under it (no deeper nesting). Paths outside `root` are ignored, not misclassified.
+ *
+ * `root` defaults to the `OUTPUT_DIR` constant (`zdf-output`) when omitted — the same
+ * default `getOutputDir()` uses absent a `ZDF_OUTPUT_DIR` override — so a bare
+ * `resolveFileToAction(path)` call (e.g. in tests) still requires the conventional
+ * `zdf-output/` prefix rather than matching any known subfolder anywhere in the path.
+ */
+export function resolveFileToAction(path: string, root: string = OUTPUT_DIR): ResolvedAction | IgnoredAction {
+  const rootSegments = normalizedRootSegments(root);
   const segments = path.split('/').filter((s) => s.length > 0);
-  if (segments.length < 2) {
-    return { ignored: true, reason: 'not under a known zdf-output subfolder' };
+
+  if (segments.length !== rootSegments.length + 2) {
+    return { ignored: true, reason: 'not under the zdf-output root' };
+  }
+  for (let i = 0; i < rootSegments.length; i++) {
+    if (segments[i] !== rootSegments[i]) {
+      return { ignored: true, reason: 'not under the zdf-output root' };
+    }
   }
 
   const filename = segments[segments.length - 1];
@@ -148,6 +173,9 @@ export function resolveFileToAction(path: string, _root?: string): ResolvedActio
  * instead of hard-failing the whole run.
  */
 export function eligibility(resource: string, op: Op): Eligibility {
+  // Defensive/unreachable in practice: resolveFileToAction() already excludes data-query
+  // paths (reason 'data-query excluded') before eligibility() is ever called on them. Kept
+  // here so eligibility() is independently correct if ever called directly with 'data-query'.
   if (resource === 'data-query') {
     return { eligible: false, reason: 'excluded' };
   }

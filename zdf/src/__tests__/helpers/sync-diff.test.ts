@@ -156,7 +156,44 @@ describe('resolveFileToAction', () => {
   it('ignores a path with fewer than two segments', () => {
     expect(resolveFileToAction('ACC-1.json')).toEqual({
       ignored: true,
-      reason: 'not under a known zdf-output subfolder',
+      reason: 'not under the zdf-output root',
+    });
+  });
+
+  it('resolves correctly for a path anchored under an explicit multi-segment root', () => {
+    expect(resolveFileToAction('Zuora/zdf-output/accounts/ACC-9.json', 'Zuora/zdf-output')).toEqual({
+      resource: 'account',
+      id: 'ACC-9',
+    });
+  });
+
+  it('ignores an identical-looking path that is NOT under the given root', () => {
+    expect(resolveFileToAction('other/accounts/ACC-1.json', 'zdf-output')).toEqual({
+      ignored: true,
+      reason: 'not under the zdf-output root',
+    });
+  });
+
+  it('defaults root to the OUTPUT_DIR constant ("zdf-output") when root is omitted', () => {
+    expect(resolveFileToAction('zdf-output/accounts/ACC-1.json')).toEqual({
+      resource: 'account',
+      id: 'ACC-1',
+    });
+    // Same result whether root is passed explicitly or left to the default.
+    expect(resolveFileToAction('zdf-output/accounts/ACC-1.json', 'zdf-output')).toEqual(
+      resolveFileToAction('zdf-output/accounts/ACC-1.json')
+    );
+    // A path missing the default root prefix is now ignored (spec rule 1), not misclassified.
+    expect(resolveFileToAction('accounts/ACC-1.json')).toEqual({
+      ignored: true,
+      reason: 'not under the zdf-output root',
+    });
+  });
+
+  it('normalizes a leading "./" and trailing "/" on root', () => {
+    expect(resolveFileToAction('zdf-output/accounts/ACC-1.json', './zdf-output/')).toEqual({
+      resource: 'account',
+      id: 'ACC-1',
     });
   });
 });

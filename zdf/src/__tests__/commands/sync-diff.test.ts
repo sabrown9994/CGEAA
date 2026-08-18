@@ -18,8 +18,10 @@ vi.mock('../../api/client.js', () => ({
   APIQUERY_MAX_ROWS: 5000,
 }));
 
+// Matches the real OUTPUT_DIR default ('zdf-output') so paths in SAMPLE_DIFF (which use the
+// conventional zdf-output/<subfolder>/<file> layout) resolve under the root sync-diff anchors to.
 vi.mock('../../helpers/file-io.js', () => ({
-  getOutputDir: vi.fn(() => 'MOCK_OUTPUT'),
+  getOutputDir: vi.fn(() => 'zdf-output'),
 }));
 
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
