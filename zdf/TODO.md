@@ -29,11 +29,18 @@ the "Required development flow" section at the end of this file:
 
 ## 🆕 PROPOSED FEATURE (2026-08-18) — `zdf sync-diff`: git-diff → zdf actions for CI/CD
 
-> **Status: NOT STARTED. This is the next feature to build.** Spec is complete and approved by
-> the product owner. Implement it via the "Required development flow" above (multi-agent,
-> adversarial tester, live intQA, Vitest). Read this whole section before starting; see
-> `CLAUDE.md` → "sync-diff feature (implementation context)" for where it hooks into existing
-> helpers, and `README.md` → "sync-diff (CI/CD)" for the user-facing CLI contract.
+> **Status: ✅ IMPLEMENTED (2026-08-19).** Both Phase 1 (planner + `--dry-run`) and Phase 2
+> (the `--apply` executor) are done, via the "Required development flow" above (multi-agent,
+> adversarial tester, live intQA, Vitest). Live-verified against intQA with a self-contained
+> create-then-delete of a throwaway product (`TEST ZDF POC` marker) — skips were confirmed NOT
+> executed. The spec below is kept as-authored for reference; see `CLAUDE.md` → "sync-diff
+> feature (implementation context)" for how it's wired into existing helpers (now marked
+> implemented there too), and `README.md` → "sync-diff (CI/CD)" for the user-facing CLI
+> contract. Two notable outcomes worth flagging up front: `create` is skip+warn (not eligible)
+> for `invoice`, `credit-memo`, `debit-memo`, and `billing-template` — each needs inputs
+> (accounting fields, `--invoice`, or a filename-encoded id) sync-diff can't supply from a bare
+> file — while `push`/`delete` remain the core reconcile ops for those resources and are fully
+> eligible.
 
 ### Why
 ZDF's primary purpose is a CI/CD pipeline between GitHub and Zuora. The `zdf-output/` tree is

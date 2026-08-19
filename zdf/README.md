@@ -128,13 +128,10 @@ zdf list billing-templates
 
 ### sync-diff (CI/CD)
 
-> **⚠️ PLANNED — not yet implemented.** This documents the intended contract; the feature is
-> specced in `TODO.md` → "🆕 PROPOSED FEATURE … `zdf sync-diff`". Remove this banner once built.
-
-Reconcile a set of changed `zdf-output/` files with Zuora by firing the appropriate
-create/push/delete per file. This is the engine behind the GitHub↔Zuora CI/CD pipeline: a
-GitHub Actions workflow computes `git diff --name-status` for the committed `zdf-output/` tree
-and pipes it in.
+Maps a `git diff --name-status` of the committed `zdf-output/` tree to zdf `create`/`push`/
+`delete` actions — this is the engine behind the GitHub↔Zuora CI/CD pipeline. ZDF itself is
+**git-agnostic**: it never shells out to git. The caller (a GitHub Actions workflow, or you,
+by hand) computes the diff and pipes it in.
 
 ```
 # Preview the plan (default; no network calls) — used for the PR-comment dry run
@@ -144,25 +141,105 @@ git diff --name-status <base> <head> -- Zuora/zdf-output | zdf sync-diff --dry-r
 git diff --name-status <base> <head> -- Zuora/zdf-output | zdf sync-diff --apply
 ```
 
+```
+zdf sync-diff [--dry-run | --apply] [--diff-file <path>] [--format text|markdown|json] [--root <dir>]
+```
+
 | Flag | Description |
 |------|-------------|
-| `--dry-run` | (default) Resolve and print the plan; make no network calls |
-| `--apply` | Execute each planned, eligible action |
-| `--diff-file <path>` | Read the `git diff --name-status` output from a file instead of stdin |
-| `--format text\|markdown\|json` | Output format (default `text`; `markdown` renders the PR-comment table) |
-| `--root <dir>` | zdf-output root to resolve files against (default: `ZDF_OUTPUT_DIR` or `zdf-output`) |
+| `--dry-run` | **(default)** Resolve and print the plan; read-only, makes no network calls |
+| `--apply` | Execute each planned, eligible action against the active environment |
+| `--diff-file <path>` | Read `git diff --name-status` output from a file (default: read stdin) |
+| `--format text\|markdown\|json` | Output format (default `text`) |
+| `--root <dir>` | zdf-output root to resolve files against (default: `getOutputDir()`, i.e. `ZDF_OUTPUT_DIR` or `zdf-output`) |
 
-**Behavior:**
-- Maps each changed file to a resource + id + operation: **A**dded → `create`, **M**odified →
-  `push`, **D**eleted → `delete` (renames → delete old + create new).
-- All actions run with `--no-dependency` (object only; no child re-pull, no local file churn).
-- **Guardrails:** never fires `create bill-run` (executes real billing); operations with no
-  supported command — `create`/`delete subscription` (removed), `push bill-run` (re-fetch only),
-  and any `data-query` op — are **skipped with a warning**, not failed. (No resource is currently
-  tenant-blocked, but any future block in `delete-guard.ts` is skipped the same way.)
-- Exit `0` on a clean run (including skips); exit `1` if any *eligible* action fails.
+`--apply` and `--dry-run` are mutually exclusive — passing both throws before anything runs.
 
-See `TODO.md` for the full spec and the GitHub Actions workflow it powers.
+#### Mapping (file path → resource / id / operation)
+
+- **Path shape:** a changed file only resolves if it sits directly under
+  `<root>/<subfolder>/<filename>.json`, where `<subfolder>` is a known value of
+  `RESOURCE_SUBFOLDERS` (e.g. `accounts`, `product-rate-plans`, `bill-runs`). Anything else
+  (wrong depth, unknown subfolder, non-`.json`) is ignored with a reason, not misclassified.
+- **subfolder → resource:** the reverse of `RESOURCE_SUBFOLDERS` (`accounts`→`account`,
+  `product-rate-plans`→`product-rate-plan`, …).
+- **id from filename** (basename minus `.json`):
+  - Default: the bare basename is the id.
+  - `order`: the basename **is** the order number (e.g. `O-01339581`) — not a UUID.
+  - `billing-template`: file is `<name>_<id>.json`; the id is the substring **after the last
+    `_`** (names may contain `_`; Zuora ids never do).
+  - `data-query`: excluded entirely (job artifact, not a config object) — ignored regardless of op.
+- **status → operation:** `A`→`create`, `M`→`push`, `D`→`delete`. `R<score>` (rename)
+  decomposes into `delete(oldPath)` + `create(newPath)`. `C<score>` (copy) → `create(newPath)`.
+  Malformed name-status lines are skipped, never fail the parse.
+
+#### Eligibility — skip + warn, never hard-fail
+
+Some mapped actions have no safe or supported way to execute; these are marked ineligible with
+a reason and are **skipped with a warning**, never counted as a failure:
+
+| Resource | Ineligible op(s) | Why |
+|---|---|---|
+| `subscription` | `create`, `delete` | no create/delete command exists (Orders API / Zuora UI only) |
+| `order-line-item` | `create`, `delete` | no create/delete command exists |
+| `bill-run` | `create` | would execute real billing (generates invoices/memos) |
+| `bill-run` | `push` | no PUT endpoint — `push bill-run` is a re-fetch no-op |
+| `data-query` | any | job artifact, excluded at the mapping stage |
+| `invoice` | `create` | needs accounting fields / a source-account body sync-diff can't supply |
+| `credit-memo`, `debit-memo` | `create` | needs `--invoice` and per-item shape (`skuName`, etc.) |
+| `billing-template` | `create` | the id is encoded in the filename, not creatable this way |
+
+`push`/`delete` for `invoice`, `credit-memo`, `debit-memo`, and `billing-template` **are**
+eligible — only their `create` is excluded. `create` **is** eligible for `account`, `contact`,
+`product`, `product-rate-plan`, `product-rate-plan-charge`, `order`, and `workflow`. Any future
+tenant-config block added to `checkTenantSupported`/`checkDeleteAllowed`
+(`src/helpers/delete-guard.ts`) is likewise turned into skip+warn, never a hard failure.
+
+#### Execution (`--apply`)
+
+Each eligible item spawns the compiled CLI as a child process:
+
+```
+node dist/zdf.js <op> <resource> <id> --no-dependency
+```
+
+`--no-dependency` is mandatory — sync-diff is object-only (no child re-pull, no local file
+churn, no CI commit loops). Items run in **dependency order**: creates and pushes run
+parents-first (account, contact, product, product-rate-plan, product-rate-plan-charge, order,
+order-line-item, subscription, bill-run, invoice, credit-memo, debit-memo, workflow,
+billing-template); deletes run in the exact reverse order (children-first). Ineligible items are
+logged with `output.warn` and never spawned. The run exits `0` if every eligible action
+succeeded (skips don't count against it); it exits `1` if **any eligible action** failed.
+
+#### Output formats
+
+- **text** (default): one line per item (`[<status>] <file> -> <op> <resource> <id> — eligible`
+  or `SKIPPED (<reason>)`), followed by a summary line (`N to create, N to push, N to delete, N
+  skipped`; `--apply` additionally reports `N created, N pushed, N deleted, N skipped, N failed`).
+- **markdown**: a PR-comment-ready table — `file | status | resource | id | op | eligible |
+  reason` (plus `executed | ok | exitCode` columns on `--apply`) — followed by the same summary line.
+- **json**: the plan (or, for `--apply`, the per-item results including `executed`, `exitCode`,
+  `ok`) as a JSON array — for downstream tooling.
+
+#### Example
+
+```
+$ printf 'A\tzdf-output/accounts/A00012345.json\nM\tzdf-output/products/8ad0abc.json\nD\tzdf-output/data-queries/q123.json\n' \
+  | zdf sync-diff --dry-run
+
+[A] zdf-output/accounts/A00012345.json -> create account A00012345 — eligible
+[M] zdf-output/products/8ad0abc.json -> push product 8ad0abc — eligible
+[D] zdf-output/data-queries/q123.json -> ignore — SKIPPED (data-query excluded)
+
+1 to create, 1 to push, 0 to delete, 1 skipped
+```
+
+The account create and product push are eligible; the deleted data-query is skipped with a
+reason (data-query is excluded from sync) — it never fails the run.
+
+See `TODO.md` → "`zdf sync-diff`" for the full background spec, and `CLAUDE.md` →
+"sync-diff feature (implementation context)" for how it's wired into existing helpers. The
+GitHub Actions workflow that invokes this command is authored separately in the FinSys repo.
 
 ---
 

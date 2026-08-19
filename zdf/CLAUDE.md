@@ -105,8 +105,8 @@ and `checkDeleteAllowed(resource)`. **Both maps are currently empty** (no resour
 formerly-blocked creates were all resolved — `create product` via the Commerce API and
 `create invoice` by passing accounting fields in the body — and `create subscription` /
 `delete subscription` were removed entirely (see below). The functions and their (empty) maps are
-retained as the eligibility hook the planned `sync-diff` feature will call, and so future
-tenant-blocked resources can be added in one place.
+retained as the eligibility hook `sync-diff` calls (see "sync-diff feature (implementation
+context)" below), and so future tenant-blocked resources can be added in one place.
 
 ### Subscription: no create / no delete (removed)
 
@@ -277,34 +277,53 @@ Use `--no-dependency` to skip all traversal. Essential for large accounts.
 See `TODO.md` "Tenant-config limitations" for details on the ✗ blocked entries and what
 would need to change to enable them.
 
-## sync-diff feature (implementation context)
+## sync-diff feature (implementation context) — IMPLEMENTED
 
-`zdf sync-diff` is the **next feature to build** — full spec in `TODO.md` → "🆕 PROPOSED
-FEATURE … `zdf sync-diff`", user-facing CLI contract in `README.md` → "sync-diff (CI/CD)".
-It maps a `git diff --name-status` of the committed `zdf-output/` tree to zdf create/push/delete
-actions for the GitHub↔Zuora CI/CD pipeline. This section is the wiring guide; the spec is
-authoritative for behavior.
+`zdf sync-diff` is **implemented** (Phase 1 planner + `--dry-run`, and Phase 2 the `--apply`
+executor — both done and live-verified against intQA, 2026-08-19). Background spec in
+`TODO.md` → "🆕 PROPOSED FEATURE … `zdf sync-diff`" (now marked done there), user-facing CLI
+contract in `README.md` → "sync-diff (CI/CD)". It maps a `git diff --name-status` of the
+committed `zdf-output/` tree to zdf create/push/delete actions for the GitHub↔Zuora CI/CD
+pipeline. This section documents how it's wired into existing helpers; `src/helpers/sync-diff.ts`
+and `src/commands/sync-diff.ts` are the source of truth for exact behavior.
 
-**Reuse, do not reinvent — the pieces already exist:**
-- `RESOURCE_SUBFOLDERS` (`src/constants.ts`) — resource → output subfolder. Build the **reverse
-  map** (`accounts`→`account`, `product-rate-plans`→`product-rate-plan`, …) for path→resource.
+**Executor:** `--apply` does NOT call resource logic in-process. It spawns the compiled CLI as
+a child process per eligible action — `node dist/zdf.js <op> <resource> <id> --no-dependency`
+(`runAction`/`applyPlan` in `src/commands/sync-diff.ts`), inheriting `process.env` so CI auth
+env vars pass through. `--no-dependency` is mandatory: object-only, no child re-pull, no local
+file churn / commit-loop risk. Exit code is driven solely by whether any *eligible* action
+failed — skipped items never count against it.
+
+**Create-eligibility limits (skip+warn, not hard-fail):** `create` is ineligible for `invoice`
+(needs accounting fields / source-account body), `credit-memo`/`debit-memo` (need `--invoice`
++ per-item shape), and `billing-template` (id is encoded in the filename, not creatable this
+way). `create`/`delete` are ineligible for `subscription` (no such command) and
+`order-line-item` (no such command); `create bill-run` (executes real billing) and
+`push bill-run` (re-fetch no-op) are also ineligible. `push`/`delete` for invoice/credit-memo/
+debit-memo/billing-template remain eligible — only their `create` is excluded. See
+`src/helpers/sync-diff.ts` → `eligibility()` for the exhaustive, authoritative list.
+
+**Reused pieces (as built):**
+- `RESOURCE_SUBFOLDERS` (`src/constants.ts`) — resource → output subfolder.
+  `REVERSE_SUBFOLDERS` (`src/helpers/sync-diff.ts`) is the reverse map (`accounts`→`account`,
+  `product-rate-plans`→`product-rate-plan`, …) built from it via `Object.fromEntries`, for
+  path→resource resolution.
 - `checkTenantSupported(resource, 'create')` and `checkDeleteAllowed(resource)`
-  (`src/helpers/delete-guard.ts`) — call these to decide op eligibility. Their block-maps are
-  currently empty (no resource is blocked today), but they are the designated hook: if a future
-  tenant block is added there, catch the throw and turn it into **skip + warn** (never fail the
-  run). Note `subscription` has no create/delete commands at all, so a `sync-diff` mapping for
-  `A`/`D` on a `subscriptions/` file should itself skip+warn (no-op path), independent of the guards.
-- `getOutputDir()` / `resolveFilePath()` (`src/helpers/file-io.ts`) — resolve the zdf-output root
-  (honors `ZDF_OUTPUT_DIR`) and per-resource paths; use for the `--root` default and for finding
-  the on-disk file to read for a create/push.
-- `resolveAndSync(resource, id, op)` + `setNoDependency(true)` (`src/helpers/dependency-graph.ts`)
-  and the existing per-resource command bodies — sync-diff MUST run every action with
-  `--no-dependency` semantics.
-- `output.success/warn/error` (`src/helpers/output.ts`) — for plan/apply logging.
+  (`src/helpers/delete-guard.ts`) — called from `eligibility()` to decide op eligibility. Their
+  block-maps are currently empty (no resource is tenant-blocked today), but they remain the
+  designated hook: a future tenant block there is caught and turned into **skip + warn** (never
+  fails the run). `subscription` (create/delete) and `order-line-item` (create/delete) skip+warn
+  independently of the guards, since no such commands exist at all.
+- `getOutputDir()` (`src/helpers/file-io.ts`) — resolves the zdf-output root (honors
+  `ZDF_OUTPUT_DIR`); used as the `--root` default in `src/commands/sync-diff.ts`.
+- `--no-dependency` semantics via child-process spawn (see Executor above), not an in-process
+  `resolveAndSync` call — every applied action runs as `node dist/zdf.js <op> <resource> <id>
+  --no-dependency`.
+- `output.success/warn/error` (`src/helpers/output.ts`) — used for `--apply` plan/apply logging.
 - `runCommand` (`src/helpers/command-runner.ts`) — the global-flag + error-to-exit-code wrapper;
-  register `sync-diff` the same way as other commands (`getOrCreate`, `runCommand`).
+  `sync-diff` is registered the same way as other commands in `bin/zdf.ts`.
 
-**Filename → id gotchas (must handle):**
+**Filename → id gotchas (handled in `resolveFileToAction`):**
 - `order`: filename IS the order number (`O-01339581`) — that's the identifier the order command
   uses, not a UUID.
 - `billing-template`: file is written as `<sanitizedName>_<id>.json` (see
@@ -312,25 +331,27 @@ authoritative for behavior.
   `_`** (Zuora ids contain no `_`; names may).
 - `data-query`: **excluded** from sync (job artifact, not a config object — no push endpoint).
 
-**Ordering:** static resource precedence (parents-first for create/push, reversed for delete) —
-see the spec for the exact list. Do NOT try to resolve the live dependency graph for ordering.
+**Ordering:** static `RESOURCE_PRECEDENCE` array in `src/helpers/sync-diff.ts` (parents-first
+for create/push, reversed for delete). Deliberately not resolved from the live dependency graph.
 
-**Execution model:** either extract each command's action body into an exported in-process
-`run<Resource><Op>()` (preferred, testable) or spawn `node dist/zdf.js <op> <resource> <id>
---no-dependency` as a child process (acceptable). Same guards either way; capture per-action
-pass/fail for the exit-code accumulator (exit 1 iff an *eligible* action fails; skips/warns
-never fail).
+**Execution model (as built):** child-process spawn of the compiled CLI — `runAction`/
+`applyPlan` in `src/commands/sync-diff.ts` spawn `node dist/zdf.js <op> <resource> <id>
+--no-dependency` per eligible item via `spawnSync`, inheriting `process.env`. Per-action
+pass/fail is captured into the exit-code accumulator (exit 1 iff an *eligible* action fails;
+skips/warns never fail).
 
-**Suggested files:** `src/helpers/sync-diff.ts` (pure, I/O-free: parse name-status, path→action
-resolution, reverse-subfolder map, precedence, eligibility) + `src/commands/sync-diff.ts`
-(command registration, stdin/`--diff-file` read, text/markdown/json rendering, executor).
-Register in `bin/zdf.ts`.
+**Files (as built):** `src/helpers/sync-diff.ts` (pure, I/O-free: `parseNameStatus`,
+`resolveFileToAction`, `planFromDiff`, `eligibility`, `REVERSE_SUBFOLDERS`,
+`RESOURCE_PRECEDENCE`) + `src/commands/sync-diff.ts` (command registration, stdin/`--diff-file`
+read, text/markdown/json rendering via `render`/`renderApply`, and the `runAction`/`applyPlan`
+executor). Registered in `bin/zdf.ts`.
 
-**Testing:** unit-test the pure `sync-diff.ts` functions exhaustively (mapping, status decode
-incl. rename→delete+create, eligibility, ordering) with no mocks; test the command with the
-usual `vi.hoisted` mocks for the executor/child-process and `process.exit` (see below). Live
-validation: `--dry-run` is read-only (safe on intQA); `--apply` uses the self-contained
-create-then-delete + `TEST ZDF POC` method (see `TODO.md`).
+**Testing:** the pure `sync-diff.ts` functions are unit-tested exhaustively (mapping, status
+decode incl. rename→delete+create, eligibility, ordering) with no mocks; the command is tested
+with the usual `vi.hoisted` mocks for `spawnSync`/`process.exit` (see below). Live validation
+was done via `--dry-run` (read-only, safe on intQA) and via `--apply` using the self-contained
+create-then-delete `TEST ZDF POC` method against a throwaway product — confirmed skips were not
+executed. See `TODO.md` for the live-verification writeup.
 
 ## Test conventions
 
