@@ -261,6 +261,56 @@ describe('eligibility', () => {
     expect(eligibility('product', 'delete')).toEqual({ eligible: true });
     expect(eligibility('billing-template', 'push')).toEqual({ eligible: true });
   });
+
+  it('excludes create invoice (requires accounting fields / a source account body)', () => {
+    expect(eligibility('invoice', 'create')).toEqual({
+      eligible: false,
+      reason: 'create not supported via sync-diff (requires accounting fields / a source account body)',
+    });
+  });
+
+  it('excludes create credit-memo and debit-memo (require --invoice and item shape)', () => {
+    expect(eligibility('credit-memo', 'create')).toEqual({
+      eligible: false,
+      reason: 'create not supported via sync-diff (requires --invoice and item shape)',
+    });
+    expect(eligibility('debit-memo', 'create')).toEqual({
+      eligible: false,
+      reason: 'create not supported via sync-diff (requires --invoice and item shape)',
+    });
+  });
+
+  it('excludes create billing-template (id is encoded in the filename)', () => {
+    expect(eligibility('billing-template', 'create')).toEqual({
+      eligible: false,
+      reason: 'create not supported via sync-diff (id is encoded in the filename)',
+    });
+  });
+
+  it('still allows push/delete for invoice, credit-memo, debit-memo, billing-template', () => {
+    expect(eligibility('invoice', 'push')).toEqual({ eligible: true });
+    expect(eligibility('invoice', 'delete')).toEqual({ eligible: true });
+    expect(eligibility('credit-memo', 'push')).toEqual({ eligible: true });
+    expect(eligibility('credit-memo', 'delete')).toEqual({ eligible: true });
+    expect(eligibility('debit-memo', 'push')).toEqual({ eligible: true });
+    expect(eligibility('debit-memo', 'delete')).toEqual({ eligible: true });
+    expect(eligibility('billing-template', 'push')).toEqual({ eligible: true });
+    expect(eligibility('billing-template', 'delete')).toEqual({ eligible: true });
+  });
+
+  it('still allows create for account/contact/product/product-rate-plan/product-rate-plan-charge/order/workflow', () => {
+    for (const resource of [
+      'account',
+      'contact',
+      'product',
+      'product-rate-plan',
+      'product-rate-plan-charge',
+      'order',
+      'workflow',
+    ]) {
+      expect(eligibility(resource, 'create')).toEqual({ eligible: true });
+    }
+  });
 });
 
 describe('planFromDiff', () => {

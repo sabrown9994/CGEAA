@@ -191,6 +191,18 @@ export function eligibility(resource: string, op: Op): Eligibility {
   if (resource === 'order-line-item' && (op === 'create' || op === 'delete')) {
     return { eligible: false, reason: 'no create/delete command for order-line-item' };
   }
+  if (resource === 'invoice' && op === 'create') {
+    return {
+      eligible: false,
+      reason: 'create not supported via sync-diff (requires accounting fields / a source account body)',
+    };
+  }
+  if ((resource === 'credit-memo' || resource === 'debit-memo') && op === 'create') {
+    return { eligible: false, reason: 'create not supported via sync-diff (requires --invoice and item shape)' };
+  }
+  if (resource === 'billing-template' && op === 'create') {
+    return { eligible: false, reason: 'create not supported via sync-diff (id is encoded in the filename)' };
+  }
 
   if (op === 'create') {
     try {
