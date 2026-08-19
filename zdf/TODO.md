@@ -27,152 +27,18 @@ the "Required development flow" section at the end of this file:
 
 ---
 
-## 🆕 PROPOSED FEATURE (2026-08-18) — `zdf sync-diff`: git-diff → zdf actions for CI/CD
+## ❌ REMOVED (2026-08-19) — `zdf sync-diff` (git-diff → zdf actions CI/CD engine)
 
-> **Status: ✅ IMPLEMENTED (2026-08-19).** Both Phase 1 (planner + `--dry-run`) and Phase 2
-> (the `--apply` executor) are done, via the "Required development flow" above (multi-agent,
-> adversarial tester, live intQA, Vitest). Live-verified against intQA with a self-contained
-> create-then-delete of a throwaway product (`TEST ZDF POC` marker) — skips were confirmed NOT
-> executed. The spec below is kept as-authored for reference; see `CLAUDE.md` → "sync-diff
-> feature (implementation context)" for how it's wired into existing helpers (now marked
-> implemented there too), and `README.md` → "sync-diff (CI/CD)" for the user-facing CLI
-> contract. Two notable outcomes worth flagging up front: `create` is skip+warn (not eligible)
-> for `invoice`, `credit-memo`, `debit-memo`, and `billing-template` — each needs inputs
-> (accounting fields, `--invoice`, or a filename-encoded id) sync-diff can't supply from a bare
-> file — while `push`/`delete` remain the core reconcile ops for those resources and are fully
-> eligible.
-
-### Why
-ZDF's primary purpose is a CI/CD pipeline between GitHub and Zuora. The `zdf-output/` tree is
-committed to git and treated as the source of truth. When a commit changes a file under
-`zdf-output/`, the pipeline should fire the **appropriate zdf action** to reconcile that one
-object in Zuora. This feature is the engine that maps a `git diff` to zdf commands. A GitHub
-Actions workflow (built later, in the **FinSys** repo — NOT here) is the consumer.
-
-### What to build — a new `sync-diff` subcommand
-A planner/executor that takes a set of changed `zdf-output/` files (as `git diff --name-status`
-output) and, per file, resolves a **resource + id + operation**, then either prints the plan
-(dry-run) or executes it. Keep ZDF **git-agnostic**: the caller computes the diff and pipes it
-in; the subcommand does NOT shell out to git (this keeps it unit-testable without a repo).
-
-**CLI surface** (register like every other command via `getOrCreate`):
-```
-zdf sync-diff [--dry-run | --apply]
-              [--diff-file <path>]           # git diff --name-status output; default: read stdin
-              [--format text|markdown|json]  # default text; markdown = PR-comment table
-              [--root <dir>]                 # zdf-output root; default resolves via getOutputDir()
-```
-- `--dry-run` (DEFAULT): resolve + print the plan. **No network calls.** Exit 0 unless an
-  internal/parse error.
-- `--apply`: execute each planned+eligible action in dependency order (see Ordering). Accumulate
-  results; exit 1 if any eligible action fails (skips/warns never fail the run) — mirror the
-  error-accumulator pattern in FinSys `zuora-deploy-all.yml`.
-
-### Mapping rules (file path → resource / id / operation)
-1. Consider only paths inside the zdf-output root under a known subfolder in
-   `RESOURCE_SUBFOLDERS` (`src/constants.ts`). Anything else → warn + ignore.
-2. **subfolder → resource**: reverse of `RESOURCE_SUBFOLDERS` (e.g. `accounts`→`account`,
-   `product-rate-plans`→`product-rate-plan`, `bill-runs`→`bill-run`). Build the reverse map once.
-3. **id from filename** (strip `.json`):
-   - Default: basename without extension is the id.
-   - `order`: basename is the **order number** (e.g. `O-01339581`) — that IS the identifier
-     `resolveAndSync`/the order command uses.
-   - `billing-template`: filename is `<name>_<id>.json` → the id is the substring **after the
-     last `_`** (names can contain `_`; the Zuora id has none). Matches how
-     `billing-templates.ts` writes files.
-   - `data-query`: **EXCLUDE entirely** — these are job artifacts, not config objects (no push
-     endpoint; create needs a `.sql`; delete cancels a job). Warn + skip.
-4. **git status → operation**: `A`→create, `M`→push, `D`→delete. `R<score>` (rename) →
-   decompose into delete(old path) + create(new path). `C` (copy) → create(new path). Parse the
-   two-column / three-column name-status format accordingly.
-
-### Eligibility / guardrails (all approved) — skip+warn, never hard-fail
-- Reuse the existing guards: `checkTenantSupported(resource, 'create')` and
-  `checkDeleteAllowed(resource)` (`src/helpers/delete-guard.ts`). Their block-maps are currently
-  empty (no resource is tenant-blocked today — product/invoice creates were resolved), but keep
-  calling them so any future block → **skip + warn**, not a hard fail.
-- **`subscription` has no `create`/`delete` command** (removed). A mapped `A` (create) or `D`
-  (delete) on a `subscriptions/` file must **skip + warn** — there is no command to invoke.
-  (`push` on a `M` is still valid.)
-- **Exclude `create bill-run` explicitly** — it executes REAL billing (generates invoices/memos).
-  Even though the CLI supports it, `sync-diff` must never fire it automatically. Skip + warn.
-- `push bill-run` is a re-fetch no-op (no PUT endpoint) → skip + warn.
-- `data-query` (any op) → excluded (see mapping rule 3).
-- **All executed ops run with `--no-dependency` semantics** — object only, no child re-pull, so
-  local files are never rewritten (avoids the `github-actions[bot]` commit loop). This was an
-  explicit product decision.
-
-### Ordering (Full CRUD is in scope: A→create, M→push, D→delete)
-Use a **static, documented resource precedence** (simplest deterministic option — no need to
-resolve the live graph):
-- **create / push order (parents first):** account, contact, product, product-rate-plan,
-  product-rate-plan-charge, order, order-line-item, subscription, bill-run, invoice, credit-memo,
-  debit-memo, workflow, billing-template.
-- **delete order:** the exact reverse (children first).
-Within a resource, order is stable/insertion order.
-
-### Execution model
-Executed actions MUST reuse existing per-resource command logic and its guards — do not
-re-implement endpoints. Two acceptable implementations (implementer's choice, state which in the
-PR):
-- **Preferred:** extract each command's action body into an exported `run<Resource><Op>()`
-  (or a small dispatch table) and call it in-process with `noDependency = true`.
-- **Acceptable fallback:** spawn the compiled CLI as a child process
-  (`node dist/zdf.js <op> <resource> <id> --no-dependency`), inheriting auth env vars, and
-  collect exit codes.
-Either way: same guards, same `--no-dependency`, per-action pass/fail captured for the summary.
-
-### Output
-- `--format markdown`: a table for the PR comment — columns
-  `file | status | resource | id | op | eligible | reason` — plus a summary line
-  (`N to create, N to push, N to delete, N skipped`).
-- `--format text` (default): human-readable log lines.
-- `--format json`: machine-readable plan array (for other tooling).
-
-### Suggested file layout (match existing conventions)
-- `src/helpers/sync-diff.ts` — **pure functions**: `parseNameStatus(str)`,
-  `resolveFileToAction(path)`, `planFromDiff(entries)`, the reverse-subfolder map, precedence
-  arrays, eligibility check. No I/O — fully unit-testable.
-- `src/commands/sync-diff.ts` — command registration, stdin/`--diff-file` reading, format
-  rendering, and the executor (in-process runners or child-process spawn). Register it in
-  `bin/zdf.ts`.
-
-### Tests required (Vitest, `vi.hoisted` mocks — see CLAUDE.md "Test conventions")
-- Path mapping: every subfolder→resource; billing-template `<name>_<id>`; order-number id;
-  unknown subfolder ignored; `data-query` excluded.
-- Status mapping: A/M/D and rename→delete+create, copy→create; malformed lines.
-- Eligibility: any future tenant-blocked create skip+warn; subscription create/delete skip+warn
-  (no such command); `create bill-run` excluded; `push bill-run` skipped.
-- Ordering: creates parent-first, deletes child-first, mixed diff sorted correctly.
-- Dry-run: prints plan, makes **zero** network/exec calls; markdown table shape.
-- Apply: invokes runners/spawns in planned order; exit-code accumulation (1 iff an eligible
-  action fails; skips don't fail).
-
-### Live validation (follow the repo's existing contract)
-- `sync-diff --dry-run` is fully **read-only** → safe to run live against intQA.
-- For `--apply`, use the **self-contained create-then-delete** method with a `TEST ZDF POC`
-  marker (see "Push side (self-contained validation method)" below) — build a tiny diff that
-  creates a throwaway record, applies it, then a diff that deletes it. Never mutate pre-existing
-  tenant data.
-
-### Consumer contract — GitHub Actions workflow (built LATER in FinSys, documented here so the CLI I/O matches)
-The FinSys repo (`cargurus-ea/FinTech`) will get a new `.github/workflows/zdf-deploy.yml`,
-**separate** from the existing `zuora-deploy-all.yml` (which deploys the other `Zuora/**`
-template folders via the Deployment Manager API and does NOT touch `zdf-output/`). Approved shape:
-- **Triggers:** `pull_request` into `qa`/`staging`/`main` → **dry-run** + post the markdown plan
-  as a PR comment. `push` to `qa`/`staging`/`main` → **apply**.
-- **Path scope:** `Zuora/zdf-output/**`.
-- **Env mapping (reuse existing secrets):** qa/staging → sandbox (`rest.test.zuora.com`),
-  main → prod (`rest.na.zuora.com`); map the branch's `ZUORA_*_CLIENT_ID/SECRET` secrets onto
-  zdf's env-var auth (`ZDF_CLIENT_ID` / `ZDF_CLIENT_SECRET` / `ZDF_BASE_URL` — see CLAUDE.md
-  "Authentication — environment variables").
-- **Guardrails:** PRs touching `Zuora/zdf-output/**` must carry the existing `allow-zuora-edits`
-  label (same gate as `zuora-guard.yml`); the **main/prod apply job is wrapped in a GitHub
-  Environment (`zuora-production`) requiring manual reviewer approval**; keep the
-  `if: github.actor != 'github-actions[bot]'` loop guard.
-- The workflow computes `git diff --name-status <base> <head> -- Zuora/zdf-output` and pipes it
-  to `zdf sync-diff`. **This CLI feature is the deliverable; the workflow itself is out of scope
-  for this task and will be authored in FinSys after this lands.**
+`sync-diff` was implemented (planner + `--apply` executor, live-verified against intQA) and then
+**removed** on 2026-08-19. Reason: promotion between Zuora environments moved to Zuora's native
+**Deployment Manager** API, which deploys config at the **component-type** level (whole
+`workflows`, whole `productCatalog`, …) with **no object-level selection** — so a per-object
+`git diff → create/push/delete` promotion pipeline cannot be built on it, and per-tenant internal
+ids are not stable cross-environment identifiers anyway. ZDF is now scoped to three developer-CLI
+use cases (config editing, test-data pull/push into lower envs, targeted automation like prod
+product creation); promotion is Deployment Manager's job, handled outside ZDF. See
+`docs/promotion-deployment-manager.md` and `CLAUDE.md` → "Scope & promotion". The `sync-diff`
+source, command, tests, README section, and CLI registration were all deleted.
 
 ---
 

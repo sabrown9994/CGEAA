@@ -1,6 +1,5 @@
 // Intentionally empty — no resources are currently blocked from delete. Retained (along with
-// checkDeleteAllowed) as the eligibility hook the planned sync-diff feature will call, and for
-// future Zuora-API-level delete restrictions.
+// checkDeleteAllowed) for future Zuora-API-level delete restrictions.
 const BLOCKED: Record<string, string> = {};
 
 export function checkDeleteAllowed(resource: string): void {
@@ -9,8 +8,7 @@ export function checkDeleteAllowed(resource: string): void {
 }
 
 // Intentionally empty — no creates are currently blocked by tenant configuration. Retained
-// (along with checkTenantSupported) as the eligibility hook the planned sync-diff feature will
-// call, and for future tenant-config blocks.
+// (along with checkTenantSupported) for future tenant-config blocks.
 const TENANT_BLOCKED: Record<string, Record<string, string>> = {
   create: {},
 };

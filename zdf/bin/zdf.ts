@@ -15,7 +15,6 @@ import { register as registerInvoices } from '../src/commands/invoices.js';
 import { register as registerCreditMemos } from '../src/commands/credit-memos.js';
 import { register as registerDebitMemos } from '../src/commands/debit-memos.js';
 import { register as registerBillRuns } from '../src/commands/bill-runs.js';
-import { register as registerSyncDiff } from '../src/commands/sync-diff.js';
 
 const program = new Command();
 program
@@ -45,6 +44,5 @@ registerInvoices(program);
 registerCreditMemos(program);
 registerDebitMemos(program);
 registerBillRuns(program);
-registerSyncDiff(program);
 
 program.parse();

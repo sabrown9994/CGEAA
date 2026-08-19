@@ -105,8 +105,7 @@ and `checkDeleteAllowed(resource)`. **Both maps are currently empty** (no resour
 formerly-blocked creates were all resolved — `create product` via the Commerce API and
 `create invoice` by passing accounting fields in the body — and `create subscription` /
 `delete subscription` were removed entirely (see below). The functions and their (empty) maps are
-retained as the eligibility hook `sync-diff` calls (see "sync-diff feature (implementation
-context)" below), and so future tenant-blocked resources can be added in one place.
+retained so future tenant-blocked resources can be added in one place.
 
 ### Subscription: no create / no delete (removed)
 
@@ -277,81 +276,34 @@ Use `--no-dependency` to skip all traversal. Essential for large accounts.
 See `TODO.md` "Tenant-config limitations" for details on the ✗ blocked entries and what
 would need to change to enable them.
 
-## sync-diff feature (implementation context) — IMPLEMENTED
+## Scope & promotion — why ZDF is NOT a CI/CD pipeline
 
-`zdf sync-diff` is **implemented** (Phase 1 planner + `--dry-run`, and Phase 2 the `--apply`
-executor — both done and live-verified against intQA, 2026-08-19). Background spec in
-`TODO.md` → "🆕 PROPOSED FEATURE … `zdf sync-diff`" (now marked done there), user-facing CLI
-contract in `README.md` → "sync-diff (CI/CD)". It maps a `git diff --name-status` of the
-committed `zdf-output/` tree to zdf create/push/delete actions for the GitHub↔Zuora CI/CD
-pipeline. This section documents how it's wired into existing helpers; `src/helpers/sync-diff.ts`
-and `src/commands/sync-diff.ts` are the source of truth for exact behavior.
+ZDF is a **developer CLI for interacting with multiple Zuora tenants**, not a promotion
+pipeline. It has exactly three in-scope use cases:
 
-**Executor:** `--apply` does NOT call resource logic in-process. It spawns the compiled CLI as
-a child process per eligible action — `node dist/zdf.js <op> <resource> <id> --no-dependency`
-(`runAction`/`applyPlan` in `src/commands/sync-diff.ts`), inheriting `process.env` so CI auth
-env vars pass through. `--no-dependency` is mandatory: object-only, no child re-pull, no local
-file churn / commit-loop risk. Exit code is driven solely by whether any *eligible* action
-failed — skipped items never count against it.
+1. **Config editing** — pull/push `workflow` and `billing-template` between Zuora and the IDE,
+   so they can be edited with Claude Code or other AI tooling.
+2. **Test data** — pull/push financial/test data (account, contact, subscription, order,
+   product catalog, invoice, memos, bill-run) into **lower** environments for accurate QA and
+   bug reproduction.
+3. **Targeted automation** — scripted one-off tasks such as creating products (and their rate
+   plans / charges) in production from a ticket.
 
-**Create-eligibility limits (skip+warn, not hard-fail):** `create` is ineligible for `invoice`
-(needs accounting fields / source-account body), `credit-memo`/`debit-memo` (need `--invoice`
-+ per-item shape), and `billing-template` (id is encoded in the filename, not creatable this
-way). `create`/`delete` are ineligible for `subscription` (no such command) and
-`order-line-item` (no such command); `create bill-run` (executes real billing) and
-`push bill-run` (re-fetch no-op) are also ineligible. `push`/`delete` for invoice/credit-memo/
-debit-memo/billing-template remain eligible — only their `create` is excluded. See
-`src/helpers/sync-diff.ts` → `eligibility()` for the exhaustive, authoritative list.
+**Promotion between environments (IntQA → StagingUAT → Production) is handled by Zuora's native
+Deployment Manager, outside ZDF** — not by ZDF. See `docs/promotion-deployment-manager.md` for
+the design rationale and the key constraint that drove this split.
 
-**Reused pieces (as built):**
-- `RESOURCE_SUBFOLDERS` (`src/constants.ts`) — resource → output subfolder.
-  `REVERSE_SUBFOLDERS` (`src/helpers/sync-diff.ts`) is the reverse map (`accounts`→`account`,
-  `product-rate-plans`→`product-rate-plan`, …) built from it via `Object.fromEntries`, for
-  path→resource resolution.
-- `checkTenantSupported(resource, 'create')` and `checkDeleteAllowed(resource)`
-  (`src/helpers/delete-guard.ts`) — called from `eligibility()` to decide op eligibility. Their
-  block-maps are currently empty (no resource is tenant-blocked today), but they remain the
-  designated hook: a future tenant block there is caught and turned into **skip + warn** (never
-  fails the run). `subscription` (create/delete) and `order-line-item` (create/delete) skip+warn
-  independently of the guards, since no such commands exist at all.
-- `getOutputDir()` (`src/helpers/file-io.ts`) — resolves the zdf-output root (honors
-  `ZDF_OUTPUT_DIR`); used as the `--root` default in `src/commands/sync-diff.ts`.
-- `--no-dependency` semantics via child-process spawn (see Executor above), not an in-process
-  `resolveAndSync` call — every applied action runs as `node dist/zdf.js <op> <resource> <id>
-  --no-dependency`.
-- `output.success/warn/error` (`src/helpers/output.ts`) — used for `--apply` plan/apply logging.
-- `runCommand` (`src/helpers/command-runner.ts`) — the global-flag + error-to-exit-code wrapper;
-  `sync-diff` is registered the same way as other commands in `bin/zdf.ts`.
+The short version: an earlier design had ZDF host a `git diff → per-object create/push/delete`
+CI/CD pipeline (the removed `sync-diff` feature). We dropped it because Zuora's Deployment
+Manager API deploys config at the **component-type** level (whole `workflows`, whole
+`productCatalog`, etc.) with **no object-level selection** — so a "promote just this feature's
+objects" pipeline cannot be built on that API, and per-tenant internal ids aren't stable
+cross-environment identifiers anyway. Deployment Manager already does its own tenant-to-tenant
+matching, so promotion is its job, and ZDF stays a surgical, object-level developer tool.
 
-**Filename → id gotchas (handled in `resolveFileToAction`):**
-- `order`: filename IS the order number (`O-01339581`) — that's the identifier the order command
-  uses, not a UUID.
-- `billing-template`: file is written as `<sanitizedName>_<id>.json` (see
-  `billing-templates.ts` / `sanitizeNameForFilename`); the id is the segment **after the last
-  `_`** (Zuora ids contain no `_`; names may).
-- `data-query`: **excluded** from sync (job artifact, not a config object — no push endpoint).
-
-**Ordering:** static `RESOURCE_PRECEDENCE` array in `src/helpers/sync-diff.ts` (parents-first
-for create/push, reversed for delete). Deliberately not resolved from the live dependency graph.
-
-**Execution model (as built):** child-process spawn of the compiled CLI — `runAction`/
-`applyPlan` in `src/commands/sync-diff.ts` spawn `node dist/zdf.js <op> <resource> <id>
---no-dependency` per eligible item via `spawnSync`, inheriting `process.env`. Per-action
-pass/fail is captured into the exit-code accumulator (exit 1 iff an *eligible* action fails;
-skips/warns never fail).
-
-**Files (as built):** `src/helpers/sync-diff.ts` (pure, I/O-free: `parseNameStatus`,
-`resolveFileToAction`, `planFromDiff`, `eligibility`, `REVERSE_SUBFOLDERS`,
-`RESOURCE_PRECEDENCE`) + `src/commands/sync-diff.ts` (command registration, stdin/`--diff-file`
-read, text/markdown/json rendering via `render`/`renderApply`, and the `runAction`/`applyPlan`
-executor). Registered in `bin/zdf.ts`.
-
-**Testing:** the pure `sync-diff.ts` functions are unit-tested exhaustively (mapping, status
-decode incl. rename→delete+create, eligibility, ordering) with no mocks; the command is tested
-with the usual `vi.hoisted` mocks for `spawnSync`/`process.exit` (see below). Live validation
-was done via `--dry-run` (read-only, safe on intQA) and via `--apply` using the self-contained
-create-then-delete `TEST ZDF POC` method against a throwaway product — confirmed skips were not
-executed. See `TODO.md` for the live-verification writeup.
+> **Historical note:** the `sync-diff` command (`src/{helpers,commands}/sync-diff.ts` + tests)
+> was implemented and then **removed** on 2026-08-19 when promotion moved to Deployment Manager.
+> If you find lingering references to it, delete them.
 
 ## Test conventions
 
