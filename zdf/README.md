@@ -6,6 +6,8 @@ ZDF is a **developer CLI for interacting with Zuora tenants**, not an environmen
 
 ## Table of Contents
 
+- [Use Cases](#use-cases)
+- [Resources & Supported Actions](#resources--supported-actions)
 - [Setup](#setup)
 - [Global Flags](#global-flags)
 - [Commands](#commands)
@@ -29,9 +31,69 @@ ZDF is a **developer CLI for interacting with Zuora tenants**, not an environmen
   - [bill-run](#bill-run)
   - [workflow](#workflow)
   - [billing-template](#billing-template)
+  - [data-query](#data-query)
 - [Dependency Graph](#dependency-graph)
 - [Updatable Fields](#updatable-fields)
 - [Output Directory Layout](#output-directory-layout)
+
+---
+
+## Use Cases
+
+ZDF operates on **one Zuora tenant at a time** (the active `auth` environment). It is a
+developer CLI, **not** an environment-promotion pipeline — promotion between environments
+(IntQA → StagingUAT → Production) is handled by Zuora's native **Deployment Manager**, outside
+ZDF (see [`docs/promotion-deployment-manager.md`](docs/promotion-deployment-manager.md)). Within
+that scope, ZDF exists for three things:
+
+1. **Config editing** — pull `workflow` and `billing-template` definitions to local JSON, edit
+   them in your IDE (including with AI tooling like Claude Code), and push them back.
+2. **Test data** — pull an account and its billing objects (contacts, subscriptions, orders,
+   invoices, credit/debit memos, bill runs) out of one tenant and push them into a **lower**
+   environment so QA and bug reproduction work against realistic data. *(Financial writes are
+   intended for lower environments; treat production writes with care.)*
+3. **Targeted automation** — scripted, one-off tasks against a single tenant, most notably
+   creating products (with their rate plans and charges) in production from a ticket.
+
+The `data-query` resource is a cross-cutting utility: it submits Zuora Data Query (ZOQL export)
+jobs, typically to help extract the data used in use case 2.
+
+---
+
+## Resources & Supported Actions
+
+The table below is the authoritative map of every Zuora resource ZDF touches, which verbs each
+supports, and which use case it primarily serves. `✓` = supported; `—` = intentionally not
+supported (reason in the [Resource Reference](#resource-reference)).
+
+| Resource | Use case | pull | push | create | delete | list |
+|----------|----------|:----:|:----:|:------:|:------:|:----:|
+| workflow | 1 · config | ✓ | ✓ | ✓ | ✓ | — |
+| billing-template | 1 · config | ✓ | ✓ | ✓ | ✓ | ✓ |
+| account | 2 · test data | ✓ | ✓ | ✓ | ✓ | — |
+| contact | 2 · test data | ✓ | ✓ | ✓ | ✓ | — |
+| subscription | 2 · test data | ✓ | ✓ | — | — | — |
+| order | 2 · test data | ✓ | ✓ | ✓ | ✓ | ✓ |
+| order-line-item | 2 · test data | ✓ | ✓ | — | — | — |
+| invoice | 2 · test data | ✓ | ✓ | ✓ | ✓ | — |
+| credit-memo | 2 · test data | ✓ | ✓ | ✓ | ✓ | — |
+| debit-memo | 2 · test data | ✓ | ✓ | ✓ | ✓ | — |
+| bill-run | 2 · test data | ✓ | re-fetch¹ | ✓ ⚠² | ✓ | — |
+| product | 3 · automation | ✓ | ✓ | ✓ | ✓ | — |
+| product-rate-plan | 3 · automation | ✓ | ✓ | ✓ | ✓ | — |
+| product-rate-plan-charge | 3 · automation | ✓ | ✓ | ✓ | ✓ | — |
+| data-query | utility | ✓³ | — | ✓⁴ | ✓⁵ | — |
+
+¹ Bill runs have no PUT endpoint; `push bill-run` re-fetches the record (identical to `pull`).
+² `create bill-run` executes **real billing** in the target tenant (generates invoices/memos).
+³ `pull data-query` fetches a submitted job's **status**, not editable config.
+⁴ `create data-query` submits a job from a local `.sql` file.
+⁵ `delete data-query` cancels/deletes a job.
+
+**Not universal:** only `billing-template` and `order` support `list`. `subscription` and
+`order-line-item` have no `create`/`delete` (managed via the Orders API / their parent order).
+`data-query` has no `push`. Per-resource endpoints, body requirements, and status constraints
+are in the [Resource Reference](#resource-reference).
 
 ---
 
@@ -375,9 +437,37 @@ HTML invoice templates only, accessed via the Zuora **Settings API** (`/settings
 
 ---
 
+### data-query
+
+A utility for submitting Zuora **Data Query** (ZOQL export) jobs — used to extract tenant data,
+typically in support of the test-data use case. It manages *jobs*, not editable configuration,
+so there is no `push`.
+
+| Operation | Endpoint | Notes |
+|-----------|----------|-------|
+| pull | `GET /query/jobs/{id}` | Fetches a submitted job's **status** by job ID |
+| create | `POST /query/jobs` | Submits a job from a local `.sql` file and polls it to completion |
+| delete | `DELETE /query/jobs/{id}` | Cancels / deletes a job |
+| push | — | Not supported — a data query is a job, not a mutable resource |
+| list | — | Not supported |
+
+**Limitations:**
+- `create data-query` reads a `.sql` file (the ZOQL export query), submits it, and polls until
+  the job finishes. It does not itself download the result set — retrieve exported files via the
+  URL Zuora returns in the completed job.
+- `data-query` is **standalone**: it participates in no dependency traversal.
+
+---
+
 ## Dependency Graph
 
 When you pull or push a resource, the CLI automatically traverses its dependency tree (unless `--no-dependency` is set). The diagram below shows which resources are traversed for each operation.
+
+**Standalone resources (no traversal):** `workflow`, `billing-template`, and `data-query` have
+**no** dependency edges — they are always fetched/written on their own, regardless of
+`--no-dependency`. This is why the config-editing use case (workflow / billing-template) never
+pulls unrelated objects. Only the account-rooted financial graph and the product-catalog graph
+below are traversed.
 
 ```mermaid
 graph TD
@@ -496,8 +586,14 @@ zdf-output/
 │   └── {id}.json
 ├── debit-memos/
 │   └── {id}.json
-└── bill-runs/
-    └── {id}.json
+├── bill-runs/
+│   └── {id}.json
+├── workflows/
+│   └── {id}.json
+├── billing-templates/
+│   └── {name}_{id}.json
+└── data-queries/
+    └── {jobId}.json
 ```
 
-Files are written atomically (full replacement on every pull/push). The filename is always the Zuora ID or order number — files are renamed automatically after `create` once Zuora returns the assigned ID.
+Files are written atomically (full replacement on every pull/push). The filename is normally the Zuora ID or order number — files are renamed automatically after `create` once Zuora returns the assigned ID. `billing-template` files are named `{name}_{id}.json` (the id is the segment after the last `_`); `data-query` files are keyed by job ID.

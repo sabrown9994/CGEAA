@@ -236,8 +236,14 @@ Key traversal rules:
 - **product** (always) → product-rate-plans (ZOQL)
 - **product-rate-plan** (always) → parent product; pull also → charges (ZOQL)
 - **product-rate-plan-charge** (always) → parent product-rate-plan
-- **invoice/credit-memo/debit-memo** push/delete → parent account
+- **invoice/credit-memo/debit-memo** push/delete → parent account; invoice/credit-memo also → bill-run (invoice via `billRunId`, credit-memo via `sourceId`) on every action
 - **bill-run** (always) → parent account, invoices (ZOQL), credit-memos, debit-memos (ZOQL)
+
+**Standalone (no edges, never traversed):** `workflow`, `billing-template`, `data-query`. These
+are absent from `ENDPOINTS`/`applyRules` in `dependency-graph.ts` entirely, so they are always
+fetched/written alone regardless of `--no-dependency`. This is intentional and matches use
+case 1 (config editing pulls a workflow/template without dragging in unrelated objects). Adding
+a traversal edge for one of these would be a behavior change, not a bug fix.
 
 Use `--no-dependency` to skip all traversal. Essential for large accounts.
 
@@ -278,16 +284,28 @@ would need to change to enable them.
 
 ## Scope & promotion — why ZDF is NOT a CI/CD pipeline
 
-ZDF is a **developer CLI for interacting with multiple Zuora tenants**, not a promotion
-pipeline. It has exactly three in-scope use cases:
+ZDF is a **developer CLI for interacting with Zuora tenants** (one active tenant at a time — the
+selected `auth` environment), not a promotion pipeline. It has exactly three in-scope use cases:
 
 1. **Config editing** — pull/push `workflow` and `billing-template` between Zuora and the IDE,
    so they can be edited with Claude Code or other AI tooling.
 2. **Test data** — pull/push financial/test data (account, contact, subscription, order,
-   product catalog, invoice, memos, bill-run) into **lower** environments for accurate QA and
-   bug reproduction.
+   order-line-item, invoice, credit-memo, debit-memo, bill-run) into **lower** environments for
+   accurate QA and bug reproduction.
 3. **Targeted automation** — scripted one-off tasks such as creating products (and their rate
    plans / charges) in production from a ticket.
+
+**Resource → use case** (see the "Resource coverage" matrix above for verbs per resource):
+
+| Use case | Resources |
+|---|---|
+| 1 · config editing | `workflow`, `billing-template` |
+| 2 · test data | `account`, `contact`, `subscription`, `order`, `order-line-item`, `invoice`, `credit-memo`, `debit-memo`, `bill-run` |
+| 3 · automation | `product`, `product-rate-plan`, `product-rate-plan-charge` |
+| utility | `data-query` (submits ZOQL export jobs; standalone, no traversal) |
+
+The product catalog (`product`/`product-rate-plan`/`product-rate-plan-charge`) can also serve as
+test data (use case 2); its primary listed use here is prod automation (use case 3).
 
 **Promotion between environments (IntQA → StagingUAT → Production) is handled by Zuora's native
 Deployment Manager, outside ZDF** — not by ZDF. See `docs/promotion-deployment-manager.md` for
