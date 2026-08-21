@@ -31,8 +31,12 @@ export function writeConfig(config: ZdfConfig): void {
  *   ZDF_BASE_URL       — Zuora REST base URL (e.g. https://rest.zuora.com)
  * When all three are present they take precedence over any config file.
  * Optional: ZDF_ENV_NAME sets the environment name label (default "ci").
- * Optional: ZDF_IS_PRODUCTION=true marks the env as production (triggers the
- *   interactive production-guard prompt — set to "false" in automated pipelines).
+ * Optional: ZDF_IS_PRODUCTION=true marks the env as production. Production WRITES
+ *   (create/push/delete) are then subject to the write policy in command-policy.ts:
+ *   financial-resource writes are blocked unless ZDF_ALLOW_PROD_FINANCIAL=true; all
+ *   other production writes require confirmation, satisfied by ZDF_ASSUME_YES=true
+ *   (or an interactive TTY prompt) — set ZDF_IS_PRODUCTION=false in automated pipelines
+ *   that should never be gated.
  */
 export function getActiveEnv(): EnvironmentConfig {
   const clientId = process.env.ZDF_CLIENT_ID;

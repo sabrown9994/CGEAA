@@ -8,6 +8,7 @@ ZDF is a **developer CLI for interacting with Zuora tenants**, not an environmen
 
 - [Use Cases](#use-cases)
 - [Resources & Supported Actions](#resources--supported-actions)
+- [Production Safety](#production-safety)
 - [Setup](#setup)
 - [Global Flags](#global-flags)
 - [Commands](#commands)
@@ -48,12 +49,24 @@ that scope, ZDF exists for three things:
 
 1. **Config editing** — pull `workflow` and `billing-template` definitions to local JSON, edit
    them in your IDE (including with AI tooling like Claude Code), and push them back.
-2. **Test data** — pull an account and its billing objects (contacts, subscriptions, orders,
-   invoices, credit/debit memos, bill runs) out of one tenant and push them into a **lower**
-   environment so QA and bug reproduction work against realistic data. *(Financial writes are
-   intended for lower environments; treat production writes with care.)*
+2. **Test data** — work with an account and its billing objects (contacts, subscriptions,
+   orders, invoices, credit/debit memos, bill runs) for QA and bug reproduction in **lower**
+   environments. The three verbs are **not** interchangeable (see the box below): `pull` exports,
+   `push` updates an object **that already exists in the active tenant**, and `create` seeds a
+   **new** object. Financial writes to **production** are blocked by default — see
+   [Production Safety](#production-safety).
 3. **Targeted automation** — scripted, one-off tasks against a single tenant, most notably
    creating products (with their rate plans and charges) in production from a ticket.
+
+> **`push` is not a cross-tenant importer.** `push <resource> <id>` issues a
+> `PUT /{resource}/{id}` against the **active** tenant — it updates an object that already exists
+> *there*, by its Zuora id. Zuora ids are assigned per tenant (and re-keyed when a sandbox is
+> refreshed), so a file you `pull`ed from tenant A **cannot** be `push`ed into tenant B — the id
+> does not exist in B and the call 404s. To put data **into** a lower environment you `create` it
+> there (which mints a new id and is subject to the per-resource body requirements in the
+> [Resource Reference](#resource-reference)); `pull`/`push` are for **inspecting and round-tripping
+> edits within one tenant**. ZDF does not currently auto-remap ids/parent references across
+> tenants.
 
 The `data-query` resource is a cross-cutting utility: it submits Zuora Data Query (ZOQL export)
 jobs, typically to help extract the data used in use case 2.
@@ -97,6 +110,35 @@ are in the [Resource Reference](#resource-reference).
 
 ---
 
+## Production Safety
+
+ZDF applies a **write policy** based on whether the active environment is a production tenant.
+An environment is "production" if it was added with a Production env type, or (in CI) if
+`ZDF_IS_PRODUCTION=true`. The policy is enforced on the resource being written; **reads
+(`pull`/`list`) are always allowed and never prompt.**
+
+| On a PRODUCTION tenant | `pull` / `list` | `create` / `push` / `delete` |
+|---|---|---|
+| **config** — `workflow`, `billing-template` | allowed | allowed, after confirmation |
+| **catalog** — `product`, `product-rate-plan`, `product-rate-plan-charge` | allowed | allowed, after confirmation (this is the "create products in prod" use case) |
+| **financial** — `account`, `contact`, `subscription`, `order`, `order-line-item`, `invoice`, `credit-memo`, `debit-memo`, `bill-run` | allowed | **blocked** unless `--allow-prod-financial` (then: after confirmation) |
+| **utility** — `data-query` | allowed | allowed, after confirmation |
+
+On **non-production** environments, all writes proceed with no prompt.
+
+**Confirmation** (only for the "after confirmation" cases above):
+- Interactive terminal → a yes/no prompt (defaults to no).
+- `-y` / `--yes`, or `ZDF_ASSUME_YES=true` → proceeds without prompting (prints a notice).
+- **Non-interactive shell (CI) without `--yes`** → the command **fails fast** with a clear error
+  instead of hanging. Set `--yes` / `ZDF_ASSUME_YES=true` in pipelines.
+
+**Financial writes to production** additionally require `--allow-prod-financial` (or
+`ZDF_ALLOW_PROD_FINANCIAL=true`). Without it, the command is refused before any network call. A
+CI job that must, e.g., seed a financial fix into production would set **both**
+`ZDF_ALLOW_PROD_FINANCIAL=true` and `ZDF_ASSUME_YES=true` — intentionally two explicit opt-ins.
+
+---
+
 ## Setup
 
 ```bash
@@ -121,8 +163,12 @@ node dist/zdf.js auth use sandbox
 | `--max-nodes <n>` | Override the dependency-traversal node ceiling (default 500) for this invocation |
 | `--max-items <n>` | Override the sub-item / list pagination cap (default 5000) for this invocation |
 | `--no-caps` (alias `--unbounded`) | Disable all three caps above for this run; warns that the run may take a long time and could enumerate entire tables |
+| `-y`, `--yes` | Assume "yes" for the production write confirmation (for non-interactive / CI use). Env: `ZDF_ASSUME_YES=true` |
+| `--allow-prod-financial` | Permit `create`/`push`/`delete` of **financial** resources against a PRODUCTION environment (blocked by default). Env: `ZDF_ALLOW_PROD_FINANCIAL=true` |
 
 The `--no-dependency` flag is essential for large accounts with hundreds of child records (orders, subscriptions, invoices) where a full traversal would be impractical.
+
+See [Production Safety](#production-safety) for how `--yes` and `--allow-prod-financial` interact with the production write policy.
 
 A progress indicator (spinner) is shown during long-running pulls when connected to an interactive terminal (TTY); it is silent when stdout is piped or redirected.
 

@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { getActiveEnv } from '../auth/config.js';
 import { confirmProduction } from './production-guard.js';
+import { decideProductionPolicy, getInvokedCommand } from './command-policy.js';
 import { output } from './output.js';
 import { setDebug, setMaxRows, APIQUERY_MAX_ROWS } from '../api/client.js';
 import {
@@ -44,7 +45,31 @@ export function runCommand(program: Command, fn: () => Promise<void>): () => Pro
 
     try {
       const env = getActiveEnv();
-      await confirmProduction(env.isProduction, env.name);
+      const invoked = getInvokedCommand();
+      const assumeYes = opts.yes === true || process.env.ZDF_ASSUME_YES === 'true';
+      if (invoked) {
+        const allowProdFinancial =
+          opts.allowProdFinancial === true || process.env.ZDF_ALLOW_PROD_FINANCIAL === 'true';
+        const decision = decideProductionPolicy({
+          isProduction: env.isProduction,
+          verb: invoked.verb,
+          resource: invoked.resource,
+          allowProdFinancial,
+        });
+        if (decision.action === 'block') throw new Error(decision.reason);
+        if (decision.action === 'confirm') await confirmProduction(env.name, { assumeYes });
+      } else if (env.isProduction) {
+        // No {verb, resource} context was recorded (e.g. an in-process caller invoked
+        // runCommand without going through the CLI's preAction hook). We can't classify
+        // the resource, so fail SAFE rather than open: don't hard-block (we don't actually
+        // know this is a disallowed write), but don't silently proceed either — require the
+        // same confirmation a production write would need.
+        output.warn(
+          'Could not identify the command being run, so the production write policy cannot ' +
+          'classify this resource. Applying the production confirmation conservatively.'
+        );
+        await confirmProduction(env.name, { assumeYes });
+      }
       await fn();
     } catch (e) {
       if (e instanceof Error && e.message === 'Aborted by user.') {

@@ -20,13 +20,17 @@ vi.mock('../../helpers/dependency-graph.js', () => ({
   FETCH_ALL_ITEMS_MAX: 5000,
 }));
 
-vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
+const mockConfirmProduction = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: mockConfirmProduction }));
+
+const mockGetActiveEnv = vi.hoisted(() => vi.fn(() => ({ isProduction: false, name: 'sandbox' })));
+vi.mock('../../auth/config.js', () => ({ getActiveEnv: mockGetActiveEnv }));
 
 const mockWarn = vi.hoisted(() => vi.fn());
 vi.mock('../../helpers/output.js', () => ({ output: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warn: mockWarn } }));
 
 import { runCommand } from '../../helpers/command-runner.js';
+import { resetInvokedCommand } from '../../helpers/command-policy.js';
 
 function makeProgram(): Command {
   const p = new Command();
@@ -36,12 +40,17 @@ function makeProgram(): Command {
     .option('--max-nodes <n>')
     .option('--max-items <n>')
     .option('--no-caps')
-    .option('--unbounded');
+    .option('--unbounded')
+    .option('-y, --yes');
   p.command('run').action(() => runCommand(p, async () => {})());
   return p;
 }
 
-beforeEach(() => { vi.clearAllMocks(); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockGetActiveEnv.mockReturnValue({ isProduction: false, name: 'sandbox' });
+  resetInvokedCommand();
+});
 
 describe('runCommand cap flag wiring', () => {
   it('with no flags, sets all caps back to their defaults (no leakage from a prior invocation)', async () => {
@@ -87,5 +96,25 @@ describe('runCommand cap flag wiring', () => {
   it('--no-caps takes precedence over an explicit --max-rows (caps stay disabled)', async () => {
     await makeProgram().parseAsync(['node', 'zdf', '--no-caps', '--max-rows', '10', 'run']);
     expect(mockSetMaxRows).toHaveBeenCalledWith(Infinity);
+  });
+});
+
+describe('runCommand fail-safe when no command context is recorded (getInvokedCommand() === null)', () => {
+  // These tests never call setInvokedCommand, so getInvokedCommand() returns null,
+  // mirroring an in-process caller that invokes runCommand without going through the
+  // CLI's preAction hook.
+
+  it('on a PRODUCTION env, warns and requires confirmation instead of silently allowing', async () => {
+    mockGetActiveEnv.mockReturnValue({ isProduction: true, name: 'my-prod' });
+    await makeProgram().parseAsync(['node', 'zdf', '--yes', 'run']);
+    expect(mockConfirmProduction).toHaveBeenCalledWith('my-prod', { assumeYes: true });
+    expect(mockWarn).toHaveBeenCalled();
+    expect(mockWarn.mock.calls.some((c) => /production/i.test(String(c[0])))).toBe(true);
+  });
+
+  it('on a non-production env, proceeds silently (no confirmation)', async () => {
+    mockGetActiveEnv.mockReturnValue({ isProduction: false, name: 'sandbox' });
+    await makeProgram().parseAsync(['node', 'zdf', 'run']);
+    expect(mockConfirmProduction).not.toHaveBeenCalled();
   });
 });

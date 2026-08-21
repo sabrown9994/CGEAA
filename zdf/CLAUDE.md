@@ -289,9 +289,13 @@ selected `auth` environment), not a promotion pipeline. It has exactly three in-
 
 1. **Config editing** — pull/push `workflow` and `billing-template` between Zuora and the IDE,
    so they can be edited with Claude Code or other AI tooling.
-2. **Test data** — pull/push financial/test data (account, contact, subscription, order,
-   order-line-item, invoice, credit-memo, debit-memo, bill-run) into **lower** environments for
-   accurate QA and bug reproduction.
+2. **Test data** — inspect / round-trip financial/test data (account, contact, subscription,
+   order, order-line-item, invoice, credit-memo, debit-memo, bill-run) for QA and bug repro in
+   **lower** environments. NOTE: `push` is `PUT /{resource}/{id}` against the **active** tenant —
+   it updates an object that already exists *there*, by its per-tenant id. It is **not** a
+   cross-tenant importer: a file pulled from tenant A cannot be `push`ed into tenant B (the id
+   doesn't exist in B → 404). Seeding data into another env is a `create` (new id, per-resource
+   body requirements), not a `push`. ZDF does not auto-remap ids/parent refs across tenants.
 3. **Targeted automation** — scripted one-off tasks such as creating products (and their rate
    plans / charges) in production from a ticket.
 
@@ -322,6 +326,43 @@ matching, so promotion is its job, and ZDF stays a surgical, object-level develo
 > **Historical note:** the `sync-diff` command (`src/{helpers,commands}/sync-diff.ts` + tests)
 > was implemented and then **removed** on 2026-08-19 when promotion moved to Deployment Manager.
 > If you find lingering references to it, delete them.
+
+## Production write policy
+
+`src/helpers/command-policy.ts` (pure) classifies each command by **verb**
+(`pull`/`list`/`auth` = read; `create`/`push`/`delete` = write) and **resource class**
+(`RESOURCE_CLASS`: config = workflow/billing-template; catalog = product/product-rate-plan/
+product-rate-plan-charge; financial = account/contact/subscription/order/order-line-item/invoice/
+credit-memo/debit-memo/bill-run; utility = data-query). `decideProductionPolicy(...)` returns
+`allow | confirm | block`:
+
+- non-production → `allow` (writes proceed, no prompt);
+- production + read → `allow`;
+- production + write + **financial** → `block` unless `--allow-prod-financial` /
+  `ZDF_ALLOW_PROD_FINANCIAL=true` (then `confirm`);
+- production + write + config/catalog/utility → `confirm`;
+- production + write + **unknown resource** → `block` (unknown treated as financial; safest).
+
+**Wiring:** the program is built in `src/program.ts` (`buildProgram()`); `bin/zdf.ts` is a thin
+shim that calls `buildProgram().parseAsync(process.argv)`. `buildProgram` registers a Commander
+`preAction` hook that records `{verb, resource}` via `setInvokedCommand()` (verb =
+`actionCommand.parent.name()`, resource = `actionCommand.name()`). `runCommand`
+(`command-runner.ts`) reads it with `getInvokedCommand()`, calls `decideProductionPolicy`, and on
+`block` throws (→ exit 1), on `confirm` calls `confirmProduction(envName, { assumeYes })`.
+
+**Fail-safe when context is missing:** if `getInvokedCommand()` returns `null` (an in-process
+caller invoked `runCommand` without going through the CLI hook), the policy can't classify the
+resource, so it does NOT silently allow: on a **production** env it warns and requires
+confirmation (`confirmProduction` — needs `--yes`/`ZDF_ASSUME_YES` or a TTY, fail-fasts in CI);
+on non-production it proceeds. The extracted `buildProgram()` lets the integration test
+(`src/__tests__/integration/prod-policy-wiring.test.ts`) drive the real program end-to-end so a
+regression in the hook/plumbing fails a test.
+
+**Confirmation** (`src/helpers/production-guard.ts`): `assumeYes` (`-y`/`--yes` or
+`ZDF_ASSUME_YES=true`) → proceed with a notice; else if `process.stdin.isTTY` is falsy →
+**throw** (never hang in CI); else inquirer prompt, declined → `throw new Error('Aborted by
+user.')` (runCommand maps that message to exit 0). See README → "Production Safety" for the
+user-facing contract.
 
 ## Test conventions
 
@@ -471,3 +512,9 @@ If a job runs many ZDF commands sequentially, they each fetch a new token indepe
 no shared state between process invocations. For high-throughput pipelines that issue
 hundreds of commands, consider batching them into a single Node.js script that imports
 `getActiveEnv`/`ensureToken` directly rather than spawning a new process per command.
+
+> ⚠️ **Such a batching script bypasses the CLI entirely** (`buildProgram`/`runCommand`/the
+> preAction hook), so it also bypasses the **production write policy** (financial-write block +
+> confirmation). If you write one, do your own environment/resource gating, or route writes
+> through `runCommand` so `decideProductionPolicy` still applies. Prefer per-command
+> `node dist/zdf.js …` invocations when writing to production.

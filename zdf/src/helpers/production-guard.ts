@@ -1,7 +1,21 @@
 import inquirer from 'inquirer';
+import { output } from './output.js';
 
-export async function confirmProduction(isProduction: boolean, envName: string): Promise<void> {
-  if (!isProduction) return;
+export async function confirmProduction(envName: string, opts: { assumeYes: boolean }): Promise<void> {
+  if (opts.assumeYes) {
+    output.warn(
+      `Proceeding against PRODUCTION environment (${envName}) with confirmation assumed (--yes / ZDF_ASSUME_YES).`
+    );
+    return;
+  }
+
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      `Refusing to proceed against PRODUCTION environment (${envName}) without confirmation in a ` +
+      `non-interactive session. Pass --yes or set ZDF_ASSUME_YES=true to confirm.`
+    );
+  }
+
   const { confirmed } = await inquirer.prompt<{ confirmed: boolean }>([
     {
       type: 'confirm',
