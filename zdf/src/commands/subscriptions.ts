@@ -6,7 +6,7 @@ import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
-import { resolveAndSync } from '../helpers/dependency-graph.js';
+import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.js';
 
 const RESOURCE = 'subscription';
 const ENDPOINT = '/v1/subscriptions';
@@ -28,7 +28,7 @@ export function register(program: Command): void {
         if (!fetched) {
           throw new Error(`Failed to pull subscription ${id} (see error above).`);
         }
-        output.success(`Subscription ${id} written to ${resolveFilePath(RESOURCE, id)}`);
+        output.success(`Subscription ${id} written to ${getLastPulledPath() ?? resolveFilePath(RESOURCE, id)}`);
       })()
     );
 

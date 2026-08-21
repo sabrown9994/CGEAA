@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import { RESOURCE_SUBFOLDERS, OUTPUT_DIR } from '../constants.js';
+import { fileNameFor } from './resource-registry.js';
 
 function outputDir(): string {
   return process.env.ZDF_OUTPUT_DIR ?? OUTPUT_DIR;
@@ -54,11 +55,17 @@ export function readResourceFile(resourceType: string, nameOrId: string, ext = '
   }
 }
 
-export function writeResourceFile(resourceType: string, id: string, data: unknown, ext = 'json'): void {
-  const p = resourcePath(resourceType, id, ext);
+export function writeResourceFile(resourceType: string, id: string, data: unknown, ext = 'json'): string {
+  // Name the file by the resource's natural key when it has one (derived from the record);
+  // otherwise fall back to the id. JSON only — non-JSON artifacts (e.g. data-query .sql) use the id.
+  const fileName = ext === 'json' && data && typeof data === 'object'
+    ? fileNameFor(resourceType, id, data as Record<string, unknown>)
+    : id;
+  const p = resourcePath(resourceType, fileName, ext);
   mkdirSync(dirname(p), { recursive: true });
   const content = ext === 'sql' ? String(data) : JSON.stringify(data, null, 2);
   writeFileSync(p, content, 'utf-8');
+  return p;
 }
 
 export function renameResourceFile(resourceType: string, oldName: string, newId: string, ext = 'json'): void {

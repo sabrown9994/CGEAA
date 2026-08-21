@@ -43,6 +43,7 @@ const mockResolveAndSync = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 vi.mock('../../helpers/dependency-graph.js', () => ({
   resolveAndSync: mockResolveAndSync,
   setNoDependency: vi.fn(),
+  getLastPulledPath: vi.fn(() => null),
   isNoDependency: vi.fn(() => false),
   setMaxTraversalNodes: vi.fn(),
   setMaxItems: vi.fn(),

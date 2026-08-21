@@ -54,6 +54,14 @@ function recordDependencyFailure(parent: Parent, dependent: string, err: unknown
   });
 }
 
+// The natural-key path the top-level pulled resource was written to (files are named by natural
+// key now, not the id the user typed). Set by fetchAndWrite for the top-level object; read by pull
+// commands for their success message. Reset at each top-level resolveAndSync.
+let lastPulledPath: string | null = null;
+export function getLastPulledPath(): string | null {
+  return lastPulledPath;
+}
+
 function emitDependencyFailureSummary(): void {
   if (dependencyFailures.length === 0) return;
   const byParent = new Map<string, string[]>();
@@ -173,7 +181,8 @@ async function fetchAndWrite(resource: string, id: string, parent?: Parent): Pro
       );
     }
 
-    writeResourceFile(resource, id, record);
+    const writtenPath = writeResourceFile(resource, id, record);
+    if (parent === undefined) lastPulledPath = writtenPath;
     return record;
   } catch (err: unknown) {
     const status = (err as { statusCode?: number }).statusCode;
@@ -210,7 +219,7 @@ export async function resolveAndSync(
   // A call with no parent is the top-level request (command actions always call it this way).
   // Reset the per-pull failure collector on entry and flush the consolidated warning on exit.
   const isTopLevel = parent === undefined;
-  if (isTopLevel) dependencyFailures = [];
+  if (isTopLevel) { dependencyFailures = []; lastPulledPath = null; }
 
   const key = `${resource}:${id}`;
   if (visited.has(key)) return false;

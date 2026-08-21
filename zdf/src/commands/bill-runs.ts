@@ -5,7 +5,7 @@ import { readResourceFile, renameResourceFile, resolveFilePath, getOutputDir } f
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
-import { resolveAndSync } from '../helpers/dependency-graph.js';
+import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.js';
 
 const RESOURCE = 'bill-run';
 const ENDPOINT = '/v1/bill-runs';
@@ -28,7 +28,7 @@ export function register(program: Command): void {
         if (!fetched) {
           throw new Error(`Failed to pull bill-run ${id} (see error above).`);
         }
-        output.success(`Bill run ${id} written to ${resolveFilePath(RESOURCE, id)}`);
+        output.success(`Bill run ${id} written to ${getLastPulledPath() ?? resolveFilePath(RESOURCE, id)}`);
       })()
     );
 
@@ -61,7 +61,7 @@ export function register(program: Command): void {
         if (!fetched) {
           throw new Error(`Failed to re-fetch bill-run ${id} (see error above).`);
         }
-        output.success(`Bill run ${id} re-fetched and written to ${resolveFilePath(RESOURCE, id)}`);
+        output.success(`Bill run ${id} re-fetched and written to ${getLastPulledPath() ?? resolveFilePath(RESOURCE, id)}`);
       })()
     );
 

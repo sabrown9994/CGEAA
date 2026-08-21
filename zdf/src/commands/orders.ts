@@ -6,7 +6,7 @@ import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
-import { resolveAndSync, getMaxItems } from '../helpers/dependency-graph.js';
+import { resolveAndSync, getMaxItems, getLastPulledPath } from '../helpers/dependency-graph.js';
 
 const RESOURCE = 'order';
 const ENDPOINT = '/v1/orders';
@@ -31,7 +31,7 @@ export function register(program: Command): void {
         if (!fetched) {
           throw new Error(`Failed to pull order ${orderNumber} (see error above).`);
         }
-        output.success(`Order ${orderNumber} written to ${resolveFilePath(RESOURCE, orderNumber)}`);
+        output.success(`Order ${orderNumber} written to ${getLastPulledPath() ?? resolveFilePath(RESOURCE, orderNumber)}`);
       })()
     );
 

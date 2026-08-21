@@ -24,6 +24,7 @@ const mockGetMaxItems = vi.hoisted(() => vi.fn().mockReturnValue(5000));
 vi.mock('../../helpers/dependency-graph.js', () => ({
   resolveAndSync: mockResolve,
   setNoDependency: vi.fn(),
+  getLastPulledPath: vi.fn(() => null),
   isNoDependency: vi.fn().mockReturnValue(false),
   setMaxTraversalNodes: vi.fn(),
   setMaxItems: vi.fn(),

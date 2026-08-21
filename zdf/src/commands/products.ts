@@ -6,7 +6,7 @@ import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
-import { resolveAndSync } from '../helpers/dependency-graph.js';
+import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.js';
 
 const RESOURCE = 'product';
 const OBJECT_ENDPOINT = '/v1/object/product';
@@ -31,7 +31,7 @@ export function register(program: Command): void {
         if (!fetched) {
           throw new Error(`Failed to pull product ${id} (see error above).`);
         }
-        output.success(`Product ${id} written to ${resolveFilePath(RESOURCE, id)}`);
+        output.success(`Product ${id} written to ${getLastPulledPath() ?? resolveFilePath(RESOURCE, id)}`);
       })()
     );
 
