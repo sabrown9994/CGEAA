@@ -218,21 +218,20 @@ API so the local file is the FULL, recreatable definition, not just metadata:
   (new definition id; import never updates in place). Response is the workflow object directly
   (no `{success}` envelope) → `assertReadSuccess`, read `res.definitionId ?? res.id`. An import
   payload must contain **≥1 task and ≥1 linkage** (empty arrays are rejected 400).
-- **push** → `PUT /workflows/{id}` updates **settings only** (name, description, triggers,
-  status, interval, timezone, priority). `buildWorkflowSettingsBody()` remaps the export file's
-  snake_case (`ondemand_trigger`, in `workflow`/`workflow_definition`) to the camelCase PUT body.
-  Task/linkage edits are NOT applied by push — re-apply via `create`. PUT returns the object
-  directly (no `{success}`) → `assertReadSuccess`. (Note: `description` round-trips; `priority`
-  is version-scoped and may not reflect back in the export.)
+- **push** → `POST /workflows/{id}/versions/import?version=<next>&activate=true` with the edited
+  `/export` body. This imports the edited definition as a **new active version** of the existing
+  workflow, applying **task/linkage logic AND version settings** — Zuora's supported in-place edit.
+  The `version` is a **query param** (must be numerically greater than every existing version;
+  `nextWorkflowVersion()` bumps the highest major → `<major+1>.0`, override with `--version`);
+  `activate=true` (default; `--no-activate` to skip) makes it the active version in the same call.
+  Response is the workflow object directly (no `{success}`) → `assertReadSuccess`. Each push adds a
+  version (Zuora keeps history). CAUTION: `POST /workflows/import` (no `/{id}/versions`) instead
+  creates a whole NEW workflow definition — that's `create`, not `push`.
 - **delete** → `DELETE /workflows/{id}` → returns `{ success, id }` → `assertSuccess`.
-- **No in-place logic edit of the active version** (verified live 2026-08-21): `PUT /workflows/{id}`
-  ignores `tasks`/`linkages`; `POST /workflows/import` always creates a NEW definition (even with
-  `?workflow_id=`); `POST /workflows/{id}/versions` is not a working public endpoint. So a workflow's
-  task graph can only be changed by importing a new workflow (`create`) or via the Zuora UI builder
-  (private endpoints) — never edited in place through the public API. This is why `push` is
-  settings-only by design.
-- **Live-verified end-to-end (2026-08-21)** with a from-scratch definition (1 Delay task + a
-  Start linkage): create → pull → push (description edit) → delete → confirm-gone.
+- **Live-verified end-to-end (2026-08-21):** authored from scratch → create → pull → **push that
+  ADDS a task** (re-pull confirmed the new task graph is the active version, version bumped
+  1.0→2.0) → delete → confirm-gone. (An earlier note that logic couldn't be edited in place was
+  WRONG — it missed the `?version=` query param on the versions/import endpoint.)
 
 ### Settings API (billing-template)
 

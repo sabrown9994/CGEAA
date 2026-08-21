@@ -107,9 +107,10 @@ supported (reason in the [Resource Reference](#resource-reference)).
 `order-line-item` have no `create`/`delete` (managed via the Orders API / their parent order).
 `data-query` has no `push`. **`bill-run` has no `delete`** — Zuora only deletes Pending/Canceled
 bill runs, and an API-created run reaches Completed almost immediately, so a delete would always
-be rejected. `workflow` `pull`/`create` operate on the full **export** definition and `push`
-updates settings only — see [workflow](#workflow). Per-resource endpoints, body requirements, and
-status constraints are in the [Resource Reference](#resource-reference).
+be rejected. `workflow` `pull`/`create`/`push` operate on the full **export** definition; `push`
+applies edits (including task-graph logic) by importing a new active version — see
+[workflow](#workflow). Per-resource endpoints, body requirements, and status constraints are in
+the [Resource Reference](#resource-reference).
 
 ---
 
@@ -458,19 +459,18 @@ just metadata.
 
 | Operation | Endpoint | Notes |
 |-----------|----------|-------|
-| pull | `GET /workflows/{id}/export` | Writes the full definition (settings + tasks + linkages), the same shape `create` consumes |
+| pull | `GET /workflows/{id}/export` | Writes the full **active-version** definition (settings + tasks + linkages), the same shape `create`/`push` consume |
 | create | `POST /workflows/import` | Imports the local export file as a **new** workflow (new definition id); JSON body |
-| push | `PUT /workflows/{id}` | Updates **settings only** (name, description, triggers, status); remaps the export shape to the PUT body |
+| push | `POST /workflows/{id}/versions/import?version=<next>&activate=true` | Imports the edited definition as a **new active version** of the existing workflow — applies **logic** (tasks/linkages) and version settings |
 | delete | `DELETE /workflows/{id}` | Returns `{success, id}` |
 
-**Limitations:**
+**Limitations & behavior:**
 - The endpoint base is `/workflows` (not `/v1/api/workflows` or a `/v1/`-prefixed path).
-- **`pull` fetches the full export** (`/export`), not `GET /workflows/{id}` (which returns only metadata). This makes `pull` → edit → `create` a full-fidelity round-trip and is required for `create` to have something to import.
-- **`create` imports a NEW workflow** — `POST /workflows/import` never updates in place; it always mints a new definition id. Use it to copy/restore a workflow or to apply task-graph edits (Zuora has no in-place task-graph update API). An import payload must contain at least one task **and** at least one linkage. The response is the created workflow object directly (no `{success}` envelope).
-- **`push` updates workflow settings only** — name, description, triggers, status, interval, timezone — via `PUT /workflows/{id}`. It does **not** apply task/linkage edits; re-apply those with `create`. The command remaps the export file's snake_case settings to the camelCase PUT body.
-- **You cannot edit the logic (task graph) of an existing workflow's *active version* in place via the API** (verified live 2026-08-21): `PUT /workflows/{id}` ignores `tasks`/`linkages`, `POST /workflows/import` always mints a **new** definition (even with `?workflow_id=`), and there is no public per-version/task update endpoint. In-place logic editing is UI-builder-only. To get edited logic into Zuora, `create` (import) it as a new workflow.
-- Workflow PUT/export responses have no `{success}` envelope (handled via `assertReadSuccess`); DELETE returns `{success, id}`.
-- **Live-verified end-to-end on intQA (2026-08-21)**: a workflow authored from scratch (definition + one task + one linkage) → `create` → `pull` → `push` (description edit confirmed) → `delete` → confirm-gone all PASS.
+- **`pull` fetches the full export** (`/export`) of the active version, not `GET /workflows/{id}` (which returns only metadata). This makes `pull` → edit → `push` (or `create`) a full-fidelity round-trip.
+- **`create` imports a NEW workflow** — `POST /workflows/import` mints a new definition id. Use it to copy/restore a workflow into a tenant. An import payload must contain at least one task **and** at least one linkage. The response is the created workflow object directly (no `{success}` envelope).
+- **`push` edits the workflow in place by creating a new active version** — it imports the edited `/export` file via `POST /workflows/{id}/versions/import?version=<next>&activate=true`, which **does** apply task/linkage (logic) changes as well as version settings. This is Zuora's supported mechanism for changing an existing workflow's logic. Each push creates a new version (Zuora keeps version history); the version number is auto-incremented above the latest (override with `--version <n>`). Pass `--no-activate` to import the version without making it active.
+- Workflow export/import responses have no `{success}` envelope (handled via `assertReadSuccess`); DELETE returns `{success, id}`.
+- **Live-verified end-to-end on intQA (2026-08-21)**: authored from scratch → `create` → `pull` → **`push` that ADDS a task to the active version** (re-pull confirmed the new task graph is live, version bumped 1.0→2.0) → `delete` → confirm-gone, all PASS.
 
 ---
 

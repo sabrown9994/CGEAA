@@ -135,7 +135,11 @@ describe('production write policy — end-to-end through buildProgram()', () => 
   it('ALLOWS a config write (push workflow) on prod with --yes: gets past policy to the API', async () => {
     const code = await run(['--yes', 'push', 'workflow', 'W1']);
     expect(code).toBe(0);
-    expect(mockApiPut).toHaveBeenCalledWith('/workflows/W1', expect.anything());
+    // push workflow imports a new active version (POST /workflows/{id}/versions/import?...)
+    expect(mockApiPost).toHaveBeenCalledWith(
+      expect.stringContaining('/workflows/W1/versions/import'),
+      expect.anything()
+    );
     // Not blocked as financial:
     expect(mockError).not.toHaveBeenCalled();
   });

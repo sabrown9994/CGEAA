@@ -264,12 +264,16 @@ Both subcommands were removed from ZDF entirely (commit dbee8c1). `subscription`
   corrupt file); `getDependencyFailures()` exposes the structured list for tests/tooling.
   Previously a failing lookup in `rulesAccount` could abort the whole account pull; now it
   degrades gracefully and is reported.
-- ✅ **RESOLVED (2026-08-21) — `workflow` full CRUD.** Reworked to Zuora's export/import model:
-  `pull` = `GET /workflows/{id}/export` (full definition), `create` = `POST /workflows/import`,
-  `push` = `PUT /workflows/{id}` settings-only (via `buildWorkflowSettingsBody` snake→camel remap),
-  `delete` = `DELETE /workflows/{id}`. Live-verified end-to-end with a **from-scratch** definition
-  (1 task + 1 linkage): create → pull → push → delete → confirm-gone. (`push` applies settings, not
-  the task graph — Zuora has no in-place task update; re-apply via `create`.)
+- ✅ **RESOLVED (2026-08-21) — `workflow` full CRUD incl. in-place LOGIC editing.** Reworked to
+  Zuora's export/import model: `pull` = `GET /workflows/{id}/export` (full active-version
+  definition), `create` = `POST /workflows/import` (new workflow), `delete` = `DELETE /workflows/{id}`.
+  **`push` = `POST /workflows/{id}/versions/import?version=<next>&activate=true`** — imports the
+  edited definition as a NEW ACTIVE VERSION, applying task/linkage **logic** + version settings
+  (`version` is a query param, auto-bumped above the latest via `nextWorkflowVersion`; `--version`
+  overrides; `--no-activate` skips activation). Live-verified end-to-end with a **from-scratch**
+  definition: create → pull → **push that ADDS a task** (re-pull confirmed the edited task graph is
+  the active version, version 1.0→2.0) → delete → confirm-gone. (An earlier claim that logic can't
+  be edited in place was WRONG — it missed the `?version=` query param on versions/import.)
 - ✅ **RESOLVED (2026-08-21) — spurious "truncated" warning at exact pagination boundaries.**
   Confirmed the bug: `fetchAllItems` checked the item cap BEFORE reading `nextPage`, and
   `list orders --limit` flagged truncation whenever `total >= limit` after a full page. Both now

@@ -23,7 +23,7 @@ vi.mock('../../helpers/dependency-graph.js', () => ({
   FETCH_ALL_ITEMS_MAX: 5000,
 }));
 
-import { register, buildWorkflowSettingsBody } from '../../commands/workflows.js';
+import { register, nextWorkflowVersion } from '../../commands/workflows.js';
 
 function makeProgram() {
   const p = new Command();
@@ -77,22 +77,33 @@ describe('zdf create workflow', () => {
 });
 
 describe('zdf push workflow', () => {
-  it('PUTs remapped settings (snake_case export -> camelCase PUT body) to /workflows/{id}', async () => {
+  it('imports the edited definition as a new active version (auto-bumped above the latest)', async () => {
     mockRead.mockReturnValue({ ...EXPORT });
-    // PUT returns the workflow object directly (no {success} envelope).
-    mockPut.mockResolvedValue({ id: 123, name: 'My WF', status: 'Active' });
-    await makeProgram().parseAsync(['node', 'zdf', 'push', 'workflow', '123']);
-    expect(mockPut).toHaveBeenCalledWith('/workflows/123', {
-      name: 'My WF',
-      description: 'desc',
-      ondemandTrigger: true,
-      calloutTrigger: false,
-      scheduledTrigger: false,
-      interval: '',
-      timezone: 'UTC',
-      priority: 'Medium',
-      status: 'Active',
+    // nextWorkflowVersion() reads the versions list; latest major is 2 -> next is 3.0.
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/workflows/123/versions') return { data: [{ version: '1.0' }, { version: '2.0' }] };
+      return {};
     });
+    // versions/import returns the workflow object directly (no {success} envelope).
+    mockPost.mockResolvedValue({ id: 123, active_version: { version: '3.0' } });
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'workflow', '123']);
+    expect(mockGet).toHaveBeenCalledWith('/workflows/123/versions');
+    expect(mockPost).toHaveBeenCalledWith(
+      '/workflows/123/versions/import?version=3.0&activate=true',
+      expect.objectContaining({ tasks: expect.any(Array), linkages: expect.any(Array) })
+    );
+  });
+
+  it('honors --version and --no-activate', async () => {
+    mockRead.mockReturnValue({ ...EXPORT });
+    mockPost.mockResolvedValue({ id: 123 });
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'workflow', '123', '--version', '9.9', '--no-activate']);
+    // explicit --version skips the versions lookup
+    expect(mockGet).not.toHaveBeenCalled();
+    expect(mockPost).toHaveBeenCalledWith(
+      '/workflows/123/versions/import?version=9.9&activate=false',
+      expect.any(Object)
+    );
   });
 });
 
@@ -104,22 +115,14 @@ describe('zdf delete workflow', () => {
   });
 });
 
-describe('buildWorkflowSettingsBody', () => {
-  it('remaps export shape (snake_case) to camelCase settings, dropping unresolved keys', () => {
-    const body = buildWorkflowSettingsBody(EXPORT);
-    expect(body).toEqual({
-      name: 'My WF', description: 'desc',
-      ondemandTrigger: true, calloutTrigger: false, scheduledTrigger: false,
-      interval: '', timezone: 'UTC', priority: 'Medium', status: 'Active',
-    });
+describe('nextWorkflowVersion', () => {
+  it('bumps the highest existing major and returns <major+1>.0', async () => {
+    mockGet.mockResolvedValue({ data: [{ version: '1.0' }, { version: '2.3' }, { version: '2.0' }] });
+    expect(await nextWorkflowVersion('123')).toBe('3.0');
   });
 
-  it('tolerates a flat/camelCase (metadata) file too', () => {
-    const body = buildWorkflowSettingsBody({ name: 'Flat', description: 'd', ondemandTrigger: false, priority: 'High' });
-    expect(body.name).toBe('Flat');
-    expect(body.ondemandTrigger).toBe(false);
-    expect(body.priority).toBe('High');
-    // unresolved settings (no triggers/timezone in the file) are omitted, not undefined
-    expect('timezone' in body).toBe(false);
+  it('falls back to 1.0 when there are no versions', async () => {
+    mockGet.mockResolvedValue({ data: [] });
+    expect(await nextWorkflowVersion('123')).toBe('1.0');
   });
 });
