@@ -3,7 +3,7 @@ import { writeResourceFile, deleteResourceFile } from './file-io.js';
 import { output } from './output.js';
 import { assertReadSuccess } from './zuora-response.js';
 import { startProgress, updateProgress, stopProgress } from './progress.js';
-import { setEnvEntry, activeEnvName } from './env-map.js';
+import { setEnvEntry, activeEnvName, mergeExistingEnvMap } from './env-map.js';
 import { crossTenantKeyValue } from './upsert.js';
 import { CROSS_TENANT, recordId } from './resource-registry.js';
 
@@ -193,10 +193,13 @@ async function fetchAndWrite(resource: string, id: string, parent?: Parent): Pro
     // AFTER sub-items are embedded and BEFORE writing, and must never affect the natural-key
     // filename (fileNameFor reads only NATURAL_KEY fields, never `_zdf`).
     if (resource in CROSS_TENANT) {
-      const withMap = setEnvEntry(record, activeEnvName(), {
+      const withActive = setEnvEntry(record, activeEnvName(), {
         id: recordId(record) ?? id,
         key: crossTenantKeyValue(resource, record),
       }) as ResourceRecord;
+      // Merge in any `_zdf` entries the EXISTING local file has for OTHER envs — otherwise this
+      // re-fetch (a plain pull, or the re-sync half of push) would clobber them. See env-map.ts.
+      const withMap = mergeExistingEnvMap(resource, id, withActive) as ResourceRecord;
       const writtenPath = writeResourceFile(resource, id, withMap);
       if (parent === undefined) lastPulledPath = writtenPath;
       return withMap;

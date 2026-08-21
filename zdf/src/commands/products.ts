@@ -1,14 +1,14 @@
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
 import { apiGet, apiPost, apiPut, apiDelete } from '../api/client.js';
-import { writeResourceFile, readResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
+import { writeResourceFile, readResourceFile, renameResourceFile, deleteResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.js';
 import { resolveTargetId, crossTenantKeyValue } from '../helpers/upsert.js';
-import { stripEnvMap, setEnvEntry, activeEnvName } from '../helpers/env-map.js';
+import { stripEnvMap, setEnvEntry, activeEnvName, mergeExistingEnvMap } from '../helpers/env-map.js';
 
 const RESOURCE = 'product';
 const OBJECT_ENDPOINT = '/v1/object/product';
@@ -16,16 +16,6 @@ const COMMERCE_ENDPOINT = '/commerce/products';
 
 function getOrCreate(program: Command, name: string, description: string): Command {
   return program.commands.find((c) => c.name() === name) ?? program.command(name).description(description);
-}
-
-/** Merges the resolved/created id + cross-tenant key into the file record's `_zdf[activeEnv]` entry. */
-function withEnvEntry(
-  fileRecord: Record<string, unknown>,
-  responseRecord: Record<string, unknown>,
-  targetId: string
-): Record<string, unknown> {
-  const key = crossTenantKeyValue(RESOURCE, responseRecord) ?? crossTenantKeyValue(RESOURCE, fileRecord);
-  return setEnvEntry(fileRecord, activeEnvName(), { id: targetId, key });
 }
 
 export function register(program: Command): void {
@@ -63,7 +53,10 @@ export function register(program: Command): void {
           throw new Error('Zuora product create response is missing an id.');
         }
         if (!opts.file) {
-          const withMap = withEnvEntry(body as Record<string, unknown>, res, res.id);
+          const fileRecord = body as Record<string, unknown>;
+          const key = crossTenantKeyValue(RESOURCE, res) ?? crossTenantKeyValue(RESOURCE, fileRecord);
+          const withActive = setEnvEntry(fileRecord, activeEnvName(), { id: res.id, key });
+          const withMap = mergeExistingEnvMap(RESOURCE, name, withActive);
           writeResourceFile(RESOURCE, name, withMap);
           renameResourceFile(RESOURCE, name, res.id);
         }
@@ -102,9 +95,19 @@ export function register(program: Command): void {
             output.error(`Zuora rejected the product update.\n  ${msg}`);
             process.exit(1);
           }
-          const withMap = withEnvEntry(fileRecord, res as unknown as Record<string, unknown>, target.id);
-          writeResourceFile(RESOURCE, id, withMap);
+          // resolveAndSync's re-fetch is the SOLE writer here. product has NO natural-key
+          // filename (fileNameFor falls back to the id argument), so writing explicitly under
+          // the CLI arg `id` here AND letting resolveAndSync write again under `target.id` would
+          // leave TWO divergent files whenever the resolved id differs from the arg (the
+          // cross-tenant case) — a stale `<id>.json` and a fresh `<target.id>.json`, with no
+          // findByStoredId fallback to reconcile them on a later `push product <id>`. One write,
+          // keyed by the resolved id, avoids that split entirely.
           await resolveAndSync(RESOURCE, target.id, 'push');
+          // product is id-named (no natural key) — if the resolved id differs from the CLI arg
+          // (the cross-tenant case), the arg-keyed file is now stale (superseded by the
+          // target.id-keyed file resolveAndSync just wrote); remove it so a later
+          // `push product <id>` can't find and re-push it.
+          if (target.id !== id) deleteResourceFile(RESOURCE, id);
           output.success(`Product ${target.id} updated.`);
         } else {
           const body = stripEnvMap(fileRecord);
@@ -113,8 +116,10 @@ export function register(program: Command): void {
           if (!res.id) {
             throw new Error('Zuora product create response is missing an id.');
           }
-          const withMap = withEnvEntry(fileRecord, res, res.id);
-          writeResourceFile(RESOURCE, id, withMap);
+          // Same single-writer rule as the found branch: re-fetch/write by the CREATED id rather
+          // than writing the local (pre-create) body under the CLI arg.
+          await resolveAndSync(RESOURCE, res.id, 'push');
+          if (res.id !== id) deleteResourceFile(RESOURCE, id);
           output.success(`Product created. Zuora ID: ${res.id}`);
         }
       })()

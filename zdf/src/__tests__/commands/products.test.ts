@@ -9,7 +9,8 @@ vi.mock('../../api/client.js', () => ({ apiGet: vi.fn(), apiPost: mockPost, apiP
 const mockWrite = vi.hoisted(() => vi.fn());
 const mockRead = vi.hoisted(() => vi.fn());
 const mockRename = vi.hoisted(() => vi.fn());
-vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, renameResourceFile: mockRename, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
+const mockDeleteFile = vi.hoisted(() => vi.fn());
+vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, renameResourceFile: mockRename, deleteResourceFile: mockDeleteFile, resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
 
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
@@ -173,23 +174,38 @@ describe('zdf push product', () => {
     expect(mockResolve).toHaveBeenCalledWith('product', 'prod-001', 'push');
   });
 
-  it('target found: writes the file back with _zdf[<env>] set to the resolved id and SKU key', async () => {
+  it('target found: does NOT write the file directly — resolveAndSync (mocked here) is the sole writer', async () => {
     mockResolveTargetId.mockResolvedValue({ id: 'prod-001', found: true });
     mockRead.mockReturnValue({ Name: 'Test Product', SKU: 'SKU-001' });
     mockPut.mockResolvedValue({ Success: true });
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'product', 'prod-001']);
-    expect(mockWrite).toHaveBeenCalledWith('product', 'prod-001', expect.objectContaining({
-      _zdf: { sandbox: { id: 'prod-001', key: 'SKU-001' } },
-    }));
+    // The command itself must not write the file — resolveAndSync's own re-fetch-and-write is
+    // what populates _zdf (merged with other envs — see dependency-graph.test.ts). product has
+    // no natural-key filename, so a second explicit write here would risk diverging from
+    // resolveAndSync's write whenever the resolved id differs from the CLI arg (Finding 2).
+    expect(mockWrite).not.toHaveBeenCalled();
+    expect(mockResolve).toHaveBeenCalledWith('product', 'prod-001', 'push');
   });
 
-  it('target found, resolved id differs from the CLI arg: PUTs and syncs using the resolved id, not the arg', async () => {
+  it('target found, resolved id SAME as the CLI arg: single write, no stale-file cleanup needed', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: 'prod-001', found: true });
+    mockRead.mockReturnValue({ Name: 'Test Product', SKU: 'SKU-001' });
+    mockPut.mockResolvedValue({ Success: true });
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'product', 'prod-001']);
+    expect(mockDeleteFile).not.toHaveBeenCalled();
+  });
+
+  it('target found, resolved id differs from the CLI arg: PUTs and syncs using the resolved id, not the arg, and deletes the now-stale arg-keyed file', async () => {
     mockResolveTargetId.mockResolvedValue({ id: 'resolved-id', found: true });
     mockRead.mockReturnValue({ Name: 'Test Product', SKU: 'SKU-001' });
     mockPut.mockResolvedValue({ Success: true });
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'product', 'prod-001']);
     expect(mockPut).toHaveBeenCalledWith('/v1/object/product/resolved-id', expect.objectContaining({ SKU: 'SKU-001' }));
     expect(mockResolve).toHaveBeenCalledWith('product', 'resolved-id', 'push');
+    // Only ONE file should remain on disk for this product — the stale arg-keyed one (product
+    // has no natural-key filename, so it wouldn't otherwise get cleaned up / reconciled later).
+    expect(mockWrite).not.toHaveBeenCalled();
+    expect(mockDeleteFile).toHaveBeenCalledWith('product', 'prod-001');
   });
 
   it('target not found: attempts CREATE via the Commerce API from the local file body instead of PUT', async () => {
@@ -201,14 +217,14 @@ describe('zdf push product', () => {
     expect(mockPut).not.toHaveBeenCalled();
   });
 
-  it('target not found: writes the file back with _zdf[<env>] from the create response id', async () => {
+  it('target not found: does NOT write the file directly — resolveAndSync (mocked here) re-fetches/writes by the CREATED id, and the stale arg-keyed file is deleted', async () => {
     mockResolveTargetId.mockResolvedValue({ id: null, found: false });
     mockRead.mockReturnValue(commerceProductBody());
     mockPost.mockResolvedValue({ id: 'prod-commerce-003', state: 'product_active' });
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'product', 'prod-001']);
-    expect(mockWrite).toHaveBeenCalledWith('product', 'prod-001', expect.objectContaining({
-      _zdf: { sandbox: { id: 'prod-commerce-003', key: null } },
-    }));
+    expect(mockWrite).not.toHaveBeenCalled();
+    expect(mockResolve).toHaveBeenCalledWith('product', 'prod-commerce-003', 'push');
+    expect(mockDeleteFile).toHaveBeenCalledWith('product', 'prod-001');
   });
 
   it('the body PUT to Zuora on the update path never carries a _zdf map', async () => {

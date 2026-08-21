@@ -4,8 +4,9 @@ const mockGet = vi.hoisted(() => vi.fn());
 const mockQuery = vi.hoisted(() => vi.fn());
 const mockWrite = vi.hoisted(() => vi.fn());
 const mockDeleteFile = vi.hoisted(() => vi.fn());
+const mockReadFile = vi.hoisted(() => vi.fn((): unknown => { throw new Error('No file found.'); }));
 vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiQuery: mockQuery, setDebug: vi.fn() }));
-vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, deleteResourceFile: mockDeleteFile }));
+vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, deleteResourceFile: mockDeleteFile, readResourceFile: mockReadFile }));
 vi.mock('../../helpers/output.js', () => ({ output: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warn: vi.fn() } }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
 
@@ -603,6 +604,24 @@ describe('resolveAndSync populates the cross-tenant _zdf env map on pull', () =>
     expect(mockWrite).toHaveBeenCalledWith('account', 'abc', expect.objectContaining({
       _zdf: { sandbox: { id: 'abc', key: 'ACG1' } },
     }));
+  });
+
+  it('ACCUMULATES across envs: a file already carrying _zdf.prod ends up with BOTH _zdf.prod and _zdf.<activeEnv> after a re-fetch', async () => {
+    mockReadFile.mockReturnValueOnce({
+      basicInfo: { id: 'abc', accountNumber: 'ACG1' },
+      _zdf: { prod: { id: 'prod-abc', key: 'ACG1-PROD' } },
+    });
+    mockGet.mockResolvedValueOnce({
+      basicInfo: { id: 'abc', accountNumber: 'ACG1' },
+      success: true,
+    });
+    await resolveAndSync('account', 'abc', 'pull', new Set());
+
+    const written = mockWrite.mock.calls.find(([resource]) => resource === 'account')?.[2] as Record<string, unknown>;
+    expect(written['_zdf']).toEqual({
+      prod: { id: 'prod-abc', key: 'ACG1-PROD' },
+      sandbox: { id: 'abc', key: 'ACG1' },
+    });
   });
 });
 

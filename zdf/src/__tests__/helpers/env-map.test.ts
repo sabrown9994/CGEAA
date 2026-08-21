@@ -1,9 +1,14 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockGetActiveEnv = vi.hoisted(() => vi.fn());
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: mockGetActiveEnv }));
 
-import { ENV_MAP_KEY, activeEnvName, stripEnvMap, getEnvEntry, setEnvEntry } from '../../helpers/env-map.js';
+const mockReadResourceFile = vi.hoisted(() => vi.fn());
+vi.mock('../../helpers/file-io.js', () => ({ readResourceFile: mockReadResourceFile }));
+
+import { ENV_MAP_KEY, activeEnvName, stripEnvMap, getEnvEntry, setEnvEntry, mergeExistingEnvMap } from '../../helpers/env-map.js';
+
+beforeEach(() => { vi.clearAllMocks(); });
 
 describe('activeEnvName', () => {
   it('returns getActiveEnv().name', () => {
@@ -70,6 +75,55 @@ describe('getEnvEntry / setEnvEntry round-trip', () => {
   it('returns the mutated record', () => {
     const record: Record<string, unknown> = { id: '1' };
     const result = setEnvEntry(record, 'intQA', { id: 'x', key: 'y' });
+    expect(result).toBe(record);
+  });
+});
+
+describe('mergeExistingEnvMap', () => {
+  it('accumulates across envs: a file with _zdf.prod, re-written under intQA, ends up with BOTH', () => {
+    mockReadResourceFile.mockReturnValue({
+      id: '1',
+      [ENV_MAP_KEY]: { prod: { id: 'prod-id', key: 'PROD-1' } },
+    });
+    const record: Record<string, unknown> = { id: '1' };
+    setEnvEntry(record, 'intQA', { id: 'intqa-id', key: 'INTQA-1' });
+    const merged = mergeExistingEnvMap('account', '1', record);
+    expect(getEnvEntry(merged, 'prod')).toEqual({ id: 'prod-id', key: 'PROD-1' });
+    expect(getEnvEntry(merged, 'intQA')).toEqual({ id: 'intqa-id', key: 'INTQA-1' });
+  });
+
+  it('the active env entry on `record` wins over a stale entry for the same env in the existing file', () => {
+    mockReadResourceFile.mockReturnValue({
+      id: '1',
+      [ENV_MAP_KEY]: { intQA: { id: 'stale-id', key: 'STALE-1' } },
+    });
+    const record: Record<string, unknown> = { id: '1' };
+    setEnvEntry(record, 'intQA', { id: 'fresh-id', key: 'FRESH-1' });
+    const merged = mergeExistingEnvMap('account', '1', record);
+    expect(getEnvEntry(merged, 'intQA')).toEqual({ id: 'fresh-id', key: 'FRESH-1' });
+  });
+
+  it('is a no-op when no local file exists yet (first pull/create)', () => {
+    mockReadResourceFile.mockImplementation(() => { throw new Error('No file found'); });
+    const record: Record<string, unknown> = { id: '1' };
+    setEnvEntry(record, 'intQA', { id: 'x', key: 'y' });
+    const merged = mergeExistingEnvMap('account', '1', record);
+    expect(getEnvEntry(merged, 'intQA')).toEqual({ id: 'x', key: 'y' });
+    expect(merged[ENV_MAP_KEY]).toEqual({ intQA: { id: 'x', key: 'y' } });
+  });
+
+  it('is a no-op when the existing file has no _zdf map at all', () => {
+    mockReadResourceFile.mockReturnValue({ id: '1', name: 'plain record' });
+    const record: Record<string, unknown> = { id: '1' };
+    setEnvEntry(record, 'intQA', { id: 'x', key: 'y' });
+    const merged = mergeExistingEnvMap('account', '1', record);
+    expect(merged[ENV_MAP_KEY]).toEqual({ intQA: { id: 'x', key: 'y' } });
+  });
+
+  it('returns the mutated record', () => {
+    mockReadResourceFile.mockImplementation(() => { throw new Error('No file found'); });
+    const record: Record<string, unknown> = { id: '1' };
+    const result = mergeExistingEnvMap('account', '1', record);
     expect(result).toBe(record);
   });
 });

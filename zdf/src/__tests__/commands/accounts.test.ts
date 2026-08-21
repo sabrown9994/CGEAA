@@ -125,16 +125,18 @@ describe('zdf push account', () => {
     expect(mockResolve).toHaveBeenCalledWith('account', 'acc-1', 'push');
   });
 
-  it('target found: writes the file back with _zdf[<env>] set to the resolved id', async () => {
+  it('target found: does NOT write the file directly — resolveAndSync (mocked here) is the sole writer', async () => {
     mockResolveTargetId.mockResolvedValue({ id: 'acc-1', found: true });
     mockRead.mockReturnValue({
       basicInfo: { id: 'acc-1', name: 'Updated Acct', accountNumber: 'ACG123' },
     });
     mockPut.mockResolvedValue({ success: true });
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'account', 'acc-1']);
-    expect(mockWrite).toHaveBeenCalledWith('account', 'acc-1', expect.objectContaining({
-      _zdf: { sandbox: { id: 'acc-1', key: 'ACG123' } },
-    }));
+    // The command itself must not write the file — that would race/duplicate with
+    // resolveAndSync's own re-fetch-and-write (which is what actually populates _zdf, merged
+    // with other envs — see dependency-graph.test.ts).
+    expect(mockWrite).not.toHaveBeenCalled();
+    expect(mockResolve).toHaveBeenCalledWith('account', 'acc-1', 'push');
   });
 
   it('target found, resolved id differs from the CLI arg: PUTs and syncs using the resolved id, not the arg', async () => {
@@ -157,14 +159,13 @@ describe('zdf push account', () => {
     expect(mockPut).not.toHaveBeenCalled();
   });
 
-  it('target not found: writes the file back with _zdf[<env>] from the create response id', async () => {
+  it('target not found: does NOT write the file directly — resolveAndSync (mocked here) re-fetches/writes by the CREATED id', async () => {
     mockResolveTargetId.mockResolvedValue({ id: null, found: false });
     mockRead.mockReturnValue({ basicInfo: { name: 'Brand New Acct' } });
     mockPost.mockResolvedValue({ accountId: 'created-id', success: true });
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'account', 'acc-1']);
-    expect(mockWrite).toHaveBeenCalledWith('account', 'acc-1', expect.objectContaining({
-      _zdf: { sandbox: { id: 'created-id', key: null } },
-    }));
+    expect(mockWrite).not.toHaveBeenCalled();
+    expect(mockResolve).toHaveBeenCalledWith('account', 'created-id', 'push');
   });
 
   it('the body PUT to Zuora on the update path never carries a _zdf map', async () => {
