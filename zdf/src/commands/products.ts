@@ -8,7 +8,7 @@ import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.js';
 import { resolveTargetId, crossTenantKeyValue } from '../helpers/upsert.js';
-import { stripEnvMap, setEnvEntry, activeEnvName, mergeExistingEnvMap } from '../helpers/env-map.js';
+import { stripEnvMap, setEnvEntry, activeEnvName, carryForwardEnvMap, carryForwardEnvMapToFile, ENV_MAP_KEY, EnvMap } from '../helpers/env-map.js';
 
 const RESOURCE = 'product';
 const OBJECT_ENDPOINT = '/v1/object/product';
@@ -46,6 +46,11 @@ export function register(program: Command): void {
         const body: unknown = opts.file
           ? JSON.parse(readFileSync(opts.file, 'utf-8')) as unknown
           : readResourceFile(RESOURCE, name);
+        // Captured BEFORE any mutation — the full accumulated cross-env map (all prior envs),
+        // read straight off the in-memory record. product has no natural key, so a disk-based
+        // re-lookup by filename can't recover this later; the in-memory reference is the only
+        // reliable source.
+        const priorMap = (body as Record<string, unknown> | undefined)?.[ENV_MAP_KEY] as EnvMap | undefined;
         // POST /commerce/products returns the product object directly (no {success} envelope)
         const res = await apiPost<{ id: string } & Record<string, unknown>>(`${COMMERCE_ENDPOINT}`, stripEnvMap(body));
         assertReadSuccess(res as Record<string, unknown>, 'product create');
@@ -55,9 +60,9 @@ export function register(program: Command): void {
         if (!opts.file) {
           const fileRecord = body as Record<string, unknown>;
           const key = crossTenantKeyValue(RESOURCE, res) ?? crossTenantKeyValue(RESOURCE, fileRecord);
-          const withActive = setEnvEntry(fileRecord, activeEnvName(), { id: res.id, key });
-          const withMap = mergeExistingEnvMap(RESOURCE, name, withActive);
-          writeResourceFile(RESOURCE, name, withMap);
+          setEnvEntry(fileRecord, activeEnvName(), { id: res.id, key });
+          carryForwardEnvMap(fileRecord, priorMap);
+          writeResourceFile(RESOURCE, name, fileRecord);
           renameResourceFile(RESOURCE, name, res.id);
         }
         output.success(`Product created. Zuora ID: ${res.id}`);
@@ -85,6 +90,11 @@ export function register(program: Command): void {
         }
 
         const fileRecord = readResourceFile(RESOURCE, id) as Record<string, unknown>;
+        // Captured BEFORE the upsert — the full accumulated cross-env map (all prior envs).
+        // product has no natural key, so once the old arg-keyed file is deleted below, its
+        // _zdf map is unrecoverable from disk — this in-memory reference is the ONLY way the
+        // other envs' entries survive onto the new target.id-keyed file.
+        const priorMap = fileRecord[ENV_MAP_KEY] as EnvMap | undefined;
         const target = await resolveTargetId(RESOURCE, fileRecord);
 
         if (target.found) {
@@ -103,10 +113,14 @@ export function register(program: Command): void {
           // findByStoredId fallback to reconcile them on a later `push product <id>`. One write,
           // keyed by the resolved id, avoids that split entirely.
           await resolveAndSync(RESOURCE, target.id, 'push');
+          // Fold priorMap (captured above) back onto the file resolveAndSync just wrote, BEFORE
+          // deleting the old arg-keyed file — so the merged map is confirmed on disk under
+          // target.id first, and the delete below never destroys the only copy of it.
+          carryForwardEnvMapToFile(RESOURCE, target.id, priorMap);
           // product is id-named (no natural key) — if the resolved id differs from the CLI arg
           // (the cross-tenant case), the arg-keyed file is now stale (superseded by the
-          // target.id-keyed file resolveAndSync just wrote); remove it so a later
-          // `push product <id>` can't find and re-push it.
+          // target.id-keyed file above, which already carries priorMap forward); remove it so a
+          // later `push product <id>` can't find and re-push it.
           if (target.id !== id) deleteResourceFile(RESOURCE, id);
           output.success(`Product ${target.id} updated.`);
         } else {
@@ -119,6 +133,7 @@ export function register(program: Command): void {
           // Same single-writer rule as the found branch: re-fetch/write by the CREATED id rather
           // than writing the local (pre-create) body under the CLI arg.
           await resolveAndSync(RESOURCE, res.id, 'push');
+          carryForwardEnvMapToFile(RESOURCE, res.id, priorMap);
           if (res.id !== id) deleteResourceFile(RESOURCE, id);
           output.success(`Product created. Zuora ID: ${res.id}`);
         }

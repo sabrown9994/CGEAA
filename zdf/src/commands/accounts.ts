@@ -8,7 +8,7 @@ import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js'
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.js';
 import { resolveTargetId, crossTenantKeyValue } from '../helpers/upsert.js';
-import { stripEnvMap, setEnvEntry, activeEnvName, mergeExistingEnvMap } from '../helpers/env-map.js';
+import { stripEnvMap, setEnvEntry, activeEnvName, carryForwardEnvMap, carryForwardEnvMapToFile, ENV_MAP_KEY, EnvMap } from '../helpers/env-map.js';
 
 const RESOURCE = 'account';
 const ENDPOINT = '/v1/accounts';
@@ -45,14 +45,19 @@ export function register(program: Command): void {
         const body: unknown = opts.file
           ? JSON.parse(readFileSync(opts.file, 'utf-8')) as unknown
           : readResourceFile(RESOURCE, name);
+        // Captured BEFORE any mutation — the full accumulated cross-env map (all prior envs),
+        // read straight off the in-memory record rather than re-derived from disk, so it can't be
+        // lost even if the file's natural key isn't known yet (a new account has no accountNumber
+        // until Zuora assigns one).
+        const priorMap = (body as Record<string, unknown> | undefined)?.[ENV_MAP_KEY] as EnvMap | undefined;
         const res = await apiPost<ZuoraWriteResponse & { accountId: string }>(`${ENDPOINT}`, stripEnvMap(body));
         assertSuccess(res, 'account create');
         if (!opts.file) {
           const fileRecord = body as Record<string, unknown>;
           const key = crossTenantKeyValue(RESOURCE, res as unknown as Record<string, unknown>) ?? crossTenantKeyValue(RESOURCE, fileRecord);
-          const withActive = setEnvEntry(fileRecord, activeEnvName(), { id: res.accountId, key });
-          const withMap = mergeExistingEnvMap(RESOURCE, name, withActive);
-          writeResourceFile(RESOURCE, name, withMap);
+          setEnvEntry(fileRecord, activeEnvName(), { id: res.accountId, key });
+          carryForwardEnvMap(fileRecord, priorMap);
+          writeResourceFile(RESOURCE, name, fileRecord);
           renameResourceFile(RESOURCE, name, res.accountId);
         }
         output.success(`Account created. Zuora ID: ${res.accountId}`);
@@ -75,6 +80,12 @@ export function register(program: Command): void {
         }
 
         const fileRecord = readResourceFile(RESOURCE, id) as Record<string, unknown>;
+        // Captured BEFORE the upsert — the full accumulated cross-env map (all prior envs). Must
+        // be carried forward explicitly after resolveAndSync's re-fetch/write: that write starts
+        // from a BRAND-NEW record fetched fresh from Zuora, so `mergeExistingEnvMap` inside it can
+        // only recover this map for natural-keyed resources (where the natural key is stable
+        // across tenants and so resolves to the SAME existing file) — not for id-keyed resources.
+        const priorMap = fileRecord[ENV_MAP_KEY] as EnvMap | undefined;
         const target = await resolveTargetId(RESOURCE, fileRecord);
 
         if (target.found) {
@@ -85,16 +96,19 @@ export function register(program: Command): void {
           const body = stripEnvMap(filterUpdatableFields(RESOURCE, basicInfo));
           const res = await apiPut<ZuoraWriteResponse>(`${ENDPOINT}/${target.id}`, body);
           assertSuccess(res, 'account update');
-          // resolveAndSync's re-fetch is the SOLE writer here (re-fetches + writes _zdf, merged
-          // with any other envs already on the file) — no separate explicit write, so there's
-          // never a second, divergently-keyed file left behind.
+          // resolveAndSync's re-fetch is the SOLE writer here (re-fetches + writes _zdf) — no
+          // separate explicit write, so there's never a second, divergently-keyed file left
+          // behind. carryForwardEnvMapToFile then re-reads that just-written file and folds
+          // priorMap back in, guaranteeing no other env's entry is lost.
           await resolveAndSync(RESOURCE, target.id, 'push');
+          carryForwardEnvMapToFile(RESOURCE, target.id, priorMap);
           output.success(`Account ${target.id} updated.`);
         } else {
           const body = stripEnvMap(fileRecord);
           const res = await apiPost<ZuoraWriteResponse & { accountId: string }>(`${ENDPOINT}`, body);
           assertSuccess(res, 'account create');
           await resolveAndSync(RESOURCE, res.accountId, 'push');
+          carryForwardEnvMapToFile(RESOURCE, res.accountId, priorMap);
           output.success(`Account created. Zuora ID: ${res.accountId}`);
         }
       })()

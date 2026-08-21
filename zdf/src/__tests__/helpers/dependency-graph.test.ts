@@ -5,8 +5,9 @@ const mockQuery = vi.hoisted(() => vi.fn());
 const mockWrite = vi.hoisted(() => vi.fn());
 const mockDeleteFile = vi.hoisted(() => vi.fn());
 const mockReadFile = vi.hoisted(() => vi.fn((): unknown => { throw new Error('No file found.'); }));
+const mockReadFileIfExists = vi.hoisted(() => vi.fn((): unknown => undefined));
 vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiQuery: mockQuery, setDebug: vi.fn() }));
-vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, deleteResourceFile: mockDeleteFile, readResourceFile: mockReadFile }));
+vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, deleteResourceFile: mockDeleteFile, readResourceFile: mockReadFile, readResourceFileIfExists: mockReadFileIfExists }));
 vi.mock('../../helpers/output.js', () => ({ output: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warn: vi.fn() } }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
 
@@ -606,21 +607,28 @@ describe('resolveAndSync populates the cross-tenant _zdf env map on pull', () =>
     }));
   });
 
-  it('ACCUMULATES across envs: a file already carrying _zdf.prod ends up with BOTH _zdf.prod and _zdf.<activeEnv> after a re-fetch', async () => {
-    mockReadFile.mockReturnValueOnce({
-      basicInfo: { id: 'abc', accountNumber: 'ACG1' },
+  it('ACCUMULATES across envs: a file already carrying _zdf.prod ends up with BOTH _zdf.prod and _zdf.<activeEnv> after a re-fetch — even when the REAL cross-tenant internal id differs', async () => {
+    // The genuine cross-tenant case: same logical account, but a DIFFERENT internal id in this
+    // tenant ('intqa-999' vs the prior tenant's 'prod-abc') — accountNumber ('ACG1') is the only
+    // thing that's stable across tenants. The merge lookup must key on THAT, not on either id.
+    mockReadFileIfExists.mockReturnValueOnce({
+      basicInfo: { id: 'prod-abc', accountNumber: 'ACG1' },
       _zdf: { prod: { id: 'prod-abc', key: 'ACG1-PROD' } },
     });
     mockGet.mockResolvedValueOnce({
-      basicInfo: { id: 'abc', accountNumber: 'ACG1' },
+      basicInfo: { id: 'intqa-999', accountNumber: 'ACG1' },
       success: true,
     });
-    await resolveAndSync('account', 'abc', 'pull', new Set());
+    await resolveAndSync('account', 'intqa-999', 'pull', new Set());
+
+    // The merge lookup used the NATURAL-KEY filename ('ACG1'), NOT the fetch id ('intqa-999') —
+    // this is the actual fix; the old id-keyed lookup would have missed the existing file.
+    expect(mockReadFileIfExists).toHaveBeenCalledWith('account', 'ACG1');
 
     const written = mockWrite.mock.calls.find(([resource]) => resource === 'account')?.[2] as Record<string, unknown>;
     expect(written['_zdf']).toEqual({
       prod: { id: 'prod-abc', key: 'ACG1-PROD' },
-      sandbox: { id: 'abc', key: 'ACG1' },
+      sandbox: { id: 'intqa-999', key: 'ACG1' },
     });
   });
 });

@@ -87,6 +87,27 @@ export function readResourceFile(resourceType: string, nameOrId: string, ext = '
   }
 }
 
+/**
+ * Reads a resource file by its EXACT filename — no `findByStoredId` id-scan fallback. Used by the
+ * cross-tenant `_zdf` map merge (env-map.ts `mergeExistingEnvMap`), which must look up the
+ * existing file by the SAME name `writeResourceFile` is about to use (typically derived from the
+ * record's natural key), not by an internal id that differs per tenant — the id-scan fallback
+ * would either miss the file (natural key case, wrong scan target) or match the wrong file
+ * entirely (id-keyed case, since the tenant-specific id is exactly what's changing). Returns
+ * `undefined` (never throws) when the file doesn't exist or can't be parsed.
+ */
+export function readResourceFileIfExists(resourceType: string, fileName: string, ext = 'json'): unknown | undefined {
+  const p = resourcePath(resourceType, fileName, ext);
+  if (!existsSync(p)) return undefined;
+  const contents = readFileSync(p, 'utf-8');
+  if (ext === 'sql') return contents;
+  try {
+    return JSON.parse(contents);
+  } catch {
+    return undefined;
+  }
+}
+
 export function writeResourceFile(resourceType: string, id: string, data: unknown, ext = 'json'): string {
   // Name the file by the resource's natural key when it has one (derived from the record);
   // otherwise fall back to the id. JSON only — non-JSON artifacts (e.g. data-query .sql) use the id.
