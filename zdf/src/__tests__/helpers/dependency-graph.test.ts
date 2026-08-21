@@ -560,6 +560,50 @@ describe('resolveAndSync read-response guard', () => {
   });
 });
 
+describe('resolveAndSync populates the cross-tenant _zdf env map on pull', () => {
+  it('sets _zdf[<activeEnv>] with the internal id and natural key for a cross-tenant resource (account)', async () => {
+    mockGet.mockResolvedValueOnce({
+      basicInfo: { id: 'abc', accountNumber: 'ACG1' },
+      success: true,
+    });
+    await resolveAndSync('account', 'abc', 'pull', new Set());
+
+    const written = mockWrite.mock.calls.find(([resource]) => resource === 'account')?.[2] as Record<string, unknown>;
+    expect(written['_zdf']).toEqual({ sandbox: { id: 'abc', key: 'ACG1' } });
+  });
+
+  it('sets _zdf[<activeEnv>] with the internal id and natural key for a cross-tenant resource (invoice)', async () => {
+    mockGet.mockResolvedValueOnce({ id: 'i1', invoiceNumber: 'INV1', success: true });
+    await resolveAndSync('invoice', 'i1', 'pull', new Set());
+
+    const written = mockWrite.mock.calls.find(([resource]) => resource === 'invoice')?.[2] as Record<string, unknown>;
+    expect(written['_zdf']).toEqual({ sandbox: { id: 'i1', key: 'INV1' } });
+  });
+
+  it('does NOT add an _zdf map for a non-cross-tenant resource (contact)', async () => {
+    mockGet.mockResolvedValueOnce({ id: 'CON-001', accountId: 'ACC-001', success: true });
+    await resolveAndSync('contact', 'CON-001', 'pull', new Set());
+
+    const written = mockWrite.mock.calls.find(([resource]) => resource === 'contact')?.[2] as Record<string, unknown>;
+    expect(written['_zdf']).toBeUndefined();
+  });
+
+  it('does not let the _zdf map change the natural-key filename argument (write is still called with the original id)', async () => {
+    mockGet.mockResolvedValueOnce({
+      basicInfo: { id: 'abc', accountNumber: 'ACG1' },
+      success: true,
+    });
+    await resolveAndSync('account', 'abc', 'pull', new Set());
+
+    // writeResourceFile is called with (resource, id, record) — the id passed through is
+    // unaffected by adding _zdf to the record (file-io's fileNameFor derives the filename from
+    // the record's natural-key fields, never from _zdf).
+    expect(mockWrite).toHaveBeenCalledWith('account', 'abc', expect.objectContaining({
+      _zdf: { sandbox: { id: 'abc', key: 'ACG1' } },
+    }));
+  });
+});
+
 describe('resolveAndSync top-level return value (drives pull command success/exit code)', () => {
   it('returns false for a top-level account that fails to fetch (200-with-error body), and writes nothing', async () => {
     mockGet.mockResolvedValueOnce({

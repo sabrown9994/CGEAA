@@ -3,6 +3,9 @@ import { writeResourceFile, deleteResourceFile } from './file-io.js';
 import { output } from './output.js';
 import { assertReadSuccess } from './zuora-response.js';
 import { startProgress, updateProgress, stopProgress } from './progress.js';
+import { setEnvEntry, activeEnvName } from './env-map.js';
+import { crossTenantKeyValue } from './upsert.js';
+import { CROSS_TENANT, recordId } from './resource-registry.js';
 
 let noDependency = false;
 export function setNoDependency(flag: boolean): void { noDependency = flag; }
@@ -179,6 +182,24 @@ async function fetchAndWrite(resource: string, id: string, parent?: Parent): Pro
         `/v1/debit-memos/${id}/items`,
         'items'
       );
+    }
+
+    // Cross-tenant resources carry a `_zdf[<activeEnv>]` map recording this record's id and
+    // natural key in the CURRENTLY ACTIVE tenant, so a later upsert into a DIFFERENT tenant can
+    // look up "does this already exist there" without relying on per-tenant internal ids being
+    // stable across environments. Populated here — the single place all 6 cross-tenant resources
+    // (account, product, invoice, credit-memo, debit-memo, bill-run) are fetched, whether pulled
+    // directly or as a dependency child — so it's set on every pull path in one shot. Must run
+    // AFTER sub-items are embedded and BEFORE writing, and must never affect the natural-key
+    // filename (fileNameFor reads only NATURAL_KEY fields, never `_zdf`).
+    if (resource in CROSS_TENANT) {
+      const withMap = setEnvEntry(record, activeEnvName(), {
+        id: recordId(record) ?? id,
+        key: crossTenantKeyValue(resource, record),
+      }) as ResourceRecord;
+      const writtenPath = writeResourceFile(resource, id, withMap);
+      if (parent === undefined) lastPulledPath = writtenPath;
+      return withMap;
     }
 
     const writtenPath = writeResourceFile(resource, id, record);
