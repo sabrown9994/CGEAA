@@ -65,3 +65,23 @@ export function hasNaturalKey(resource: string): boolean {
 export function recordId(record: Rec): string | undefined {
   return str(record['id'] ?? record['Id'] ?? (record['basicInfo'] as Rec | undefined)?.['id']);
 }
+
+/** Per-resource metadata for the cross-tenant env-id map / upsert feature: the ZOQL object name
+ * and key field used to search for an existing record by natural key in a DIFFERENT tenant, and
+ * whether the resource supports upsert (create-or-update) at all. `upsertable: false` (bill-run)
+ * means the resource can be looked up cross-tenant but has no supported create/update path for
+ * upsert purposes (Zuora has no PUT for bill runs; see zdf/CLAUDE.md). */
+export interface CrossTenantConfig {
+  zoqlObject: string;
+  zoqlKeyField: string;
+  upsertable: boolean;
+}
+
+export const CROSS_TENANT: Record<string, CrossTenantConfig> = {
+  account: { zoqlObject: 'Account', zoqlKeyField: 'AccountNumber', upsertable: true },
+  product: { zoqlObject: 'Product', zoqlKeyField: 'SKU', upsertable: true },
+  invoice: { zoqlObject: 'Invoice', zoqlKeyField: 'InvoiceNumber', upsertable: true },
+  'credit-memo': { zoqlObject: 'CreditMemo', zoqlKeyField: 'MemoNumber', upsertable: true },
+  'debit-memo': { zoqlObject: 'DebitMemo', zoqlKeyField: 'MemoNumber', upsertable: true },
+  'bill-run': { zoqlObject: 'BillRun', zoqlKeyField: 'BillRunNumber', upsertable: false },
+};

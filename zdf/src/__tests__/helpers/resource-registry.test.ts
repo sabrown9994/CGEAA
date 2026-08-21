@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fileNameFor, sanitizeForFilename } from '../../helpers/resource-registry.js';
+import { fileNameFor, sanitizeForFilename, CROSS_TENANT } from '../../helpers/resource-registry.js';
 
 describe('fileNameFor — natural-key file naming', () => {
   it('uses accountNumber for accounts (nested under basicInfo or top-level)', () => {
@@ -35,5 +35,22 @@ describe('fileNameFor — natural-key file naming', () => {
   it('sanitizes characters not allowed in a path segment', () => {
     expect(sanitizeForFilename('A/B C:D')).toBe('A_B_C_D');
     expect(fileNameFor('invoice', 'id', { invoiceNumber: 'INV 1/2' })).toBe('INV_1_2');
+  });
+});
+
+describe('CROSS_TENANT — cross-tenant env-id map config', () => {
+  it('has exactly the 6 expected resources with the correct ZOQL object/key field', () => {
+    expect(Object.keys(CROSS_TENANT).sort()).toEqual(
+      ['account', 'bill-run', 'credit-memo', 'debit-memo', 'invoice', 'product'].sort()
+    );
+    expect(CROSS_TENANT.account).toEqual({ zoqlObject: 'Account', zoqlKeyField: 'AccountNumber', upsertable: true });
+    expect(CROSS_TENANT.product).toEqual({ zoqlObject: 'Product', zoqlKeyField: 'SKU', upsertable: true });
+    expect(CROSS_TENANT.invoice).toEqual({ zoqlObject: 'Invoice', zoqlKeyField: 'InvoiceNumber', upsertable: true });
+    expect(CROSS_TENANT['credit-memo']).toEqual({ zoqlObject: 'CreditMemo', zoqlKeyField: 'MemoNumber', upsertable: true });
+    expect(CROSS_TENANT['debit-memo']).toEqual({ zoqlObject: 'DebitMemo', zoqlKeyField: 'MemoNumber', upsertable: true });
+  });
+
+  it('marks bill-run as NOT upsertable (no PUT endpoint for bill runs)', () => {
+    expect(CROSS_TENANT['bill-run']).toEqual({ zoqlObject: 'BillRun', zoqlKeyField: 'BillRunNumber', upsertable: false });
   });
 });
