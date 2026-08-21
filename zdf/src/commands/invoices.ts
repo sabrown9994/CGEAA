@@ -96,13 +96,16 @@ export function register(program: Command): void {
         // Captured BEFORE the upsert — see env-map.ts / upsert-command.ts for why this must be
         // captured up front and carried forward explicitly after resolveAndSync's re-fetch/write.
         const priorMap = capturePriorEnvMap(fileRecord);
-        // R2: resolve (and fail fast on, before any Zuora write) the account FK remap. Done before
-        // resolveTargetId so an unmapped account never even reaches a Zuora call.
-        const remap = resolveAccountRemap(fileRecord['accountNumber'] as string | undefined);
         const target = await resolveTargetId(RESOURCE, fileRecord);
 
         if (target.found) {
-          const body = applyAccountRemap(stripEnvMap(filterUpdatableFields(RESOURCE, fileRecord)), remap);
+          // No account FK remap on the update branch: `accountNumber` is not in invoice's
+          // updatable-fields allowlist (Zuora doesn't allow reassigning an invoice's account via
+          // PUT), so filterUpdatableFields always strips it before it could ever reach the PUT
+          // body. Requiring a mapped sibling account file here would be a pure UX regression — a
+          // same-tenant `pull invoice` + `push invoice` (e.g. editing `comments`) doesn't pull the
+          // parent account and has no cross-tenant intent, so it must not be forced to fail.
+          const body = stripEnvMap(filterUpdatableFields(RESOURCE, fileRecord));
           const res = await apiPut<ZuoraWriteResponse>(`${ENDPOINT}/${target.id}`, body);
           assertSuccess(res, 'invoice push');
           // resolveAndSync's re-fetch is the SOLE writer here (re-fetches + writes _zdf) — see
@@ -111,6 +114,10 @@ export function register(program: Command): void {
           carryForwardEnvMapToFile(RESOURCE, target.id, priorMap);
           output.success(`Invoice ${target.id} updated.`);
         } else {
+          // R2: the create body is unfiltered (stripEnvMap(fileRecord) verbatim), so accountNumber
+          // DOES reach the POST body — resolve (and fail fast on, before the Zuora write) the
+          // account FK remap only here, where it's actually needed.
+          const remap = resolveAccountRemap(fileRecord['accountNumber'] as string | undefined);
           const body = applyAccountRemap(stripEnvMap(fileRecord), remap);
           const res = await apiPost<ZuoraWriteResponse & { id: string }>(ENDPOINT, body);
           assertSuccess(res, 'invoice create');

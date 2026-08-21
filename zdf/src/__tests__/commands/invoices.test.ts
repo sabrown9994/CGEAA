@@ -117,10 +117,36 @@ describe('zdf push invoice', () => {
 
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001']);
 
-    expect(mockReadIfExists).toHaveBeenCalledWith('account', 'A-SOURCE');
     expect(mockPut).toHaveBeenCalledWith('/v1/invoices/resolved-inv-id', { autoPay: true, comments: 'hi' });
     expect(mockPost).not.toHaveBeenCalled();
     expect(mockResolve).toHaveBeenCalledWith('invoice', 'resolved-inv-id', 'push');
+  });
+
+  it('target found: does NOT check/require a sibling account file at all — accountNumber is not updatable, so no remap is needed on this branch', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: 'resolved-inv-id', found: true });
+    mockRead.mockReturnValue({ invoiceNumber: 'INV-001', accountNumber: 'A-SOURCE', autoPay: true });
+    mockPut.mockResolvedValue({ success: true });
+    mockResolve.mockResolvedValue(undefined);
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001']);
+
+    expect(mockReadIfExists).not.toHaveBeenCalled();
+    expect(mockPut).toHaveBeenCalledWith('/v1/invoices/resolved-inv-id', { autoPay: true });
+  });
+
+  it('target found: does NOT throw for a same-tenant push when there is no local account file at all (pull invoice does not pull the parent account)', async () => {
+    mockReadIfExists.mockReturnValue(undefined);
+    mockResolveTargetId.mockResolvedValue({ id: 'INV-001', found: true });
+    mockRead.mockReturnValue({ invoiceNumber: 'INV-001', accountNumber: 'A-SOURCE', comments: 'trivial edit' });
+    mockPut.mockResolvedValue({ success: true });
+    mockResolve.mockResolvedValue(undefined);
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001'])
+    ).resolves.not.toThrow();
+
+    expect(mockPut).toHaveBeenCalledWith('/v1/invoices/INV-001', { comments: 'trivial edit' });
+    expect(mockPost).not.toHaveBeenCalled();
   });
 
   it('target found: the body PUT to Zuora never carries a _zdf map', async () => {
@@ -185,8 +211,9 @@ describe('zdf push invoice', () => {
     expect(mockPost).toHaveBeenCalledWith('/v1/invoices', { accountNumber: 'A-SOURCE', invoiceItems: [{ amount: 10 }] });
   });
 
-  it('throws and makes no Zuora call when the sibling account file does not exist locally', async () => {
+  it('target not found: throws and makes no Zuora write when the sibling account file does not exist locally', async () => {
     mockReadIfExists.mockReturnValue(undefined);
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
     mockRead.mockReturnValue({ accountNumber: 'A-SOURCE', invoiceItems: [{ amount: 10 }] });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
 
@@ -194,14 +221,14 @@ describe('zdf push invoice', () => {
       makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001'])
     ).rejects.toThrow('exit');
 
-    expect(mockResolveTargetId).not.toHaveBeenCalled();
     expect(mockPut).not.toHaveBeenCalled();
     expect(mockPost).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
 
-  it('throws and makes no Zuora call when the sibling account file has no active-env entry', async () => {
+  it('target not found: throws and makes no Zuora write when the sibling account file has no active-env entry', async () => {
     mockReadIfExists.mockReturnValue({ _zdf: { otherEnv: { id: 'acct-1', key: 'A-OTHER' } } });
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
     mockRead.mockReturnValue({ accountNumber: 'A-SOURCE', invoiceItems: [{ amount: 10 }] });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
 
@@ -209,7 +236,6 @@ describe('zdf push invoice', () => {
       makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001'])
     ).rejects.toThrow('exit');
 
-    expect(mockResolveTargetId).not.toHaveBeenCalled();
     expect(mockPut).not.toHaveBeenCalled();
     expect(mockPost).not.toHaveBeenCalled();
     exitSpy.mockRestore();
