@@ -15,6 +15,7 @@ import { register as registerInvoices } from './commands/invoices.js';
 import { register as registerCreditMemos } from './commands/credit-memos.js';
 import { register as registerDebitMemos } from './commands/debit-memos.js';
 import { register as registerBillRuns } from './commands/bill-runs.js';
+import { register as registerTemplates } from './commands/templates.js';
 
 export function buildProgram(): Command {
   const program = new Command();
@@ -75,6 +76,7 @@ Run 'zdf <command> --help' (e.g. 'zdf pull --help') to see the resources each ve
   registerCreditMemos(program);
   registerDebitMemos(program);
   registerBillRuns(program);
+  registerTemplates(program);
 
   return program;
 }

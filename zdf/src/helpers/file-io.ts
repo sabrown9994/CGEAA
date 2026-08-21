@@ -68,6 +68,19 @@ export function writeResourceFile(resourceType: string, id: string, data: unknow
   return p;
 }
 
+/**
+ * Write a resource file under a LITERAL filename (no natural-key derivation). Used by the
+ * `template` command, whose skeleton bodies carry placeholder values that must not drive the
+ * filename. Returns the written path.
+ */
+export function writeResourceFileAs(resourceType: string, fileName: string, data: unknown, ext = 'json'): string {
+  const p = resourcePath(resourceType, fileName, ext);
+  mkdirSync(dirname(p), { recursive: true });
+  const content = ext === 'sql' ? String(data) : JSON.stringify(data, null, 2);
+  writeFileSync(p, content, 'utf-8');
+  return p;
+}
+
 export function renameResourceFile(resourceType: string, oldName: string, newId: string, ext = 'json'): void {
   const oldPath = resourcePath(resourceType, oldName, ext);
   const newPath = resourcePath(resourceType, newId, ext);
