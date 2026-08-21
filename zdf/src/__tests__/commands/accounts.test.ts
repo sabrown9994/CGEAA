@@ -28,6 +28,14 @@ vi.mock('../../helpers/dependency-graph.js', () => ({
   FETCH_ALL_ITEMS_MAX: 5000,
 }));
 
+// resolveTargetId is mocked per-test (drives the push upsert branch); crossTenantKeyValue is kept
+// real (pure) so the _zdf key stored on write matches production behavior.
+const mockResolveTargetId = vi.hoisted(() => vi.fn());
+vi.mock('../../helpers/upsert.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/upsert.js')>();
+  return { ...actual, resolveTargetId: mockResolveTargetId };
+});
+
 import { register } from '../../commands/accounts.js';
 
 function makeProgram() {
@@ -64,6 +72,24 @@ describe('zdf create account', () => {
     expect(mockPost).toHaveBeenCalledWith('/v1/accounts', { name: 'New Acct' });
     expect(mockRename).toHaveBeenCalledWith('account', 'my-draft', 'new-zuora-id');
   });
+
+  it('stores _zdf[<env>] from the create response and writes the file back before renaming', async () => {
+    mockRead.mockReturnValue({ name: 'New Acct' });
+    mockPost.mockResolvedValue({ accountId: 'new-zuora-id', success: true });
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'account', 'my-draft']);
+    expect(mockWrite).toHaveBeenCalledWith('account', 'my-draft', expect.objectContaining({
+      name: 'New Acct',
+      _zdf: { sandbox: { id: 'new-zuora-id', key: null } },
+    }));
+  });
+
+  it('the body posted to Zuora never carries a _zdf map', async () => {
+    mockRead.mockReturnValue({ name: 'New Acct', _zdf: { sandbox: { id: 'old-id', key: 'OLD1' } } });
+    mockPost.mockResolvedValue({ accountId: 'new-zuora-id', success: true });
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'account', 'my-draft']);
+    const body = mockPost.mock.calls[0][1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty('_zdf');
+  });
 });
 
 describe('zdf delete account', () => {
@@ -77,7 +103,8 @@ describe('zdf delete account', () => {
 });
 
 describe('zdf push account', () => {
-  it('extracts basicInfo, filters to updatable fields, puts to Zuora, and calls resolveAndSync', async () => {
+  it('target found: extracts basicInfo, filters to updatable fields, PUTs to the RESOLVED id, and calls resolveAndSync', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: 'acc-1', found: true });
     mockRead.mockReturnValue({
       basicInfo: {
         id: 'acc-1',            // read-only — should be filtered out
@@ -94,10 +121,78 @@ describe('zdf push account', () => {
       name: 'Updated Acct',
       batch: 'Batch1',
     });
+    expect(mockPost).not.toHaveBeenCalled();
     expect(mockResolve).toHaveBeenCalledWith('account', 'acc-1', 'push');
   });
 
+  it('target found: writes the file back with _zdf[<env>] set to the resolved id', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: 'acc-1', found: true });
+    mockRead.mockReturnValue({
+      basicInfo: { id: 'acc-1', name: 'Updated Acct', accountNumber: 'ACG123' },
+    });
+    mockPut.mockResolvedValue({ success: true });
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'account', 'acc-1']);
+    expect(mockWrite).toHaveBeenCalledWith('account', 'acc-1', expect.objectContaining({
+      _zdf: { sandbox: { id: 'acc-1', key: 'ACG123' } },
+    }));
+  });
+
+  it('target found, resolved id differs from the CLI arg: PUTs and syncs using the resolved id, not the arg', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: 'resolved-id', found: true });
+    mockRead.mockReturnValue({
+      basicInfo: { id: 'acc-1', name: 'Updated Acct', accountNumber: 'ACG123' },
+    });
+    mockPut.mockResolvedValue({ success: true });
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'account', 'acc-1']);
+    expect(mockPut).toHaveBeenCalledWith('/v1/accounts/resolved-id', { name: 'Updated Acct' });
+    expect(mockResolve).toHaveBeenCalledWith('account', 'resolved-id', 'push');
+  });
+
+  it('target not found: attempts CREATE from the local file body instead of PUT', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    mockRead.mockReturnValue({ basicInfo: { name: 'Brand New Acct' } });
+    mockPost.mockResolvedValue({ accountId: 'created-id', success: true });
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'account', 'acc-1']);
+    expect(mockPost).toHaveBeenCalledWith('/v1/accounts', { basicInfo: { name: 'Brand New Acct' } });
+    expect(mockPut).not.toHaveBeenCalled();
+  });
+
+  it('target not found: writes the file back with _zdf[<env>] from the create response id', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    mockRead.mockReturnValue({ basicInfo: { name: 'Brand New Acct' } });
+    mockPost.mockResolvedValue({ accountId: 'created-id', success: true });
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'account', 'acc-1']);
+    expect(mockWrite).toHaveBeenCalledWith('account', 'acc-1', expect.objectContaining({
+      _zdf: { sandbox: { id: 'created-id', key: null } },
+    }));
+  });
+
+  it('the body PUT to Zuora on the update path never carries a _zdf map', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: 'acc-1', found: true });
+    mockRead.mockReturnValue({
+      basicInfo: { name: 'Updated Acct' },
+      _zdf: { sandbox: { id: 'acc-1', key: 'ACG123' } },
+    });
+    mockPut.mockResolvedValue({ success: true });
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'account', 'acc-1']);
+    const body = mockPut.mock.calls[0][1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty('_zdf');
+  });
+
+  it('the body POSTed to Zuora on the create-fallback path never carries a _zdf map', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    mockRead.mockReturnValue({
+      basicInfo: { name: 'Brand New Acct' },
+      _zdf: { sandbox: { id: 'stale-id', key: 'STALE1' } },
+    });
+    mockPost.mockResolvedValue({ accountId: 'created-id', success: true });
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'account', 'acc-1']);
+    const body = mockPost.mock.calls[0][1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty('_zdf');
+  });
+
   it('exits with error when Zuora returns success false', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: 'acc-1', found: true });
     mockRead.mockReturnValue({
       basicInfo: { id: 'acc-1', name: 'Test' },
     });
@@ -113,6 +208,7 @@ describe('zdf push account', () => {
   });
 
   it('exits with error when basicInfo is missing', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: 'acc-1', found: true });
     mockRead.mockReturnValue({ name: 'No basic info here' });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
     await expect(
