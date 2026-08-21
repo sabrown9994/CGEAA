@@ -366,7 +366,7 @@ intQA. The 400s in the original finding were from ad-hoc probe queries not issue
 
 ---
 
-## Auth — token refresh is ALREADY handled under the hood (with one gap)
+## Auth — token refresh is fully handled under the hood (proactive + reactive)
 `src/auth/token.ts` `ensureToken(env)` already refreshes the OAuth token transparently: on
 every request it checks `tokenExpiresAt > Date.now()` and, if expired/missing, fetches a new
 `client_credentials` token and persists it via `saveUpdatedEnv`. No user action needed — this
