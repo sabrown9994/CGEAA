@@ -91,7 +91,7 @@ supported (reason in the [Resource Reference](#resource-reference)).
 | invoice | 2 · test data | ✓ | ✓ | ✓ | ✓ | — |
 | credit-memo | 2 · test data | ✓ | ✓ | ✓ | ✓ | — |
 | debit-memo | 2 · test data | ✓ | ✓ | ✓ | ✓ | — |
-| bill-run | 2 · test data | ✓ | re-fetch¹ | ✓ ⚠² | ✓ | — |
+| bill-run | 2 · test data | ✓ | re-fetch¹ | ✓ ⚠² | — | — |
 | product | 3 · automation | ✓ | ✓ | ✓ | ✓ | — |
 | product-rate-plan | 3 · automation | ✓ | ✓ | ✓ | ✓ | — |
 | product-rate-plan-charge | 3 · automation | ✓ | ✓ | ✓ | ✓ | — |
@@ -105,8 +105,11 @@ supported (reason in the [Resource Reference](#resource-reference)).
 
 **Not universal:** only `billing-template` and `order` support `list`. `subscription` and
 `order-line-item` have no `create`/`delete` (managed via the Orders API / their parent order).
-`data-query` has no `push`. Per-resource endpoints, body requirements, and status constraints
-are in the [Resource Reference](#resource-reference).
+`data-query` has no `push`. **`bill-run` has no `delete`** — Zuora only deletes Pending/Canceled
+bill runs, and an API-created run reaches Completed almost immediately, so a delete would always
+be rejected. `workflow` `pull`/`create` operate on the full **export** definition and `push`
+updates settings only — see [workflow](#workflow). Per-resource endpoints, body requirements, and
+status constraints are in the [Resource Reference](#resource-reference).
 
 ---
 
@@ -409,7 +412,7 @@ Subscriptions support **pull and push only**. There is no `create subscription` 
 - `creditMemoDate` and `autoApplyUponPosting` are **not updatable** on Posted memos (live-verified: Zuora rejects them). These fields are excluded from the push allowlist.
 - **`create credit-memo`** requires `--invoice <invoiceId>` pointing at a **Posted** source invoice (a Draft source is rejected: "Invoice is not posted"). The CLI posts the local file **verbatim** to `POST /v1/credit-memos/invoice/{invoiceKey}`; the bare `POST /v1/credit-memos` is unreliable on this tenant. The file must be `{ "items": [ { "invoiceItemId": "<id>", "amount": <n>, "skuName": "<label>" } ] }` — **each item requires `invoiceItemId`, `amount`, and a non-blank `skuName`** (Zuora rejects a blank SKU: "SKU name is blank"). Get `invoiceItemId` from `GET /v1/invoices/{id}/items` (or a pulled invoice). Omitting `--invoice` fails fast before any network call. **Live-verified end-to-end** (create → pull → Draft memo with items).
 - `push credit-memo` re-pulls the parent account.
-- **`delete credit-memo`** is status-aware. Zuora only deletes a **Cancelled** credit memo, and only a **Draft** memo can be cancelled. The command GETs the memo first: a **Draft** memo is cancelled (`PUT /v1/credit-memos/{id}/cancel`) then deleted; an already-**Cancelled** memo is deleted directly; a **Posted** memo is rejected up front (it can't be cancelled, so it isn't deletable this way — reverse it through the normal accounting flow). A Draft memo isn't applied to its invoice yet (application happens on posting), so no unapply step is needed. *(GET-first behavior verified live on intQA; full create→cancel→delete cycle not yet self-tested live.)*
+- **`delete credit-memo`** is status-aware. Zuora only deletes a **Cancelled** credit memo, and only a **Draft** memo can be cancelled. The command GETs the memo first: a **Draft** memo is cancelled (`PUT /v1/credit-memos/{id}/cancel`) then deleted; an already-**Cancelled** memo is deleted directly; a **Posted** memo is rejected up front (it can't be cancelled, so it isn't deletable this way — reverse it through the normal accounting flow). A Draft memo isn't applied to its invoice yet (application happens on posting), so no unapply step is needed. Note the status spelling is Zuora's single-L `Canceled`. **Live-verified end-to-end on intQA (2026-08-21):** account → Posted invoice → Draft credit memo → `delete` (cancel → delete) → confirmed gone.
 
 ---
 
@@ -427,7 +430,7 @@ Subscriptions support **pull and push only**. There is no `create subscription` 
 - `debitMemoDate` and `dueDate` are **not updatable** on Posted memos (live-verified: Zuora rejects them). These fields are excluded from the push allowlist.
 - **`create debit-memo`** requires `--invoice <invoiceId>` pointing at a **Posted** source invoice. Same body contract as credit-memo: `{ "items": [ { "invoiceItemId": "<id>", "amount": <n>, "skuName": "<label>" } ] }` — **each item requires `invoiceItemId`, `amount`, and a non-blank `skuName`**. Posted verbatim to `POST /v1/debit-memos/invoice/{invoiceKey}`; the bare `POST /v1/debit-memos` is unreliable on this tenant. Omitting `--invoice` fails fast. **Live-verified end-to-end** (create → pull → Draft memo with items).
 - `push debit-memo` re-pulls the parent account.
-- **`delete debit-memo`** is status-aware, identical to credit-memo: GET first, cancel a **Draft** memo (`PUT /v1/debit-memos/{id}/cancel`) then delete, delete an already-**Cancelled** memo directly, reject a **Posted** memo. *(GET-first behavior verified live on intQA; full create→cancel→delete cycle not yet self-tested live.)*
+- **`delete debit-memo`** is status-aware, identical to credit-memo: GET first, cancel a **Draft** memo (`PUT /v1/debit-memos/{id}/cancel`) then delete, delete an already-**Canceled** memo directly, reject a **Posted** memo. **Live-verified end-to-end on intQA (2026-08-21)** alongside the credit-memo cycle.
 
 ---
 
@@ -438,28 +441,35 @@ Subscriptions support **pull and push only**. There is no `create subscription` 
 | pull | `GET /v1/bill-runs/{id}` | Also pulls all invoices, credit-memos, debit-memos produced by the run |
 | push | — | No PUT endpoint exists; `push bill-run` re-fetches (same as pull) |
 | create | `POST /v1/bill-runs` | **WARNING: executes real billing** — see below |
-| delete | `DELETE /v1/bill-runs/{id}` | Must be in Canceled or Error status |
+| delete | — | **Not supported / removed** — see below |
 
 **Limitations:**
 - **`create bill-run` executes real billing in the target tenant.** It is not a dry run: it generates real invoices and/or credit memos for the accounts/subscriptions in scope. The CLI prints a prominent warning before submitting the create. **Live-verified on intQA**: create, pull, and push-as-refetch all PASS.
 - **Bill runs cannot be updated** via the Zuora API. `push bill-run` re-fetches the latest data rather than writing anything.
-- Deletion requires the bill run to be in **Canceled** or **Error** status. A bill run that has already run to **Completed** (the common outcome right after `create`) **cannot be deleted** — this is a Zuora business rule, not a ZDF defect. Live-tested: a created-and-completed bill run correctly failed delete for this reason.
+- **There is no `delete bill-run` command.** Zuora only deletes bill runs in **Pending** or **Canceled** status, but a bill run created via the API runs to **Completed** almost immediately, so a delete would always be rejected. The command was removed rather than left as a guaranteed-failure stub.
 
 ---
 
 ### workflow
 
+Workflows are handled through Zuora's Workflow **export/import** API so the local file is the
+**full, recreatable definition** (`workflow_definition`, `workflow`, `tasks`, `linkages`) — not
+just metadata.
+
 | Operation | Endpoint | Notes |
 |-----------|----------|-------|
-| pull | `GET /workflows/{id}` | |
-| push | `PUT /workflows/{id}` | |
-| create | `POST /workflows` | |
-| delete | `DELETE /workflows/{id}` | |
+| pull | `GET /workflows/{id}/export` | Writes the full definition (settings + tasks + linkages), the same shape `create` consumes |
+| create | `POST /workflows/import` | Imports the local export file as a **new** workflow (new definition id); JSON body |
+| push | `PUT /workflows/{id}` | Updates **settings only** (name, description, triggers, status); remaps the export shape to the PUT body |
+| delete | `DELETE /workflows/{id}` | Returns `{success, id}` |
 
 **Limitations:**
-- The endpoint is `/workflows` (not `/v1/api/workflows` or another `/v1/`-prefixed path).
-- The workflow object has no `success` field on a good response; only an explicit `success: false` or a populated `reasons`/`errors` array is treated as a failure.
-- There is no allowlist for workflow fields — the local file is pushed through unfiltered (custom fields pass through as with every other resource).
+- The endpoint base is `/workflows` (not `/v1/api/workflows` or a `/v1/`-prefixed path).
+- **`pull` fetches the full export** (`/export`), not `GET /workflows/{id}` (which returns only metadata). This makes `pull` → edit → `create` a full-fidelity round-trip and is required for `create` to have something to import.
+- **`create` imports a NEW workflow** — `POST /workflows/import` never updates in place; it always mints a new definition id. Use it to copy/restore a workflow or to apply task-graph edits (Zuora has no in-place task-graph update API). An import payload must contain at least one task **and** at least one linkage. The response is the created workflow object directly (no `{success}` envelope).
+- **`push` updates workflow settings only** — name, description, triggers, status, interval, timezone — via `PUT /workflows/{id}`. It does **not** apply task/linkage edits; re-apply those with `create`. The command remaps the export file's snake_case settings to the camelCase PUT body.
+- Workflow PUT/export responses have no `{success}` envelope (handled via `assertReadSuccess`); DELETE returns `{success, id}`.
+- **Live-verified end-to-end on intQA (2026-08-21)**: a workflow authored from scratch (definition + one task + one linkage) → `create` → `pull` → `push` (description edit confirmed) → `delete` → confirm-gone all PASS.
 
 ---
 

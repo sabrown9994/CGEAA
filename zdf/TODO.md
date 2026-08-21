@@ -166,7 +166,7 @@ record (marked `TEST ZDF POC` where applicable) and was torn down after confirma
 | product-rate-plan | PASS | — | PASS | endpoint corrected to `/v1/object/product-rate-plan` (see below); live-verified |
 | product-rate-plan-charge | PASS | — | PASS (cascade) | requires `ProductRatePlanId` + `POBIdentifier__c` + `ProductRatePlanChargeTierData`; delete is cascade via parent PRP deletion, not a direct DELETE call |
 | billing-template | PASS | PASS | PASS | full cycle PASS: create / confirm / push / delete / confirm-deletion all live-verified |
-| bill-run | PASS | PASS (re-fetch) | BLOCKED (business rule) | create + pull + push-as-refetch verified; delete blocked because the created bill-run reached Completed status — Zuora only allows deleting Pending/Canceled bill-runs (not a ZDF defect) |
+| bill-run | PASS | PASS (re-fetch) | ❌ REMOVED (2026-08-21) | create + pull + push-as-refetch verified. `delete bill-run` command REMOVED: Zuora only deletes Pending/Canceled runs, but an API-created run reaches Completed almost immediately, so delete would always be rejected — removed rather than left as a failing stub. |
 | invoice | ✅ RESOLVED (2026-08-18) | PASS | PASS (cancel-then-delete) | `create` via `POST /v1/invoices` (flat body; accounting fields supplied per item — the "pass the fields" path, not a wall). `delete` cancels first then deletes, confirming via invoice-disappearance poll (async-jobs endpoint doesn't track the job). Full create→delete cycle live-verified on intQA. See "Resolved" note below. |
 | credit-memo | ✅ VERIFIED (2026-08-19) | N/A | ✅ RESOLVED (2026-08-21, cancel-then-delete) | create `POST /v1/credit-memos/invoice/{invoiceKey}` requires `--invoice` (a **Posted** invoice) + body `{items:[{invoiceItemId,amount,skuName}]}` — live create→pull confirmed. delete is now status-aware: GET → Draft `PUT .../cancel` → DELETE; Cancelled deletes directly; Posted rejected. GET-first verified live; full cycle unit-tested. |
 | debit-memo | ✅ VERIFIED (2026-08-19) | N/A | ✅ RESOLVED (2026-08-21, cancel-then-delete) | same as credit-memo (`POST /v1/debit-memos/invoice/{invoiceKey}`). Create live-verified; delete now GET→(Draft)cancel→delete, Posted rejected. |
@@ -254,14 +254,21 @@ Both subcommands were removed from ZDF entirely (commit dbee8c1). `subscription`
 
 ## Backlog (deferred minors from the fix effort)
 
-- Secondary `apiGet` calls that only feed traversal decisions (`rulesBillRun`'s
-  credit-memo-by-sourceId lookup) are unguarded — worst case is under-traversal (`?? []`), not
-  a corrupt file.
-- `workflow` create/push/delete body shapes unverified; no `filterUpdatableFields` allowlist
-  for `workflow`; `/workflows/{id}/versions` unused by pull.
-- Cosmetic: a "truncated / more may remain" warning can print in exact-boundary cases where
-  nothing was actually truncated (`fetchAllItems` exact-cap single page; `list orders --limit`
-  landing exactly at page end).
+- Secondary child-lookup calls that only feed traversal decisions (`rulesBillRun`'s
+  invoice/credit-memo/debit-memo lookups) are each wrapped in try/catch → warn + continue. Worst
+  case is UNDER-traversal (a related child isn't auto-pulled with its parent; `?? []`), never a
+  corrupt file or a wrong primary resource. No action needed — see note in the final message.
+- ✅ **RESOLVED (2026-08-21) — `workflow` full CRUD.** Reworked to Zuora's export/import model:
+  `pull` = `GET /workflows/{id}/export` (full definition), `create` = `POST /workflows/import`,
+  `push` = `PUT /workflows/{id}` settings-only (via `buildWorkflowSettingsBody` snake→camel remap),
+  `delete` = `DELETE /workflows/{id}`. Live-verified end-to-end with a **from-scratch** definition
+  (1 task + 1 linkage): create → pull → push → delete → confirm-gone. (`push` applies settings, not
+  the task graph — Zuora has no in-place task update; re-apply via `create`.)
+- ✅ **RESOLVED (2026-08-21) — spurious "truncated" warning at exact pagination boundaries.**
+  Confirmed the bug: `fetchAllItems` checked the item cap BEFORE reading `nextPage`, and
+  `list orders --limit` flagged truncation whenever `total >= limit` after a full page. Both now
+  only warn when more actually remains (a `nextPage`/unwritten orders exist). A final page landing
+  exactly on the cap/limit with no next page no longer warns.
 
 ### Known tenant-config limitations (intQA, discovered 2026-08-07)
 - `create invoice` (standalone `POST /v1/invoices`) — ✅ RESOLVED (2026-08-18): the tenant doesn't
@@ -287,7 +294,9 @@ Both subcommands were removed from ZDF entirely (commit dbee8c1). `subscription`
   → `DELETE`; already-Cancelled → `DELETE` directly; **Posted → rejected** (a posted memo can't be
   cancelled). No unapply step is needed because a Draft memo isn't applied yet (application happens on
   posting). GET-first behavior verified live on intQA; Draft/Cancelled/Posted branches unit-tested.
-  Full create→cancel→delete cycle not yet self-tested live (needs a throwaway Posted invoice + memo).
+  Full create→cancel→delete cycle **now live-verified end-to-end (2026-08-21)**: created a
+  throwaway account → Posted invoice → Draft credit + debit memos → `zdf delete {memo}`
+  (GET → cancel → delete) → both confirmed gone; throwaway account cascade-deleted.
 - ✅ **RESOLVED (2026-08-21) — env-var (CI) auth was broken.** `ensureToken` called `saveUpdatedEnv`
   unconditionally; in env-var mode there's no config file, so the first successful token fetch threw
   `No ZDF configuration found` — breaking every authenticated command in CI. Fix: `getActiveEnv` marks

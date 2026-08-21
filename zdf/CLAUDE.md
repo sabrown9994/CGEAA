@@ -154,8 +154,9 @@ the command GETs the memo first: `Draft` → `PUT /v1/{memo}s/{id}/cancel` → `
 `Canceled` → `DELETE`; any other status (`Posted`, `Error`, `PendingForTax`, `Generating`,
 `CancelInProgress`, or missing) → rejected with a clear message (no blind DELETE). No unapply
 step is needed — a Draft memo isn't applied to its invoice yet (application happens on posting).
-Status spelling is Zuora's single-L `Canceled`. GET-first verified live on intQA; branches
-unit-tested; full create→cancel→delete cycle not yet self-tested live.
+Status spelling is Zuora's single-L `Canceled`. **Live-verified end-to-end (2026-08-21):**
+account → Posted invoice → Draft credit + debit memos → `zdf delete {memo}` (GET → cancel →
+delete) → both confirmed gone, throwaway account cascade-deleted. Branches also unit-tested.
 
 ### Invoice create / delete
 
@@ -199,15 +200,33 @@ async-jobs polling for invoices.
 The push command unwraps it before filtering: `rawFull['order'] ?? rawFull`. `push order`
 only works on orders in Draft or Scheduled status — Completed orders are rejected by Zuora.
 
-### bill-run push
+### bill-run push / no delete
 
-Zuora has no PUT endpoint for bill runs. `push bill-run` re-fetches (same as pull)
-rather than writing anything. `delete bill-run` only works on Canceled or Error status.
+Zuora has no PUT endpoint for bill runs. `push bill-run` re-fetches (same as pull) rather than
+writing anything. **There is no `delete bill-run` command** (removed 2026-08-21): Zuora only
+deletes Pending/Canceled runs, but an API-created run reaches Completed almost immediately, so a
+delete would always be rejected — the command was removed instead of left as a failing stub.
 
-### Workflows API
+### Workflows API — export/import model
 
-The endpoint is `/workflows` (not `/v1/api/workflows`). Workflow PUT and DELETE return the
-resource object directly with no `{success}` envelope — use `assertReadSuccess`.
+Base path `/workflows` (not `/v1/api/workflows`). Workflows are handled via the **export/import**
+API so the local file is the FULL, recreatable definition, not just metadata:
+
+- **pull** → `GET /workflows/{id}/export` → writes `{ workflow_definition, workflow, tasks,
+  linkages }`. (NOT `GET /workflows/{id}`, which returns only metadata + active_version.)
+- **create** → `POST /workflows/import` with the export JSON body → creates a **NEW** workflow
+  (new definition id; import never updates in place). Response is the workflow object directly
+  (no `{success}` envelope) → `assertReadSuccess`, read `res.definitionId ?? res.id`. An import
+  payload must contain **≥1 task and ≥1 linkage** (empty arrays are rejected 400).
+- **push** → `PUT /workflows/{id}` updates **settings only** (name, description, triggers,
+  status, interval, timezone, priority). `buildWorkflowSettingsBody()` remaps the export file's
+  snake_case (`ondemand_trigger`, in `workflow`/`workflow_definition`) to the camelCase PUT body.
+  Task/linkage edits are NOT applied by push — re-apply via `create`. PUT returns the object
+  directly (no `{success}`) → `assertReadSuccess`. (Note: `description` round-trips; `priority`
+  is version-scoped and may not reflect back in the export.)
+- **delete** → `DELETE /workflows/{id}` → returns `{ success, id }` → `assertSuccess`.
+- **Live-verified end-to-end (2026-08-21)** with a from-scratch definition (1 Delay task + a
+  Start linkage): create → pull → push (description edit) → delete → confirm-gone.
 
 ### Settings API (billing-template)
 
@@ -280,7 +299,7 @@ Use `--no-dependency` to skip all traversal. Essential for large accounts.
 | invoice | ✓ | ✓ | ✓ (`POST /v1/invoices`; accounting fields required in body) | ✓ (cancel-then-delete; disappearance poll) | |
 | credit-memo | ✓ | ✓ | ✓ (`--invoice <id>` required; `skuName` per item) | ✓ (Draft→cancel→delete; Cancelled direct; Posted rejected) | |
 | debit-memo | ✓ | ✓ | ✓ (`--invoice <id>` required; `skuName` per item) | ✓ (Draft→cancel→delete; Cancelled direct; Posted rejected) | |
-| bill-run | ✓ | re-fetch (no PUT) | ✓ (⚠ executes real billing) | ✓ (Canceled/Error only) | |
+| bill-run | ✓ | re-fetch (no PUT) | ✓ (⚠ executes real billing) | — (removed; API-created runs reach Completed, undeletable) | |
 | workflow | ✓ | ✓ | ✓ | ✓ | |
 | billing-template | ✓ (HTML only) | ✓ | ✓ | ✓ | ✓ |
 | data-query | ✓ | | ✓ (submits job) | ✓ (cancels job) | |

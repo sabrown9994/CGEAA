@@ -88,16 +88,21 @@ async function fetchAllItems<T>(firstUrl: string, itemsKey: string): Promise<T[]
       const res = await apiGet<Record<string, unknown>>(url);
       const items = res[itemsKey] as T[] | undefined;
       if (items) all.push(...items);
+      // Read the next-page cursor BEFORE the cap check: only warn about truncation if we
+      // are stopping while more pages actually remain. A final page that lands exactly on
+      // the cap with no nextPage has fetched everything, so it must not warn.
+      url = res['nextPage'] as string | undefined;
       if (all.length >= fetchAllItemsMax) {
-        stopProgress();
-        output.warn(
-          `fetchAllItems: truncated ${itemsKey} at the ${fetchAllItemsMax}-item cap (endpoint may have ` +
-          `ignored a filter param and returned more than expected); some sub-items were not fetched. ` +
-          `Re-run with --no-dependency for large accounts.`
-        );
+        if (url) {
+          stopProgress();
+          output.warn(
+            `fetchAllItems: stopped ${itemsKey} at the ${fetchAllItemsMax}-item cap while more pages ` +
+            `remained (endpoint may have ignored a filter param and returned more than expected); ` +
+            `some sub-items were not fetched. Re-run with --no-dependency or --max-items for large accounts.`
+          );
+        }
         break;
       }
-      url = res['nextPage'] as string | undefined;
       page++;
     }
   } finally {

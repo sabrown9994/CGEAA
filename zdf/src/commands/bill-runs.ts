@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
-import { apiPost, apiDelete } from '../api/client.js';
+import { apiPost } from '../api/client.js';
 import { readResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
@@ -18,7 +18,6 @@ export function register(program: Command): void {
   const pullCmd = getOrCreate(program, 'pull', 'Fetch a resource from Zuora');
   const createCmd = getOrCreate(program, 'create', 'Create a resource in Zuora from a local file');
   const pushCmd = getOrCreate(program, 'push', 'Update a resource in Zuora from a local file');
-  const deleteCmd = getOrCreate(program, 'delete', 'Delete a resource in Zuora');
 
   pullCmd
     .command('bill-run <id>')
@@ -66,15 +65,7 @@ export function register(program: Command): void {
       })()
     );
 
-  deleteCmd
-    .command('bill-run <id>')
-    .description('Delete a bill run in Zuora (must be Canceled or Error status)')
-    .action((id: string) =>
-      runCommand(program, async () => {
-        const res = await apiDelete<ZuoraWriteResponse>(`${ENDPOINT}/${id}`);
-        assertSuccess(res, 'bill-run delete');
-        await resolveAndSync(RESOURCE, id, 'delete');
-        output.success(`Bill run ${id} deleted.`);
-      })()
-    );
+  // No `delete bill-run`: Zuora only allows deleting Pending/Canceled bill runs, and a bill run
+  // created via the API runs to Completed almost immediately, so a delete would always be rejected.
+  // The command was removed rather than left as a guaranteed-failure stub.
 }

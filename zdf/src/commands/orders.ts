@@ -129,10 +129,14 @@ export function register(program: Command): void {
               }
             }
           }
-          if (hasLimit && total >= limit!) {
-            truncated = true;
-          }
-          if (truncated || !res.nextPage) break;
+          // Reaching the limit at the end of a fully-written page is only a real
+          // truncation if there is another page to fetch. Landing exactly on the limit
+          // with no nextPage means everything was fetched — don't warn in that case.
+          // (The mid-page early break above sets truncated=true directly, since orders
+          // on the current page were left unwritten.)
+          const hitLimit = hasLimit && total >= limit!;
+          if (hitLimit && res.nextPage) truncated = true;
+          if (hitLimit || !res.nextPage) break;
           page++;
         }
         if (truncated) {

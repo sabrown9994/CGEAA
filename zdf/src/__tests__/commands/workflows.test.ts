@@ -23,7 +23,7 @@ vi.mock('../../helpers/dependency-graph.js', () => ({
   FETCH_ALL_ITEMS_MAX: 5000,
 }));
 
-import { register } from '../../commands/workflows.js';
+import { register, buildWorkflowSettingsBody } from '../../commands/workflows.js';
 
 function makeProgram() {
   const p = new Command();
@@ -32,26 +32,30 @@ function makeProgram() {
   return p;
 }
 
+// A minimal but representative /export payload.
+const EXPORT = {
+  workflow_definition: { name: 'My WF', description: 'desc', category: 'Default' },
+  workflow: {
+    id: 978174, name: 'My WF', description: 'v1',
+    ondemand_trigger: true, callout_trigger: false, scheduled_trigger: false,
+    interval: '', timezone: 'UTC', priority: 'Medium', status: 'Active',
+  },
+  tasks: [{ id: 1 }],
+  linkages: [{ id: 2 }],
+};
+
 beforeEach(() => { vi.clearAllMocks(); });
 
 describe('zdf pull workflow', () => {
-  it('fetches from the corrected /workflows base path', async () => {
-    mockGet.mockResolvedValue({ id: 123, name: 'My Workflow' });
+  it('fetches the FULL definition via /export and writes it', async () => {
+    mockGet.mockResolvedValue({ ...EXPORT });
     await makeProgram().parseAsync(['node', 'zdf', 'pull', 'workflow', '123']);
-    expect(mockGet).toHaveBeenCalledWith('/workflows/123');
+    expect(mockGet).toHaveBeenCalledWith('/workflows/123/export');
+    expect(mockWrite).toHaveBeenCalledWith('workflow', '123', expect.objectContaining({ tasks: expect.any(Array), linkages: expect.any(Array) }));
   });
 
-  it('writes the file when the body has no success field (valid workflow object)', async () => {
-    mockGet.mockResolvedValue({ id: 123, name: 'My Workflow' });
-    await makeProgram().parseAsync(['node', 'zdf', 'pull', 'workflow', '123']);
-    expect(mockWrite).toHaveBeenCalledWith('workflow', '123', expect.objectContaining({ id: 123 }));
-  });
-
-  it('does not write and exits non-zero when Zuora returns 200-with-reasons', async () => {
-    mockGet.mockResolvedValue({
-      success: false,
-      reasons: [{ code: 58230015, message: 'Object not found.' }],
-    });
+  it('does not write and exits non-zero when the export returns 200-with-errors', async () => {
+    mockGet.mockResolvedValue({ success: false, reasons: [{ code: 58230015, message: 'Object not found.' }] });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
     await expect(
       makeProgram().parseAsync(['node', 'zdf', 'pull', 'workflow', '999'])
@@ -62,30 +66,60 @@ describe('zdf pull workflow', () => {
 });
 
 describe('zdf create workflow', () => {
-  it('posts to the corrected /workflows base path', async () => {
-    mockRead.mockReturnValue({ name: 'New Workflow' });
-    mockPost.mockResolvedValue({ success: true, id: 456 });
+  it('imports via POST /workflows/import and renames the file to the new definition id', async () => {
+    mockRead.mockReturnValue({ ...EXPORT });
+    // Import returns the created workflow object directly (no {success} envelope).
+    mockPost.mockResolvedValue({ id: 2327557, definitionId: 2327557, name: 'My WF' });
     await makeProgram().parseAsync(['node', 'zdf', 'create', 'workflow', 'my-draft']);
-    expect(mockPost).toHaveBeenCalledWith('/workflows', { name: 'New Workflow' });
-    expect(mockRename).toHaveBeenCalledWith('workflow', 'my-draft', '456');
+    expect(mockPost).toHaveBeenCalledWith('/workflows/import', expect.objectContaining({ tasks: expect.any(Array) }));
+    expect(mockRename).toHaveBeenCalledWith('workflow', 'my-draft', '2327557');
   });
 });
 
 describe('zdf push workflow', () => {
-  it('puts to the corrected /workflows/{id} path', async () => {
-    mockRead.mockReturnValue({ name: 'My Workflow' });
-    // Workflows API PUT returns the workflow object directly (no {success} envelope)
-    mockPut.mockResolvedValue({ id: 123, name: 'My Workflow', status: 'Active' });
+  it('PUTs remapped settings (snake_case export -> camelCase PUT body) to /workflows/{id}', async () => {
+    mockRead.mockReturnValue({ ...EXPORT });
+    // PUT returns the workflow object directly (no {success} envelope).
+    mockPut.mockResolvedValue({ id: 123, name: 'My WF', status: 'Active' });
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'workflow', '123']);
-    expect(mockPut).toHaveBeenCalledWith('/workflows/123', expect.any(Object));
+    expect(mockPut).toHaveBeenCalledWith('/workflows/123', {
+      name: 'My WF',
+      description: 'desc',
+      ondemandTrigger: true,
+      calloutTrigger: false,
+      scheduledTrigger: false,
+      interval: '',
+      timezone: 'UTC',
+      priority: 'Medium',
+      status: 'Active',
+    });
   });
 });
 
 describe('zdf delete workflow', () => {
-  it('deletes via the corrected /workflows/{id} path', async () => {
-    // Workflows API DELETE returns no {success} envelope on success (empty or 204)
-    mockDelete.mockResolvedValue({});
+  it('deletes via /workflows/{id} and requires the {success} envelope', async () => {
+    mockDelete.mockResolvedValue({ success: true, id: 123 });
     await makeProgram().parseAsync(['node', 'zdf', 'delete', 'workflow', '123']);
     expect(mockDelete).toHaveBeenCalledWith('/workflows/123');
+  });
+});
+
+describe('buildWorkflowSettingsBody', () => {
+  it('remaps export shape (snake_case) to camelCase settings, dropping unresolved keys', () => {
+    const body = buildWorkflowSettingsBody(EXPORT);
+    expect(body).toEqual({
+      name: 'My WF', description: 'desc',
+      ondemandTrigger: true, calloutTrigger: false, scheduledTrigger: false,
+      interval: '', timezone: 'UTC', priority: 'Medium', status: 'Active',
+    });
+  });
+
+  it('tolerates a flat/camelCase (metadata) file too', () => {
+    const body = buildWorkflowSettingsBody({ name: 'Flat', description: 'd', ondemandTrigger: false, priority: 'High' });
+    expect(body.name).toBe('Flat');
+    expect(body.ondemandTrigger).toBe(false);
+    expect(body.priority).toBe('High');
+    // unresolved settings (no triggers/timezone in the file) are omitted, not undefined
+    expect('timezone' in body).toBe(false);
   });
 });

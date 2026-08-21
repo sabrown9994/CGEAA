@@ -103,12 +103,11 @@ describe('zdf push bill-run', () => {
   });
 });
 
-describe('zdf delete bill-run', () => {
-  it('calls delete and resolveAndSync with delete', async () => {
-    mockDelete.mockResolvedValue({ success: true });
-    mockResolve.mockResolvedValue(undefined);
-    await makeProgram().parseAsync(['node', 'zdf', 'delete', 'bill-run', 'BR-001']);
-    expect(mockDelete).toHaveBeenCalledWith('/v1/bill-runs/BR-001');
-    expect(mockResolve).toHaveBeenCalledWith('bill-run', 'BR-001', 'delete');
+describe('zdf delete bill-run (removed)', () => {
+  it('does not register a delete bill-run command (Zuora only deletes Pending/Canceled runs)', () => {
+    const p = makeProgram();
+    const del = p.commands.find((c) => c.name() === 'delete');
+    const hasBillRun = !!del && del.commands.some((c) => c.name() === 'bill-run');
+    expect(hasBillRun).toBe(false);
   });
 });
