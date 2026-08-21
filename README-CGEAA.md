@@ -118,23 +118,41 @@ sf auth web login --alias Playground
 ./cgeaa diff -o BRInt
 ```
 
-## Zuora (ZDF) — Quick Start
+## Zuora (ZDF) — Install & Getting Started
 
-CGEAA bundles the **Zuora Development Framework (ZDF)**, which syncs Zuora billing
-objects to local JSON files and pushes changes back. All ZDF commands are available
-through `cgeaa zuora`.
+CGEAA bundles the **Zuora Development Framework (ZDF)** — a developer CLI for pulling
+Zuora objects to local JSON, editing them (including with AI tooling), and pushing them
+back to a single Zuora tenant. Every ZDF command runs through `cgeaa zuora <args>`, which
+passes its arguments verbatim to the bundled `zdf` binary.
+
+> **This section covers only install and first-run setup.** For the full command reference
+> — every resource, verb, endpoint, flag, and workflow (pull/push/create/delete, the
+> `template` command, the three use cases, production-write safety, etc.) — see
+> **[`zdf/README-ZDF.md`](zdf/README-ZDF.md)**.
 
 ### Prerequisites
 
-- Node.js ≥ 18 (the setup script offers to install it automatically)
-- A Zuora OAuth client ID and secret (from your tenant admin or the Zuora UI under
-  **Admin → Manage Users → OAuth Clients**)
+- **Node.js ≥ 18** — `cgeaa-setup` offers to install it automatically if it's missing.
+- A **Zuora OAuth client id + secret** (from your tenant admin, or the Zuora UI under
+  **Administration → Manage Users → OAuth Clients**).
 
-### 1. Run `cgeaa-setup`
+### 1. Install (build ZDF)
 
-The setup script builds ZDF automatically when Node.js is present. At the end of
-setup it prompts you to configure Zuora credentials. If you skipped that step, run
-it manually now:
+`cgeaa-setup` builds ZDF automatically when Node.js is present (it runs
+`cd zdf && npm install && npm run build`, producing `zdf/dist/zdf.js`). If you're working
+from a clone without running the global installer, you can build it directly:
+
+```bash
+cd zdf && npm install && npm run build && cd ..
+```
+
+Confirm the dispatch works:
+
+```bash
+cgeaa zuora --help      # should print the ZDF usage/‑‑help text
+```
+
+### 2. Authenticate to a tenant
 
 ```bash
 cgeaa zuora auth add \
@@ -145,7 +163,7 @@ cgeaa zuora auth add \
 cgeaa zuora auth use intQA
 ```
 
-Replace `intQA` / the URL with the name and base URL for your environment:
+Use the name and base URL for your environment:
 
 | Environment | Base URL |
 |---|---|
@@ -153,57 +171,20 @@ Replace `intQA` / the URL with the name and base URL for your environment:
 | US API Sandbox | `https://rest.apisandbox.zuora.com` |
 | US Production | `https://rest.zuora.com` |
 
-Credentials are stored in `~/.zdf/config.json` on your machine. They are not
-committed to the repository.
+Credentials are stored in `~/.zdf/config.json` on your machine and are **not** committed to
+the repository. For CI, set `ZDF_CLIENT_ID` / `ZDF_CLIENT_SECRET` / `ZDF_BASE_URL` instead
+(see the "Production Safety" / CI notes in [`zdf/README-ZDF.md`](zdf/README-ZDF.md)).
 
-### 2. Verify auth
-
-```bash
-cgeaa zuora auth env       # prints the active environment name and URL
-cgeaa zuora list billing-templates   # first read-only call to confirm connectivity
-```
-
-### 3. Common ZDF commands
+### 3. Verify connectivity
 
 ```bash
-# Pull a Zuora record to a local JSON file
-cgeaa zuora pull account <account-id> --no-dependency
-
-# Pull a product rate plan and all its charges
-cgeaa zuora pull product-rate-plan <id>
-
-# List available invoice templates
-cgeaa zuora list billing-templates
-
-# Pull an HTML billing template (base64-decoded to editable JSON)
-cgeaa zuora pull billing-template <id>
-
-# Push a local JSON change back to Zuora
-cgeaa zuora push product-rate-plan <id>
-
-# See all ZDF verbs and resources
-cgeaa zuora --help
-cgeaa zuora pull --help
-cgeaa zuora push --help
-cgeaa zuora create --help
+cgeaa zuora auth env                 # prints the active environment name and URL
+cgeaa zuora list billing-templates   # a read-only call to confirm the credentials work
 ```
 
-All ZDF output files land in `./zdf-output/<resource-type>/` by default. Set
-`ZDF_OUTPUT_DIR` to write to a different path:
-
-```bash
-ZDF_OUTPUT_DIR=/path/to/output cgeaa zuora pull account <id>
-```
-
-### 4. Supported operations by resource
-
-For the full resource-by-resource reference, run `cgeaa zuora --help` or see
-[`zdf/README.md`](zdf/README.md).
-
-> **Note:** Some create/delete operations are not currently supported on the intQA
-> tenant due to tenant configuration (e.g. `create product`, `create invoice`). The
-> CLI exits immediately with a clear message if you attempt one. See
-> [`zdf/TODO.md`](zdf/TODO.md) under "Tenant-config limitations" for details.
+Output files land in `./zdf-output/<resource-type>/` by default; set `ZDF_OUTPUT_DIR` to
+change that. **That's all you need to get running — everything else (commands, resources,
+options, examples) lives in [`zdf/README-ZDF.md`](zdf/README-ZDF.md).**
 
 ---
 

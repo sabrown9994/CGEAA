@@ -27,7 +27,7 @@ CGEAA/
 │   └── *.sh               # Salesforce modules (deploy, validate, test, logs, diff, …)
 └── zdf/                   # Zuora Development Framework (TypeScript)
     ├── CLAUDE.md          # ZDF-specific architecture context — read this for ZDF work
-    ├── README.md          # Full user-facing reference (commands, endpoints, limitations)
+    ├── README-ZDF.md      # Full user-facing reference (commands, endpoints, limitations)
     ├── bin/zdf.ts         # CLI entry point
     ├── src/               # Commands, helpers, api, auth
     ├── package.json

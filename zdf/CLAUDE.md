@@ -2,7 +2,7 @@
 
 ZDF (Zuora Development Framework) is a TypeScript CLI that syncs Zuora billing objects
 to local JSON files, edits them, and pushes changes back — with dependency-aware traversal.
-See `README.md` for the full user-facing reference and `TODO.md` for known limitations and
+See `README-ZDF.md` for the full user-facing reference and `TODO.md` for known limitations and
 open work items.
 
 ## Tech stack
