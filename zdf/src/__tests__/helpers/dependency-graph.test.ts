@@ -573,7 +573,9 @@ describe('resolveAndSync populates the cross-tenant _zdf env map on pull', () =>
   });
 
   it('sets _zdf[<activeEnv>] with the internal id and natural key for a cross-tenant resource (invoice)', async () => {
-    mockGet.mockResolvedValueOnce({ id: 'i1', invoiceNumber: 'INV1', success: true });
+    mockGet
+      .mockResolvedValueOnce({ id: 'i1', invoiceNumber: 'INV1', success: true }) // invoice header
+      .mockResolvedValueOnce({ invoiceItems: [] }); // /items page
     await resolveAndSync('invoice', 'i1', 'pull', new Set());
 
     const written = mockWrite.mock.calls.find(([resource]) => resource === 'invoice')?.[2] as Record<string, unknown>;
