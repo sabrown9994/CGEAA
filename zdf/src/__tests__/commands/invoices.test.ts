@@ -22,10 +22,19 @@ vi.mock('../../helpers/dependency-graph.js', () => ({
 
 const mockWrite = vi.hoisted(() => vi.fn());
 const mockRead = vi.hoisted(() => vi.fn());
+const mockReadIfExists = vi.hoisted(() => vi.fn());
 const mockRename = vi.hoisted(() => vi.fn());
-vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, renameResourceFile: mockRename, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
+vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, readResourceFileIfExists: mockReadIfExists, renameResourceFile: mockRename, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
+
+// resolveTargetId is mocked per-test (drives the push upsert branch); crossTenantKeyValue is kept
+// real (pure) — mirrors accounts.test.ts / products.test.ts.
+const mockResolveTargetId = vi.hoisted(() => vi.fn());
+vi.mock('../../helpers/upsert.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/upsert.js')>();
+  return { ...actual, resolveTargetId: mockResolveTargetId };
+});
 
 import { register } from '../../commands/invoices.js';
 
@@ -89,12 +98,121 @@ describe('zdf create invoice', () => {
 });
 
 describe('zdf push invoice', () => {
-  it('reads file, puts to Zuora', async () => {
-    mockRead.mockReturnValue({ id: 'INV-001', invoiceItems: [{ id: 'item-1', amount: 100 }] });
+  beforeEach(() => {
+    // Default: the sibling account is already mapped into the active env with a DIFFERENT key
+    // than its source accountNumber, so the remap has a visible effect unless a test overrides it.
+    mockReadIfExists.mockReturnValue({ _zdf: { sandbox: { id: 'acct-active-id', key: 'A-ACTIVE' } } });
+  });
+
+  it('target found: PUTs the RESOLVED id and calls resolveAndSync', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: 'resolved-inv-id', found: true });
+    mockRead.mockReturnValue({
+      invoiceNumber: 'INV-001',
+      accountNumber: 'A-SOURCE',
+      autoPay: true,
+      comments: 'hi',
+    });
     mockPut.mockResolvedValue({ success: true });
     mockResolve.mockResolvedValue(undefined);
+
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001']);
-    expect(mockPut).toHaveBeenCalledWith('/v1/invoices/INV-001', expect.any(Object));
+
+    expect(mockReadIfExists).toHaveBeenCalledWith('account', 'A-SOURCE');
+    expect(mockPut).toHaveBeenCalledWith('/v1/invoices/resolved-inv-id', { autoPay: true, comments: 'hi' });
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(mockResolve).toHaveBeenCalledWith('invoice', 'resolved-inv-id', 'push');
+  });
+
+  it('target found: the body PUT to Zuora never carries a _zdf map', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: 'INV-001', found: true });
+    mockRead.mockReturnValue({
+      invoiceNumber: 'INV-001',
+      accountNumber: 'A-SOURCE',
+      autoPay: true,
+      _zdf: { sandbox: { id: 'INV-001', key: 'INV-001' } },
+    });
+    mockPut.mockResolvedValue({ success: true });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001']);
+
+    const body = mockPut.mock.calls[0][1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty('_zdf');
+  });
+
+  it('target not found: attempts CREATE from the local file body, with accountNumber remapped to the active-env account key', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    mockRead.mockReturnValue({
+      accountNumber: 'A-SOURCE',
+      invoiceDate: '2026-08-21',
+      invoiceItems: [{ amount: 10 }],
+    });
+    mockPost.mockResolvedValue({ success: true, id: 'created-inv-id' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001']);
+
+    expect(mockPost).toHaveBeenCalledWith('/v1/invoices', {
+      accountNumber: 'A-ACTIVE',
+      invoiceDate: '2026-08-21',
+      invoiceItems: [{ amount: 10 }],
+    });
+    expect(mockPut).not.toHaveBeenCalled();
+    expect(mockResolve).toHaveBeenCalledWith('invoice', 'created-inv-id', 'push');
+  });
+
+  it('target not found: the body POSTed to Zuora never carries a _zdf map', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    mockRead.mockReturnValue({
+      accountNumber: 'A-SOURCE',
+      invoiceItems: [{ amount: 10 }],
+      _zdf: { sandbox: { id: 'stale-id', key: 'STALE1' } },
+    });
+    mockPost.mockResolvedValue({ success: true, id: 'created-inv-id' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001']);
+
+    const body = mockPost.mock.calls[0][1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty('_zdf');
+  });
+
+  it('does NOT remap when the active-env account key already matches the source accountNumber', async () => {
+    mockReadIfExists.mockReturnValue({ _zdf: { sandbox: { id: 'acct-1', key: 'A-SOURCE' } } });
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    mockRead.mockReturnValue({ accountNumber: 'A-SOURCE', invoiceItems: [{ amount: 10 }] });
+    mockPost.mockResolvedValue({ success: true, id: 'created-inv-id' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001']);
+
+    expect(mockPost).toHaveBeenCalledWith('/v1/invoices', { accountNumber: 'A-SOURCE', invoiceItems: [{ amount: 10 }] });
+  });
+
+  it('throws and makes no Zuora call when the sibling account file does not exist locally', async () => {
+    mockReadIfExists.mockReturnValue(undefined);
+    mockRead.mockReturnValue({ accountNumber: 'A-SOURCE', invoiceItems: [{ amount: 10 }] });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001'])
+    ).rejects.toThrow('exit');
+
+    expect(mockResolveTargetId).not.toHaveBeenCalled();
+    expect(mockPut).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it('throws and makes no Zuora call when the sibling account file has no active-env entry', async () => {
+    mockReadIfExists.mockReturnValue({ _zdf: { otherEnv: { id: 'acct-1', key: 'A-OTHER' } } });
+    mockRead.mockReturnValue({ accountNumber: 'A-SOURCE', invoiceItems: [{ amount: 10 }] });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001'])
+    ).rejects.toThrow('exit');
+
+    expect(mockResolveTargetId).not.toHaveBeenCalled();
+    expect(mockPut).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
   });
 });
 

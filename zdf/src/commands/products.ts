@@ -8,15 +8,12 @@ import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.js';
 import { resolveTargetId, crossTenantKeyValue } from '../helpers/upsert.js';
-import { stripEnvMap, setEnvEntry, activeEnvName, carryForwardEnvMap, carryForwardEnvMapToFile, ENV_MAP_KEY, EnvMap } from '../helpers/env-map.js';
+import { stripEnvMap, setEnvEntry, activeEnvName } from '../helpers/env-map.js';
+import { getOrCreate, capturePriorEnvMap, carryForwardEnvMap, carryForwardEnvMapToFile } from '../helpers/upsert-command.js';
 
 const RESOURCE = 'product';
 const OBJECT_ENDPOINT = '/v1/object/product';
 const COMMERCE_ENDPOINT = '/commerce/products';
-
-function getOrCreate(program: Command, name: string, description: string): Command {
-  return program.commands.find((c) => c.name() === name) ?? program.command(name).description(description);
-}
 
 export function register(program: Command): void {
   const pullCmd = getOrCreate(program, 'pull', 'Fetch a resource from Zuora');
@@ -50,7 +47,7 @@ export function register(program: Command): void {
         // read straight off the in-memory record. product has no natural key, so a disk-based
         // re-lookup by filename can't recover this later; the in-memory reference is the only
         // reliable source.
-        const priorMap = (body as Record<string, unknown> | undefined)?.[ENV_MAP_KEY] as EnvMap | undefined;
+        const priorMap = capturePriorEnvMap(body as Record<string, unknown> | undefined);
         // POST /commerce/products returns the product object directly (no {success} envelope)
         const res = await apiPost<{ id: string } & Record<string, unknown>>(`${COMMERCE_ENDPOINT}`, stripEnvMap(body));
         assertReadSuccess(res as Record<string, unknown>, 'product create');
@@ -94,7 +91,7 @@ export function register(program: Command): void {
         // product has no natural key, so once the old arg-keyed file is deleted below, its
         // _zdf map is unrecoverable from disk — this in-memory reference is the ONLY way the
         // other envs' entries survive onto the new target.id-keyed file.
-        const priorMap = fileRecord[ENV_MAP_KEY] as EnvMap | undefined;
+        const priorMap = capturePriorEnvMap(fileRecord);
         const target = await resolveTargetId(RESOURCE, fileRecord);
 
         if (target.found) {

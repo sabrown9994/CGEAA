@@ -8,14 +8,11 @@ import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js'
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.js';
 import { resolveTargetId, crossTenantKeyValue } from '../helpers/upsert.js';
-import { stripEnvMap, setEnvEntry, activeEnvName, carryForwardEnvMap, carryForwardEnvMapToFile, ENV_MAP_KEY, EnvMap } from '../helpers/env-map.js';
+import { stripEnvMap, setEnvEntry, activeEnvName } from '../helpers/env-map.js';
+import { getOrCreate, capturePriorEnvMap, carryForwardEnvMap, carryForwardEnvMapToFile } from '../helpers/upsert-command.js';
 
 const RESOURCE = 'account';
 const ENDPOINT = '/v1/accounts';
-
-function getOrCreate(program: Command, name: string, description: string): Command {
-  return program.commands.find((c) => c.name() === name) ?? program.command(name).description(description);
-}
 
 export function register(program: Command): void {
   const pullCmd = getOrCreate(program, 'pull', 'Fetch a resource from Zuora');
@@ -49,7 +46,7 @@ export function register(program: Command): void {
         // read straight off the in-memory record rather than re-derived from disk, so it can't be
         // lost even if the file's natural key isn't known yet (a new account has no accountNumber
         // until Zuora assigns one).
-        const priorMap = (body as Record<string, unknown> | undefined)?.[ENV_MAP_KEY] as EnvMap | undefined;
+        const priorMap = capturePriorEnvMap(body as Record<string, unknown> | undefined);
         const res = await apiPost<ZuoraWriteResponse & { accountId: string }>(`${ENDPOINT}`, stripEnvMap(body));
         assertSuccess(res, 'account create');
         if (!opts.file) {
@@ -85,7 +82,7 @@ export function register(program: Command): void {
         // from a BRAND-NEW record fetched fresh from Zuora, so `mergeExistingEnvMap` inside it can
         // only recover this map for natural-keyed resources (where the natural key is stable
         // across tenants and so resolves to the SAME existing file) — not for id-keyed resources.
-        const priorMap = fileRecord[ENV_MAP_KEY] as EnvMap | undefined;
+        const priorMap = capturePriorEnvMap(fileRecord);
         const target = await resolveTargetId(RESOURCE, fileRecord);
 
         if (target.found) {
