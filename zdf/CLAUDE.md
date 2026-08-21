@@ -225,6 +225,12 @@ API so the local file is the FULL, recreatable definition, not just metadata:
   directly (no `{success}`) → `assertReadSuccess`. (Note: `description` round-trips; `priority`
   is version-scoped and may not reflect back in the export.)
 - **delete** → `DELETE /workflows/{id}` → returns `{ success, id }` → `assertSuccess`.
+- **No in-place logic edit of the active version** (verified live 2026-08-21): `PUT /workflows/{id}`
+  ignores `tasks`/`linkages`; `POST /workflows/import` always creates a NEW definition (even with
+  `?workflow_id=`); `POST /workflows/{id}/versions` is not a working public endpoint. So a workflow's
+  task graph can only be changed by importing a new workflow (`create`) or via the Zuora UI builder
+  (private endpoints) — never edited in place through the public API. This is why `push` is
+  settings-only by design.
 - **Live-verified end-to-end (2026-08-21)** with a from-scratch definition (1 Delay task + a
   Start linkage): create → pull → push (description edit) → delete → confirm-gone.
 
@@ -269,6 +275,16 @@ are absent from `ENDPOINTS`/`applyRules` in `dependency-graph.ts` entirely, so t
 fetched/written alone regardless of `--no-dependency`. This is intentional and matches use
 case 1 (config editing pulls a workflow/template without dragging in unrelated objects). Adding
 a traversal edge for one of these would be a behavior change, not a bug fix.
+
+**Dependent-pull failure collection.** Every discovery lookup runs through `traverseCategory`
+(wraps the ZOQL/GET in try/catch), and individual child fetch failures are attributed via a
+`parent: {resource,id}` threaded into `fetchAndWrite`. Both push into a per-pull
+`dependencyFailures` collector (reset at each top-level `resolveAndSync`, i.e. `parent ===
+undefined`). When the top-level traversal finishes, `emitDependencyFailureSummary()` logs ONE
+consolidated `output.warn` per parent: `Some dependent objects of <parent> were not pulled: <cat>
+(<reason>); …`. The primary object still succeeds (a failed category never aborts the pull);
+`getDependencyFailures()` exposes the structured list (used in tests). This generalizes the old
+`rulesBillRun`-only tolerance to ALL parents and makes the omissions visible.
 
 Use `--no-dependency` to skip all traversal. Essential for large accounts.
 

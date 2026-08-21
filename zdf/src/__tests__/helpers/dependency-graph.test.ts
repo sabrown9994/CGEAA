@@ -11,6 +11,7 @@ vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: fa
 
 import {
   resolveAndSync,
+  getDependencyFailures,
   MAX_TRAVERSAL_NODES,
   FETCH_ALL_ITEMS_MAX,
   setMaxTraversalNodes,
@@ -450,7 +451,7 @@ describe('rulesBillRun — child-lookup failures warn and continue instead of ab
     await expect(resolveAndSync('bill-run', 'BR-001', 'pull', new Set(['account:ACC-001']))).resolves.toBe(true);
 
     expect(output.warn).toHaveBeenCalledTimes(1);
-    expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/invoices for bill-run BR-001/);
+    expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/dependent objects of bill-run BR-001 were not pulled: invoices/);
   });
 
   it('warns and continues when the credit-memo sourceId GET 400s', async () => {
@@ -464,7 +465,7 @@ describe('rulesBillRun — child-lookup failures warn and continue instead of ab
     await expect(resolveAndSync('bill-run', 'BR-002', 'pull', new Set(['account:ACC-001']))).resolves.toBe(true);
 
     expect(output.warn).toHaveBeenCalledTimes(1);
-    expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/credit-memos for bill-run BR-002/);
+    expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/dependent objects of bill-run BR-002 were not pulled: credit-memos/);
   });
 
   it('warns and continues when the DebitMemo ZOQL 400s, and still resolves the invoice lookup', async () => {
@@ -485,7 +486,7 @@ describe('rulesBillRun — child-lookup failures warn and continue instead of ab
 
     expect(mockGet).toHaveBeenCalledWith('/v1/invoices/INV-001');
     expect(output.warn).toHaveBeenCalledTimes(1);
-    expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/debit-memos for bill-run BR-003/);
+    expect((output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/dependent objects of bill-run BR-003 were not pulled: debit-memos/);
   });
 
   it('does not warn when all bill-run child lookups succeed', async () => {
@@ -499,6 +500,34 @@ describe('rulesBillRun — child-lookup failures warn and continue instead of ab
     await resolveAndSync('bill-run', 'BR-004', 'pull', new Set(['account:ACC-001']));
 
     expect(output.warn).not.toHaveBeenCalled();
+    expect(getDependencyFailures()).toHaveLength(0);
+  });
+
+  it('collects MULTIPLE failed categories into a SINGLE consolidated warning per parent', async () => {
+    // Invoice AND DebitMemo ZOQL both 400; credit-memo GET ok (empty).
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/v1/bill-runs/BR-005') return { id: 'BR-005', accountId: 'ACC-001', billRunNumber: 'BR-NUM-005', success: true };
+      if (url.startsWith('/v1/credit-memos?sourceId=')) return { creditMemos: [] };
+      return {};
+    });
+    mockQuery.mockImplementation(async (zoql: string) => {
+      if (zoql.includes('FROM Invoice')) throw Object.assign(new Error('invalid type: invoice'), { statusCode: 400 });
+      if (zoql.includes('FROM DebitMemo')) throw Object.assign(new Error('invalid type: debitmemo'), { statusCode: 400 });
+      return [];
+    });
+
+    await expect(resolveAndSync('bill-run', 'BR-005', 'pull', new Set(['account:ACC-001']))).resolves.toBe(true);
+
+    // exactly one consolidated warning, naming both missed categories
+    expect(output.warn).toHaveBeenCalledTimes(1);
+    const msg = (output.warn as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(msg).toMatch(/dependent objects of bill-run BR-005 were not pulled/);
+    expect(msg).toMatch(/invoices/);
+    expect(msg).toMatch(/debit-memos/);
+    // and the structured collector records both
+    const failures = getDependencyFailures();
+    expect(failures.map((f) => f.dependent).sort()).toEqual(['debit-memos', 'invoices']);
+    expect(failures.every((f) => f.parent === 'bill-run BR-005')).toBe(true);
   });
 });
 
@@ -578,6 +607,6 @@ describe('resolveAndSync top-level return value (drives pull command success/exi
     const result = await resolveAndSync('bill-run', 'BR-100', 'pull', new Set(['account:ACC-001']));
 
     expect(result).toBe(true); // top-level bill-run fetch itself succeeded
-    expect(output.warn).toHaveBeenCalledWith(expect.stringContaining('invoices for bill-run BR-100'));
+    expect(output.warn).toHaveBeenCalledWith(expect.stringContaining('dependent objects of bill-run BR-100 were not pulled: invoices'));
   });
 });

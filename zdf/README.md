@@ -468,6 +468,7 @@ just metadata.
 - **`pull` fetches the full export** (`/export`), not `GET /workflows/{id}` (which returns only metadata). This makes `pull` → edit → `create` a full-fidelity round-trip and is required for `create` to have something to import.
 - **`create` imports a NEW workflow** — `POST /workflows/import` never updates in place; it always mints a new definition id. Use it to copy/restore a workflow or to apply task-graph edits (Zuora has no in-place task-graph update API). An import payload must contain at least one task **and** at least one linkage. The response is the created workflow object directly (no `{success}` envelope).
 - **`push` updates workflow settings only** — name, description, triggers, status, interval, timezone — via `PUT /workflows/{id}`. It does **not** apply task/linkage edits; re-apply those with `create`. The command remaps the export file's snake_case settings to the camelCase PUT body.
+- **You cannot edit the logic (task graph) of an existing workflow's *active version* in place via the API** (verified live 2026-08-21): `PUT /workflows/{id}` ignores `tasks`/`linkages`, `POST /workflows/import` always mints a **new** definition (even with `?workflow_id=`), and there is no public per-version/task update endpoint. In-place logic editing is UI-builder-only. To get edited logic into Zuora, `create` (import) it as a new workflow.
 - Workflow PUT/export responses have no `{success}` envelope (handled via `assertReadSuccess`); DELETE returns `{success, id}`.
 - **Live-verified end-to-end on intQA (2026-08-21)**: a workflow authored from scratch (definition + one task + one linkage) → `create` → `pull` → `push` (description edit confirmed) → `delete` → confirm-gone all PASS.
 
@@ -591,6 +592,14 @@ graph TD
 | bill-run | → invoices (ZOQL), credit-memos, debit-memos (ZOQL) | always |
 
 A visited-set prevents loops: if a resource has already been processed in the current traversal it is skipped, so circular relationships (e.g. account → order → account) do not cause infinite recursion.
+
+**Partial-traversal reporting.** If a related object can't be pulled — because a lookup fails (e.g. Zuora rejects a ZOQL query) or an individual dependent fetch errors — the requested object itself is still pulled successfully, and at the end of the run ZDF prints **one consolidated warning per parent** listing what was missed, e.g.:
+
+```
+⚠ Some dependent objects of bill-run BR-001 were not pulled: invoices (invalid type: invoice); debit-memos (…)
+```
+
+This never aborts the pull and never writes a corrupt file — it only tells you which related records were skipped so you can re-pull them explicitly if needed.
 
 ---
 

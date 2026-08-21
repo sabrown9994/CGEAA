@@ -30,6 +30,42 @@ export function setMaxTraversalNodes(n: number): void {
 // only once even though the ceiling is checked at every node.
 const warnedVisitedSets = new WeakSet<Set<string>>();
 
+// A parent descriptor threaded through traversal so a dependent that fails to pull can be
+// attributed to the object it hangs off of.
+interface Parent { resource: string; id: string; }
+
+// Collects, per top-level pull, the dependent objects that could NOT be pulled — whether a
+// whole category couldn't be listed (a discovery ZOQL/GET threw) or an individual child
+// fetch failed. Reset at the start of every top-level resolveAndSync and flushed as a
+// consolidated per-parent warning when that top-level traversal finishes.
+interface DependencyFailure { parent: string; dependent: string; reason: string; }
+let dependencyFailures: DependencyFailure[] = [];
+
+/** The dependency failures collected during the most recent top-level pull. Exposed for tests. */
+export function getDependencyFailures(): ReadonlyArray<DependencyFailure> {
+  return dependencyFailures;
+}
+
+function recordDependencyFailure(parent: Parent, dependent: string, err: unknown): void {
+  dependencyFailures.push({
+    parent: `${parent.resource} ${parent.id}`,
+    dependent,
+    reason: err instanceof Error ? err.message : String(err),
+  });
+}
+
+function emitDependencyFailureSummary(): void {
+  if (dependencyFailures.length === 0) return;
+  const byParent = new Map<string, string[]>();
+  for (const f of dependencyFailures) {
+    if (!byParent.has(f.parent)) byParent.set(f.parent, []);
+    byParent.get(f.parent)!.push(`${f.dependent} (${f.reason})`);
+  }
+  for (const [parent, deps] of byParent) {
+    output.warn(`Some dependent objects of ${parent} were not pulled: ${deps.join('; ')}`);
+  }
+}
+
 // Some sub-item list endpoints ignore their filter query param entirely (observed:
 // `/v1/orders?accountId=X` returns the WHOLE tenant's orders, not just X's), so
 // fetchAllItems can paginate through tens of thousands of rows before the per-node
@@ -111,7 +147,7 @@ async function fetchAllItems<T>(firstUrl: string, itemsKey: string): Promise<T[]
   return all;
 }
 
-async function fetchAndWrite(resource: string, id: string): Promise<ResourceRecord | null> {
+async function fetchAndWrite(resource: string, id: string, parent?: Parent): Promise<ResourceRecord | null> {
   const endpoint = ENDPOINTS[resource];
   if (!endpoint) return null;
   try {
@@ -146,6 +182,9 @@ async function fetchAndWrite(resource: string, id: string): Promise<ResourceReco
       return null;
     }
     output.warn(`Failed to re-fetch ${resource} ${id}: ${(err as Error).message}`);
+    // Attribute the failure to the parent this child hangs off of (if any) so the
+    // top-level pull can surface a consolidated "dependent objects not pulled" warning.
+    if (parent) recordDependencyFailure(parent, `${resource} ${id}`, err);
     return null;
   }
 }
@@ -165,8 +204,14 @@ export async function resolveAndSync(
   resource: string,
   id: string,
   action: Action,
-  visited: Set<string> = new Set()
+  visited: Set<string> = new Set(),
+  parent?: Parent
 ): Promise<boolean> {
+  // A call with no parent is the top-level request (command actions always call it this way).
+  // Reset the per-pull failure collector on entry and flush the consolidated warning on exit.
+  const isTopLevel = parent === undefined;
+  if (isTopLevel) dependencyFailures = [];
+
   const key = `${resource}:${id}`;
   if (visited.has(key)) return false;
 
@@ -183,12 +228,16 @@ export async function resolveAndSync(
 
   visited.add(key);
 
-  const record = await fetchAndWrite(resource, id);
-  if (!record) return false;
+  const record = await fetchAndWrite(resource, id, parent);
+  if (!record) {
+    if (isTopLevel) emitDependencyFailureSummary();
+    return false;
+  }
 
   if (!noDependency) {
     await applyRules(resource, id, action, record, visited);
   }
+  if (isTopLevel) emitDependencyFailureSummary();
   return true;
 }
 
@@ -199,29 +248,55 @@ async function applyRules(
   record: ResourceRecord,
   visited: Set<string>
 ): Promise<void> {
+  // `self` is the parent for every child this object traverses to — a dependent that fails
+  // to pull is attributed to it in the consolidated failure summary.
+  const self: Parent = { resource, id };
   switch (resource) {
-    case 'account': await rulesAccount(id, action, record, visited); break;
-    case 'contact': await rulesContact(action, record, visited); break;
-    case 'order': await rulesOrder(id, action, record, visited); break;
-    case 'order-line-item': await rulesOrderLineItem(action, record, visited); break;
-    case 'subscription': await rulesSubscription(action, record, visited); break;
-    case 'product': await rulesProduct(id, action, record, visited); break;
-    case 'product-rate-plan': await rulesProductRatePlan(id, action, record, visited); break;
-    case 'product-rate-plan-charge': await rulesProductRatePlanCharge(action, record, visited); break;
-    case 'invoice': await rulesInvoice(id, action, record, visited); break;
-    case 'credit-memo': await rulesCreditMemo(id, action, record, visited); break;
-    case 'debit-memo': await rulesDebitMemo(id, action, record, visited); break;
-    case 'bill-run': await rulesBillRun(id, action, record, visited); break;
+    case 'account': await rulesAccount(id, action, record, visited, self); break;
+    case 'contact': await rulesContact(action, record, visited, self); break;
+    case 'order': await rulesOrder(id, action, record, visited, self); break;
+    case 'order-line-item': await rulesOrderLineItem(action, record, visited, self); break;
+    case 'subscription': await rulesSubscription(action, record, visited, self); break;
+    case 'product': await rulesProduct(id, action, record, visited, self); break;
+    case 'product-rate-plan': await rulesProductRatePlan(id, action, record, visited, self); break;
+    case 'product-rate-plan-charge': await rulesProductRatePlanCharge(action, record, visited, self); break;
+    case 'invoice': await rulesInvoice(id, action, record, visited, self); break;
+    case 'credit-memo': await rulesCreditMemo(id, action, record, visited, self); break;
+    case 'debit-memo': await rulesDebitMemo(id, action, record, visited, self); break;
+    case 'bill-run': await rulesBillRun(id, action, record, visited, self); break;
   }
 }
 
-async function rulesAccount(id: string, action: Action, record: ResourceRecord, visited: Set<string>): Promise<void> {
+/**
+ * Run a discovery lookup (a ZOQL/GET that lists a category of dependent records) and traverse
+ * each result. If the lookup itself throws, record the whole category as a dependency failure
+ * against `self` and continue — a failed category never aborts the parent pull. Individual child
+ * fetch failures are recorded separately inside fetchAndWrite (attributed to the same `self`).
+ */
+async function traverseCategory<T>(
+  self: Parent,
+  category: string,
+  discover: () => Promise<T[]>,
+  each: (item: T) => Promise<void>
+): Promise<void> {
+  let items: T[];
+  try {
+    items = await discover();
+  } catch (err) {
+    recordDependencyFailure(self, category, err);
+    return;
+  }
+  for (const item of items) await each(item);
+}
+
+async function rulesAccount(id: string, action: Action, record: ResourceRecord, visited: Set<string>, self: Parent): Promise<void> {
   if (record['parentId']) {
-    await resolveAndSync('account', record['parentId'] as string, 'pull', visited);
+    await resolveAndSync('account', record['parentId'] as string, 'pull', visited, self);
   }
   if (action === 'pull') {
-    const contactIds = await apiQuery<{ Id: string }>(`SELECT Id FROM Contact WHERE AccountId = '${id}'`);
-    for (const c of contactIds) await resolveAndSync('contact', c.Id, 'pull', visited);
+    await traverseCategory(self, 'contacts',
+      () => apiQuery<{ Id: string }>(`SELECT Id FROM Contact WHERE AccountId = '${id}'`),
+      (c) => resolveAndSync('contact', c.Id, 'pull', visited, self).then(() => undefined));
 
     // The generic /v1/orders?accountId= filter is ignored server-side (observed on intQA:
     // byte-identical to the unfiltered tenant-wide list), so scope via the dedicated
@@ -231,41 +306,44 @@ async function rulesAccount(id: string, action: Action, record: ResourceRecord, 
     const accountNumber = ((record['basicInfo'] as ResourceRecord | undefined)?.['accountNumber']
       ?? record['accountNumber']) as string | undefined;
     if (accountNumber) {
-      const orders = await fetchAllItems<{ orderNumber: string }>(
-        `/v1/orders/subscriptionOwner/${encodeURIComponent(accountNumber)}`,
-        'orders'
-      );
-      for (const o of orders) await resolveAndSync('order', o.orderNumber, 'pull', visited);
+      await traverseCategory(self, 'orders',
+        () => fetchAllItems<{ orderNumber: string }>(`/v1/orders/subscriptionOwner/${encodeURIComponent(accountNumber)}`, 'orders'),
+        (o) => resolveAndSync('order', o.orderNumber, 'pull', visited, self).then(() => undefined));
     }
     // else: account record carries no number (unexpected for a real Zuora account GET
     // response) — skip order traversal for this node rather than fetch tenant-wide.
 
-    const subs = await fetchAllItems<{ id: string }>(`/v1/subscriptions/accounts/${id}`, 'subscriptions');
-    for (const s of subs) await resolveAndSync('subscription', s.id, 'pull', visited);
+    await traverseCategory(self, 'subscriptions',
+      () => fetchAllItems<{ id: string }>(`/v1/subscriptions/accounts/${id}`, 'subscriptions'),
+      (s) => resolveAndSync('subscription', s.id, 'pull', visited, self).then(() => undefined));
 
-    const invs = await fetchAllItems<{ id: string }>(`/v1/transactions/invoices/accounts/${id}`, 'invoices');
-    for (const inv of invs) await resolveAndSync('invoice', inv.id, 'pull', visited);
+    await traverseCategory(self, 'invoices',
+      () => fetchAllItems<{ id: string }>(`/v1/transactions/invoices/accounts/${id}`, 'invoices'),
+      (inv) => resolveAndSync('invoice', inv.id, 'pull', visited, self).then(() => undefined));
 
-    const cms = await fetchAllItems<{ id: string }>(`/v1/credit-memos?accountId=${id}`, 'creditmemos');
-    for (const cm of cms) await resolveAndSync('credit-memo', cm.id, 'pull', visited);
+    await traverseCategory(self, 'credit-memos',
+      () => fetchAllItems<{ id: string }>(`/v1/credit-memos?accountId=${id}`, 'creditmemos'),
+      (cm) => resolveAndSync('credit-memo', cm.id, 'pull', visited, self).then(() => undefined));
 
-    const dms = await fetchAllItems<{ id: string }>(`/v1/debit-memos?accountId=${id}`, 'debitmemos');
-    for (const dm of dms) await resolveAndSync('debit-memo', dm.id, 'pull', visited);
+    await traverseCategory(self, 'debit-memos',
+      () => fetchAllItems<{ id: string }>(`/v1/debit-memos?accountId=${id}`, 'debitmemos'),
+      (dm) => resolveAndSync('debit-memo', dm.id, 'pull', visited, self).then(() => undefined));
 
-    const billRunIds = await apiQuery<{ Id: string }>(`SELECT Id FROM BillRun WHERE AccountId = '${id}'`);
-    for (const br of billRunIds) await resolveAndSync('bill-run', br.Id, 'pull', visited);
+    await traverseCategory(self, 'bill-runs',
+      () => apiQuery<{ Id: string }>(`SELECT Id FROM BillRun WHERE AccountId = '${id}'`),
+      (br) => resolveAndSync('bill-run', br.Id, 'pull', visited, self).then(() => undefined));
   }
 }
 
-async function rulesContact(action: Action, record: ResourceRecord, visited: Set<string>): Promise<void> {
+async function rulesContact(action: Action, record: ResourceRecord, visited: Set<string>, self: Parent): Promise<void> {
   if (action === 'push' || action === 'delete') {
     if (record['accountId']) {
-      await resolveAndSync('account', record['accountId'] as string, 'pull', visited);
+      await resolveAndSync('account', record['accountId'] as string, 'pull', visited, self);
     }
   }
 }
 
-async function rulesOrder(_id: string, _action: Action, record: ResourceRecord, visited: Set<string>): Promise<void> {
+async function rulesOrder(_id: string, _action: Action, record: ResourceRecord, visited: Set<string>, self: Parent): Promise<void> {
   // GET /v1/orders/{orderNumber} wraps the order under an 'order' key; unwrap before
   // reading, same as the push path (src/commands/orders.ts: rawFull['order'] ?? rawFull).
   // Stay safe when there's no envelope (defensive/older shape).
@@ -274,108 +352,105 @@ async function rulesOrder(_id: string, _action: Action, record: ResourceRecord, 
   // Order record uses existingAccountNumber; GET /v1/accounts/{accountNumber} returns the full account record
   const accountNumber = (o['existingAccountNumber'] ?? o['accountNumber']) as string | undefined;
   if (accountNumber) {
-    const acctRecord = await apiGet<ResourceRecord>(`/v1/accounts/${accountNumber}`);
-    const acctId = (acctRecord['basicInfo'] as ResourceRecord | undefined)?.['id'] as string | undefined;
-    if (acctId) await resolveAndSync('account', acctId, 'pull', visited);
+    try {
+      const acctRecord = await apiGet<ResourceRecord>(`/v1/accounts/${accountNumber}`);
+      const acctId = (acctRecord['basicInfo'] as ResourceRecord | undefined)?.['id'] as string | undefined;
+      if (acctId) await resolveAndSync('account', acctId, 'pull', visited, self);
+    } catch (err) {
+      recordDependencyFailure(self, 'parent account', err);
+    }
   }
 
   const items = (o['orderLineItems'] as Array<{ id: string }> | undefined) ?? [];
-  for (const item of items) await resolveAndSync('order-line-item', item.id, 'pull', visited);
+  for (const item of items) await resolveAndSync('order-line-item', item.id, 'pull', visited, self);
 
   const subs = (o['subscriptions'] as Array<{ subscriptionNumber: string }> | undefined) ?? [];
-  for (const s of subs) await resolveAndSync('subscription', s.subscriptionNumber, 'pull', visited);
+  for (const s of subs) await resolveAndSync('subscription', s.subscriptionNumber, 'pull', visited, self);
 }
 
-async function rulesOrderLineItem(action: Action, record: ResourceRecord, visited: Set<string>): Promise<void> {
+async function rulesOrderLineItem(action: Action, record: ResourceRecord, visited: Set<string>, self: Parent): Promise<void> {
   if (action === 'push' || action === 'delete') {
     if (record['orderId']) {
-      await resolveAndSync('order', record['orderId'] as string, action, visited);
+      await resolveAndSync('order', record['orderId'] as string, action, visited, self);
     }
   }
 }
 
-async function rulesSubscription(action: Action, record: ResourceRecord, visited: Set<string>): Promise<void> {
+async function rulesSubscription(action: Action, record: ResourceRecord, visited: Set<string>, self: Parent): Promise<void> {
   if (action === 'push' || action === 'delete') {
-    if (record['accountId']) await resolveAndSync('account', record['accountId'] as string, 'pull', visited);
-    if (record['orderNumber']) await resolveAndSync('order', record['orderNumber'] as string, 'pull', visited);
+    if (record['accountId']) await resolveAndSync('account', record['accountId'] as string, 'pull', visited, self);
+    if (record['orderNumber']) await resolveAndSync('order', record['orderNumber'] as string, 'pull', visited, self);
   }
 }
 
-async function rulesProduct(id: string, action: Action, _record: ResourceRecord, visited: Set<string>): Promise<void> {
-  const plans = await apiQuery<{ Id: string }>(`SELECT Id FROM ProductRatePlan WHERE ProductId = '${id}'`);
-  for (const plan of plans) {
-    await resolveAndSync('product-rate-plan', plan.Id, action, visited);
-  }
+async function rulesProduct(id: string, action: Action, _record: ResourceRecord, visited: Set<string>, self: Parent): Promise<void> {
+  await traverseCategory(self, 'product-rate-plans',
+    () => apiQuery<{ Id: string }>(`SELECT Id FROM ProductRatePlan WHERE ProductId = '${id}'`),
+    (plan) => resolveAndSync('product-rate-plan', plan.Id, action, visited, self).then(() => undefined));
 }
 
-async function rulesProductRatePlan(id: string, action: Action, record: ResourceRecord, visited: Set<string>): Promise<void> {
+async function rulesProductRatePlan(id: string, action: Action, record: ResourceRecord, visited: Set<string>, self: Parent): Promise<void> {
   // Object endpoint returns ProductId (PascalCase)
   const productId = (record['ProductId'] ?? record['productId']) as string | undefined;
-  if (productId) await resolveAndSync('product', productId, 'pull', visited);
+  if (productId) await resolveAndSync('product', productId, 'pull', visited, self);
 
   if (action === 'pull') {
-    const charges = await apiQuery<{ Id: string }>(`SELECT Id FROM ProductRatePlanCharge WHERE ProductRatePlanId = '${id}'`);
-    for (const ch of charges) await resolveAndSync('product-rate-plan-charge', ch.Id, 'pull', visited);
+    await traverseCategory(self, 'product-rate-plan-charges',
+      () => apiQuery<{ Id: string }>(`SELECT Id FROM ProductRatePlanCharge WHERE ProductRatePlanId = '${id}'`),
+      (ch) => resolveAndSync('product-rate-plan-charge', ch.Id, 'pull', visited, self).then(() => undefined));
   }
 }
 
-async function rulesProductRatePlanCharge(_action: Action, record: ResourceRecord, visited: Set<string>): Promise<void> {
+async function rulesProductRatePlanCharge(_action: Action, record: ResourceRecord, visited: Set<string>, self: Parent): Promise<void> {
   // Object endpoint returns ProductRatePlanId (PascalCase)
   const prpId = (record['ProductRatePlanId'] ?? record['productRatePlanId']) as string | undefined;
   if (prpId) {
-    await resolveAndSync('product-rate-plan', prpId, 'pull', visited);
+    await resolveAndSync('product-rate-plan', prpId, 'pull', visited, self);
   }
 }
 
-async function rulesInvoice(_id: string, action: Action, record: ResourceRecord, visited: Set<string>): Promise<void> {
+async function rulesInvoice(_id: string, action: Action, record: ResourceRecord, visited: Set<string>, self: Parent): Promise<void> {
   if (action === 'push' || action === 'delete') {
-    if (record['accountId']) await resolveAndSync('account', record['accountId'] as string, 'pull', visited);
+    if (record['accountId']) await resolveAndSync('account', record['accountId'] as string, 'pull', visited, self);
   }
-  if (record['billRunId']) await resolveAndSync('bill-run', record['billRunId'] as string, 'pull', visited);
+  if (record['billRunId']) await resolveAndSync('bill-run', record['billRunId'] as string, 'pull', visited, self);
 }
 
-async function rulesCreditMemo(_id: string, action: Action, record: ResourceRecord, visited: Set<string>): Promise<void> {
+async function rulesCreditMemo(_id: string, action: Action, record: ResourceRecord, visited: Set<string>, self: Parent): Promise<void> {
   if (action === 'push' || action === 'delete') {
-    if (record['accountId']) await resolveAndSync('account', record['accountId'] as string, 'pull', visited);
+    if (record['accountId']) await resolveAndSync('account', record['accountId'] as string, 'pull', visited, self);
   }
   if (record['sourceId']) {
-    const brs = await apiQuery<{ Id: string }>(`SELECT Id FROM BillRun WHERE BillRunNumber = '${record['sourceId'] as string}'`);
-    for (const br of brs) await resolveAndSync('bill-run', br.Id, 'pull', visited);
+    await traverseCategory(self, 'bill-runs',
+      () => apiQuery<{ Id: string }>(`SELECT Id FROM BillRun WHERE BillRunNumber = '${record['sourceId'] as string}'`),
+      (br) => resolveAndSync('bill-run', br.Id, 'pull', visited, self).then(() => undefined));
   }
 }
 
-async function rulesDebitMemo(_id: string, action: Action, record: ResourceRecord, visited: Set<string>): Promise<void> {
+async function rulesDebitMemo(_id: string, action: Action, record: ResourceRecord, visited: Set<string>, self: Parent): Promise<void> {
   if (action === 'push' || action === 'delete') {
-    if (record['accountId']) await resolveAndSync('account', record['accountId'] as string, 'pull', visited);
+    if (record['accountId']) await resolveAndSync('account', record['accountId'] as string, 'pull', visited, self);
   }
 }
 
-async function rulesBillRun(id: string, action: Action, record: ResourceRecord, visited: Set<string>): Promise<void> {
-  if (record['accountId']) await resolveAndSync('account', record['accountId'] as string, 'pull', visited);
+async function rulesBillRun(id: string, action: Action, record: ResourceRecord, visited: Set<string>, self: Parent): Promise<void> {
+  if (record['accountId']) await resolveAndSync('account', record['accountId'] as string, 'pull', visited, self);
 
-  // Each child-lookup below is independently wrapped: intQA has been observed to reject
-  // some of these ZOQL/GET calls with HTTP 400 (e.g. INVALID_TYPE on Invoice/DebitMemo
-  // ZOQL), which would otherwise throw out of rulesBillRun and abort the entire pull for
-  // any account that has bill-runs. Warn and continue instead — mirrors fetchAndWrite's
-  // tolerant-of-non-404-errors pattern above.
-  try {
-    const invIds = await apiQuery<{ Id: string }>(`SELECT Id FROM Invoice WHERE BillRunId = '${id}'`);
-    for (const inv of invIds) await resolveAndSync('invoice', inv.Id, action, visited);
-  } catch (err: unknown) {
-    output.warn(`Skipping invoices for bill-run ${id}: ${(err as Error).message}`);
-  }
+  // Each child-lookup below is independently wrapped (via traverseCategory): intQA has been
+  // observed to reject some of these ZOQL/GET calls with HTTP 400 (e.g. INVALID_TYPE on
+  // Invoice/DebitMemo ZOQL), which would otherwise throw out of rulesBillRun and abort the
+  // entire pull for any account that has bill-runs. Instead the whole category is recorded as
+  // a dependency failure and traversal continues; the top-level pull emits a consolidated
+  // "dependent objects of bill-run <id> were not pulled: …" warning.
+  await traverseCategory(self, 'invoices',
+    () => apiQuery<{ Id: string }>(`SELECT Id FROM Invoice WHERE BillRunId = '${id}'`),
+    (inv) => resolveAndSync('invoice', inv.Id, action, visited, self).then(() => undefined));
 
-  try {
-    const cmIds = await apiGet<{ creditMemos?: Array<{ id: string }> }>(`/v1/credit-memos?sourceId=${(record['billRunNumber'] as string) ?? id}`);
-    for (const cm of cmIds.creditMemos ?? []) await resolveAndSync('credit-memo', cm.id, action, visited);
-  } catch (err: unknown) {
-    output.warn(`Skipping credit-memos for bill-run ${id}: ${(err as Error).message}`);
-  }
+  await traverseCategory(self, 'credit-memos',
+    () => apiGet<{ creditMemos?: Array<{ id: string }> }>(`/v1/credit-memos?sourceId=${(record['billRunNumber'] as string) ?? id}`).then((r) => r.creditMemos ?? []),
+    (cm) => resolveAndSync('credit-memo', cm.id, action, visited, self).then(() => undefined));
 
-  try {
-    const dmIds = await apiQuery<{ Id: string }>(`SELECT Id FROM DebitMemo WHERE BillRunId = '${id}'`);
-    for (const dm of dmIds) await resolveAndSync('debit-memo', dm.Id, action, visited);
-  } catch (err: unknown) {
-    output.warn(`Skipping debit-memos for bill-run ${id}: ${(err as Error).message}`);
-  }
+  await traverseCategory(self, 'debit-memos',
+    () => apiQuery<{ Id: string }>(`SELECT Id FROM DebitMemo WHERE BillRunId = '${id}'`),
+    (dm) => resolveAndSync('debit-memo', dm.Id, action, visited, self).then(() => undefined));
 }

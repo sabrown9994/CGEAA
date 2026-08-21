@@ -254,10 +254,16 @@ Both subcommands were removed from ZDF entirely (commit dbee8c1). `subscription`
 
 ## Backlog (deferred minors from the fix effort)
 
-- Secondary child-lookup calls that only feed traversal decisions (`rulesBillRun`'s
-  invoice/credit-memo/debit-memo lookups) are each wrapped in try/catch → warn + continue. Worst
-  case is UNDER-traversal (a related child isn't auto-pulled with its parent; `?? []`), never a
-  corrupt file or a wrong primary resource. No action needed — see note in the final message.
+- ✅ **RESOLVED (2026-08-21) — dependent-pull failures are now collected and surfaced.** Every
+  dependency discovery lookup (contacts/orders/subscriptions/invoices/credit-memos/debit-memos/
+  bill-runs/product-rate-plans/charges) is wrapped (`traverseCategory`), and individual child
+  fetch failures are attributed to their parent (via a `parent` threaded into `fetchAndWrite`).
+  At the end of each top-level pull, `emitDependencyFailureSummary()` logs one consolidated
+  warning per parent — e.g. `Some dependent objects of bill-run BR-001 were not pulled: invoices
+  (…); debit-memos (…)`. The primary object still pulls successfully (never aborts, never a
+  corrupt file); `getDependencyFailures()` exposes the structured list for tests/tooling.
+  Previously a failing lookup in `rulesAccount` could abort the whole account pull; now it
+  degrades gracefully and is reported.
 - ✅ **RESOLVED (2026-08-21) — `workflow` full CRUD.** Reworked to Zuora's export/import model:
   `pull` = `GET /workflows/{id}/export` (full definition), `create` = `POST /workflows/import`,
   `push` = `PUT /workflows/{id}` settings-only (via `buildWorkflowSettingsBody` snake→camel remap),
