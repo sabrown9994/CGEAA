@@ -18,21 +18,24 @@ function str(v: unknown): string | undefined {
  * endpoint returns (e.g. account GET nests accountNumber under basicInfo; product object endpoint
  * is PascalCase `SKU` while Commerce is `sku`; order GET wraps under `order`).
  */
+// IMPORTANT: only resources whose Zuora endpoints accept the natural key as the key/id are listed
+// here. Files are named by the natural key, and push/delete pass the CLI arg straight into the
+// endpoint path — so the natural key MUST be a valid Zuora key for the resource's read AND write
+// endpoints. Verified live (2026-08-21): account/subscription/invoice accept their number; the
+// order endpoint already uses the order number; credit-/debit-memo keys are ID-or-number per
+// Zuora. Deliberately EXCLUDED: product (its `/v1/object/product/{id}` endpoint rejects the SKU —
+// 400 — so SKU-named files would break push/delete) and bill-run (its GET uses the internal id).
 export const NATURAL_KEY: Record<string, (rec: Rec) => string | undefined> = {
   account: (r) => str((r['basicInfo'] as Rec | undefined)?.['accountNumber'] ?? r['accountNumber']),
   subscription: (r) => str(r['subscriptionNumber']),
   order: (r) => str((r['order'] as Rec | undefined)?.['orderNumber'] ?? r['orderNumber']),
-  product: (r) => str(r['SKU'] ?? r['sku']),
   invoice: (r) => str(r['invoiceNumber']),
   'credit-memo': (r) => str(r['memoNumber'] ?? r['number']),
   'debit-memo': (r) => str(r['memoNumber'] ?? r['number']),
-  'bill-run': (r) => str(r['billRunNumber'] ?? r['number'] ?? r['name']),
-  // No entry (file naming falls back to the Zuora id, or the resource's command manages its own
-  // filename):
-  //   - contact, order-line-item, product-rate-plan, product-rate-plan-charge, data-query — no
-  //     reliable unique natural key, so id.
-  //   - workflow — keyed by id (definition names are not guaranteed unique).
-  //   - billing-template — its command writes `<name>_<id>.json` itself (Settings API metadata).
+  // No entry → file naming falls back to the Zuora id (or the resource's command manages its own
+  // filename): contact, order-line-item, product, product-rate-plan, product-rate-plan-charge,
+  // bill-run, data-query (id); workflow (id — names not guaranteed unique); billing-template
+  // (`<name>_<id>.json`, written by its own command).
 };
 
 /**

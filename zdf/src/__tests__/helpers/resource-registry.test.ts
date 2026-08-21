@@ -7,17 +7,20 @@ describe('fileNameFor — natural-key file naming', () => {
     expect(fileNameFor('account', 'internal-id-1', { accountNumber: 'ACG00099' })).toBe('ACG00099');
   });
 
-  it('uses the natural key for invoice/memos/subscription/product/order/bill-run', () => {
+  it('uses the natural key for invoice/memos/subscription/order (endpoints accept the number)', () => {
     expect(fileNameFor('invoice', 'id', { invoiceNumber: 'INV-100' })).toBe('INV-100');
     expect(fileNameFor('credit-memo', 'id', { memoNumber: 'CM-1' })).toBe('CM-1');
     expect(fileNameFor('debit-memo', 'id', { memoNumber: 'DM-1' })).toBe('DM-1');
     expect(fileNameFor('subscription', 'id', { subscriptionNumber: 'A-S1' })).toBe('A-S1');
-    expect(fileNameFor('product', 'id', { SKU: 'SKU-9' })).toBe('SKU-9');
     expect(fileNameFor('order', 'id', { orderNumber: 'O-1' })).toBe('O-1');
-    expect(fileNameFor('bill-run', 'id', { billRunNumber: 'BR-1' })).toBe('BR-1');
   });
 
-  it('falls back to the id when the resource has no natural key (contact, order-line-item, etc.)', () => {
+  it('falls back to the id where the natural key is NOT a valid Zuora endpoint key or is absent', () => {
+    // product: /v1/object/product/{id} rejects the SKU (verified live) -> id-named.
+    expect(fileNameFor('product', 'PROD-id', { SKU: 'SKU-9' })).toBe('PROD-id');
+    // bill-run: GET uses the internal id -> id-named.
+    expect(fileNameFor('bill-run', 'BR-id', { billRunNumber: 'BR-1' })).toBe('BR-id');
+    // no natural key at all:
     expect(fileNameFor('contact', 'CON-abc', { workEmail: 'x@y.com' })).toBe('CON-abc');
     expect(fileNameFor('order-line-item', 'OLI-1', { itemName: 'x' })).toBe('OLI-1');
     expect(fileNameFor('product-rate-plan', 'PRP-1', { Name: 'Plan' })).toBe('PRP-1');
@@ -31,6 +34,6 @@ describe('fileNameFor — natural-key file naming', () => {
 
   it('sanitizes characters not allowed in a path segment', () => {
     expect(sanitizeForFilename('A/B C:D')).toBe('A_B_C_D');
-    expect(fileNameFor('product', 'id', { SKU: 'SKU 1/2' })).toBe('SKU_1_2');
+    expect(fileNameFor('invoice', 'id', { invoiceNumber: 'INV 1/2' })).toBe('INV_1_2');
   });
 });
