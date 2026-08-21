@@ -168,8 +168,8 @@ record (marked `TEST ZDF POC` where applicable) and was torn down after confirma
 | billing-template | PASS | PASS | PASS | full cycle PASS: create / confirm / push / delete / confirm-deletion all live-verified |
 | bill-run | PASS | PASS (re-fetch) | BLOCKED (business rule) | create + pull + push-as-refetch verified; delete blocked because the created bill-run reached Completed status — Zuora only allows deleting Pending/Canceled bill-runs (not a ZDF defect) |
 | invoice | ✅ RESOLVED (2026-08-18) | PASS | PASS (cancel-then-delete) | `create` via `POST /v1/invoices` (flat body; accounting fields supplied per item — the "pass the fields" path, not a wall). `delete` cancels first then deletes, confirming via invoice-disappearance poll (async-jobs endpoint doesn't track the job). Full create→delete cycle live-verified on intQA. See "Resolved" note below. |
-| credit-memo | ✅ VERIFIED (2026-08-19) | N/A | ⚠ gap | create `POST /v1/credit-memos/invoice/{invoiceKey}` requires `--invoice` (a **Posted** invoice) + body `{items:[{invoiceItemId,amount,skuName}]}` — live create→pull confirmed. delete rejected on an invoice-sourced Draft memo (needs cancel/unapply first — follow-up). |
-| debit-memo | ✅ VERIFIED (2026-08-19) | N/A | ⚠ gap | same as credit-memo (`POST /v1/debit-memos/invoice/{invoiceKey}`). Create live-verified; delete gap tracked below. |
+| credit-memo | ✅ VERIFIED (2026-08-19) | N/A | ✅ RESOLVED (2026-08-21, cancel-then-delete) | create `POST /v1/credit-memos/invoice/{invoiceKey}` requires `--invoice` (a **Posted** invoice) + body `{items:[{invoiceItemId,amount,skuName}]}` — live create→pull confirmed. delete is now status-aware: GET → Draft `PUT .../cancel` → DELETE; Cancelled deletes directly; Posted rejected. GET-first verified live; full cycle unit-tested. |
+| debit-memo | ✅ VERIFIED (2026-08-19) | N/A | ✅ RESOLVED (2026-08-21, cancel-then-delete) | same as credit-memo (`POST /v1/debit-memos/invoice/{invoiceKey}`). Create live-verified; delete now GET→(Draft)cancel→delete, Posted rejected. |
 | product | ✅ RESOLVED (Commerce API, 2026-08-18) | — | PASS | `create product` now uses `POST /commerce/products` (legacy `/v1/catalog/products` was 405-disabled); delete uses `DELETE /v1/object/product/{id}`. Full create→pull→delete cycle live-verified on intQA. See "Resolved" note below. |
 | subscription | ❌ REMOVED (2026-08-18) | PASS | ❌ REMOVED (2026-08-18) | create/delete subcommands removed as permanently unsupported (Orders-enabled tenant disables legacy create; Zuora has no subscription DELETE endpoint). pull + push only. Use the Orders API for lifecycle. |
 
@@ -280,12 +280,20 @@ Both subcommands were removed from ZDF entirely (commit dbee8c1). `subscription`
   and body `{ items: [ { invoiceItemId, amount, skuName } ] }` (each item needs all three; `skuName`
   must be non-blank). Live create→pull confirmed (Draft memo with items). Source invoices can be made
   Posted with `create invoice --post`.
-- **⚠ FOLLOW-UP — `delete credit-memo` / `delete debit-memo` fail on invoice-sourced memos.** Live:
-  deleting a Draft memo created from an invoice was rejected ("Zuora rejected the ... delete"). The
-  memo is applied to its source invoice; deletion likely needs a cancel and/or unapply step first
-  (analogous to the invoice cancel-then-delete). Currently `delete {memo}` just does
-  `DELETE /v1/{memo}s/{id}`. To fix: inspect the reject reason, add the required pre-step(s).
-  (Cleanup in the meantime: deleting the parent account cascades its memos.)
+- ✅ **RESOLVED (2026-08-21) — `delete credit-memo` / `delete debit-memo` on invoice-sourced memos.**
+  Root cause (confirmed against Zuora API docs): Zuora only deletes a **Cancelled** memo, and only a
+  **Draft** memo can be cancelled — the old code did a blind `DELETE /v1/{memo}s/{id}`, which a Draft
+  memo rejects. Fix: `delete {memo}` now GETs the memo first, then Draft → `PUT /v1/{memo}s/{id}/cancel`
+  → `DELETE`; already-Cancelled → `DELETE` directly; **Posted → rejected** (a posted memo can't be
+  cancelled). No unapply step is needed because a Draft memo isn't applied yet (application happens on
+  posting). GET-first behavior verified live on intQA; Draft/Cancelled/Posted branches unit-tested.
+  Full create→cancel→delete cycle not yet self-tested live (needs a throwaway Posted invoice + memo).
+- ✅ **RESOLVED (2026-08-21) — env-var (CI) auth was broken.** `ensureToken` called `saveUpdatedEnv`
+  unconditionally; in env-var mode there's no config file, so the first successful token fetch threw
+  `No ZDF configuration found` — breaking every authenticated command in CI. Fix: `getActiveEnv` marks
+  env-var envs `fromEnv: true`, and `ensureToken` caches the token in memory (per `clientId`) for those
+  instead of persisting. Verified live against a local token server (env-var mode + no config file now
+  completes); regression tests added.
 - ✅ Error logging (2026-08-19): `handleAxiosError` now surfaces the real Zuora detail for all body
   shapes (reasons/errors/PascalCase Errors/Settings messages+errorCode/FaultMessage) via
   `extractZuoraErrors` — no more bare "HTTP 400". This is how the memo `skuName`/`not posted` errors
@@ -345,13 +353,10 @@ every request it checks `tokenExpiresAt > Date.now()` and, if expired/missing, f
 `client_credentials` token and persists it via `saveUpdatedEnv`. No user action needed — this
 is the abstracted refresh the request asked for, and it already exists.
 
-**Remaining gap (worth a TODO):** refresh is *proactive* (expiry-timestamp based) only. There
-is no *reactive* refresh — if Zuora rejects a token with **HTTP 401 before** its stored expiry
-(revoked, clock skew, tenant-side invalidation), `request()` in `src/api/client.ts` just throws
-the 401 rather than refreshing once and retrying. **Task:** add a single retry in `request()`
-that, on a 401, forces a token refresh (bypassing the expiry check — e.g. clear the cached
-token or add a `force` param to `ensureToken`) and replays the request exactly once before
-surfacing the error. Keep it to one retry to avoid loops.
+**✅ RESOLVED (this note was stale):** reactive 401 refresh now exists. `request()` in
+`src/api/client.ts` (lines ~45-59) catches a 401, calls `ensureToken(env, true)` to force a
+refresh, and replays the request exactly once before surfacing the error — plus the proactive
+expiry-based refresh. One retry only (no loop).
 
 ---
 

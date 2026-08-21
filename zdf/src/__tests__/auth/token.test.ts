@@ -9,7 +9,7 @@ const { mockPost, mockSave } = vi.hoisted(() => ({
 vi.mock('axios', () => ({ default: { post: mockPost } }));
 vi.mock('../../auth/config.js', () => ({ saveUpdatedEnv: mockSave }));
 
-import { ensureToken } from '../../auth/token.js';
+import { ensureToken, clearTokenCache } from '../../auth/token.js';
 
 const baseEnv: EnvironmentConfig = {
   name: 'sandbox',
@@ -59,5 +59,36 @@ describe('ensureToken', () => {
     expect(token).toBe('forced-fresh');
     expect(mockPost).toHaveBeenCalledOnce();
     expect(mockSave).toHaveBeenCalledOnce();
+  });
+});
+
+describe('ensureToken in env-var (CI) mode (fromEnv=true)', () => {
+  const envMode: EnvironmentConfig = { ...baseEnv, name: 'ci', fromEnv: true };
+
+  beforeEach(() => { clearTokenCache(); });
+
+  it('does NOT call saveUpdatedEnv (no config file to persist to)', async () => {
+    mockPost.mockResolvedValue({ data: { access_token: 'ci-tok', expires_in: 3600 } });
+    const token = await ensureToken(envMode);
+    expect(token).toBe('ci-tok');
+    expect(mockSave).not.toHaveBeenCalled();
+  });
+
+  it('caches the token in memory so a second call does not re-fetch', async () => {
+    mockPost.mockResolvedValue({ data: { access_token: 'ci-tok', expires_in: 3600 } });
+    await ensureToken(envMode);
+    const again = await ensureToken(envMode);
+    expect(again).toBe('ci-tok');
+    expect(mockPost).toHaveBeenCalledOnce();
+    expect(mockSave).not.toHaveBeenCalled();
+  });
+
+  it('force=true re-fetches even when a cached in-memory token is still valid', async () => {
+    mockPost.mockResolvedValueOnce({ data: { access_token: 'first', expires_in: 3600 } });
+    await ensureToken(envMode);
+    mockPost.mockResolvedValueOnce({ data: { access_token: 'second', expires_in: 3600 } });
+    const forced = await ensureToken(envMode, true);
+    expect(forced).toBe('second');
+    expect(mockPost).toHaveBeenCalledTimes(2);
   });
 });

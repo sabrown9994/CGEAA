@@ -1,10 +1,10 @@
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
-import { apiPost, apiPut, apiDelete } from '../api/client.js';
+import { apiGet, apiPost, apiPut, apiDelete } from '../api/client.js';
 import { readResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
-import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
+import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync } from '../helpers/dependency-graph.js';
 
@@ -74,11 +74,29 @@ export function register(program: Command): void {
       })()
     );
 
+  // Zuora only allows DELETE on a Canceled debit memo, and only a Draft memo can be
+  // cancelled (status enum: Draft, Posted, Canceled, Error, PendingForTax, Generating,
+  // CancelInProgress). Deletable path: Draft -> cancel -> delete; already-Canceled ->
+  // delete directly; any other status is rejected with a clear message. Mirrors
+  // credit-memo / invoice.
   deleteCmd
     .command('debit-memo <id>')
-    .description('Delete a debit memo in Zuora (must be Canceled status)')
+    .description('Delete a debit memo in Zuora (Draft memos are cancelled first; only Canceled memos are deletable)')
     .action((id: string) =>
       runCommand(program, async () => {
+        const memo = await apiGet<{ success?: boolean; status?: string }>(`${ENDPOINT}/${id}`);
+        assertReadSuccess(memo, 'debit-memo fetch');
+        const status = memo.status;
+        if (status === 'Draft') {
+          const cancelled = await apiPut<ZuoraWriteResponse>(`${ENDPOINT}/${id}/cancel`, {});
+          assertSuccess(cancelled, 'debit-memo cancel');
+        } else if (status !== 'Canceled') {
+          throw new Error(
+            `Debit memo ${id} has status ${status ?? 'unknown'} and cannot be deleted: only Draft ` +
+            `debit memos (cancelled first) or already-Canceled memos are deletable. Reverse a posted ` +
+            `debit memo through the normal accounting flow instead.`
+          );
+        }
         const res = await apiDelete<ZuoraWriteResponse>(`${ENDPOINT}/${id}`);
         assertSuccess(res, 'debit-memo delete');
         await resolveAndSync(RESOURCE, id, 'delete');

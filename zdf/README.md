@@ -402,14 +402,14 @@ Subscriptions support **pull and push only**. There is no `create subscription` 
 | pull | `GET /v1/credit-memos/{id}` + `GET /v1/credit-memos/{id}/items` | Line items embedded inline |
 | push | `PUT /v1/credit-memos/{id}` | |
 | create | `POST /v1/credit-memos/invoice/{invoiceKey}` | Invoice-scoped; requires `--invoice <invoiceId>`. **Live-verified.** |
-| delete | `DELETE /v1/credit-memos/{id}` | Must be in Draft status (see delete note below) |
+| delete | GET status → (Draft) `PUT /v1/credit-memos/{id}/cancel` → `DELETE /v1/credit-memos/{id}` | Draft memos are cancelled first, then deleted; Cancelled memos delete directly; Posted rejected (see note) |
 
 **Limitations:**
 - Credit memo line items (`creditMemoItems`) are embedded for reference but stripped from the push body.
 - `creditMemoDate` and `autoApplyUponPosting` are **not updatable** on Posted memos (live-verified: Zuora rejects them). These fields are excluded from the push allowlist.
 - **`create credit-memo`** requires `--invoice <invoiceId>` pointing at a **Posted** source invoice (a Draft source is rejected: "Invoice is not posted"). The CLI posts the local file **verbatim** to `POST /v1/credit-memos/invoice/{invoiceKey}`; the bare `POST /v1/credit-memos` is unreliable on this tenant. The file must be `{ "items": [ { "invoiceItemId": "<id>", "amount": <n>, "skuName": "<label>" } ] }` — **each item requires `invoiceItemId`, `amount`, and a non-blank `skuName`** (Zuora rejects a blank SKU: "SKU name is blank"). Get `invoiceItemId` from `GET /v1/invoices/{id}/items` (or a pulled invoice). Omitting `--invoice` fails fast before any network call. **Live-verified end-to-end** (create → pull → Draft memo with items).
 - `push credit-memo` re-pulls the parent account.
-- **Known gap:** `delete credit-memo` on a Draft memo created from an invoice was rejected live (the memo is applied to its source invoice; deletion likely needs a cancel/unapply step first, analogous to invoice delete). Not yet resolved — tracked in `TODO.md`.
+- **`delete credit-memo`** is status-aware. Zuora only deletes a **Cancelled** credit memo, and only a **Draft** memo can be cancelled. The command GETs the memo first: a **Draft** memo is cancelled (`PUT /v1/credit-memos/{id}/cancel`) then deleted; an already-**Cancelled** memo is deleted directly; a **Posted** memo is rejected up front (it can't be cancelled, so it isn't deletable this way — reverse it through the normal accounting flow). A Draft memo isn't applied to its invoice yet (application happens on posting), so no unapply step is needed. *(GET-first behavior verified live on intQA; full create→cancel→delete cycle not yet self-tested live.)*
 
 ---
 
@@ -420,14 +420,14 @@ Subscriptions support **pull and push only**. There is no `create subscription` 
 | pull | `GET /v1/debit-memos/{id}` + `GET /v1/debit-memos/{id}/items` | Line items embedded inline |
 | push | `PUT /v1/debit-memos/{id}` | |
 | create | `POST /v1/debit-memos/invoice/{invoiceKey}` | Invoice-scoped; requires `--invoice <invoiceId>`. **Live-verified.** |
-| delete | `DELETE /v1/debit-memos/{id}` | Must be in Canceled status (see delete note below) |
+| delete | GET status → (Draft) `PUT /v1/debit-memos/{id}/cancel` → `DELETE /v1/debit-memos/{id}` | Draft memos are cancelled first, then deleted; Cancelled memos delete directly; Posted rejected (see note) |
 
 **Limitations:**
 - Debit memo line items (`debitMemoItems`) are embedded for reference but stripped from the push body.
 - `debitMemoDate` and `dueDate` are **not updatable** on Posted memos (live-verified: Zuora rejects them). These fields are excluded from the push allowlist.
 - **`create debit-memo`** requires `--invoice <invoiceId>` pointing at a **Posted** source invoice. Same body contract as credit-memo: `{ "items": [ { "invoiceItemId": "<id>", "amount": <n>, "skuName": "<label>" } ] }` — **each item requires `invoiceItemId`, `amount`, and a non-blank `skuName`**. Posted verbatim to `POST /v1/debit-memos/invoice/{invoiceKey}`; the bare `POST /v1/debit-memos` is unreliable on this tenant. Omitting `--invoice` fails fast. **Live-verified end-to-end** (create → pull → Draft memo with items).
 - `push debit-memo` re-pulls the parent account.
-- **Known gap:** `delete debit-memo` on a memo created from an invoice was rejected live (likely needs a cancel/unapply step first). Not yet resolved — tracked in `TODO.md`.
+- **`delete debit-memo`** is status-aware, identical to credit-memo: GET first, cancel a **Draft** memo (`PUT /v1/debit-memos/{id}/cancel`) then delete, delete an already-**Cancelled** memo directly, reject a **Posted** memo. *(GET-first behavior verified live on intQA; full create→cancel→delete cycle not yet self-tested live.)*
 
 ---
 

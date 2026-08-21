@@ -96,11 +96,49 @@ describe('zdf push credit-memo', () => {
 });
 
 describe('zdf delete credit-memo', () => {
-  it('calls delete and resolveAndSync with delete', async () => {
+  it('Draft memo: cancels BEFORE deleting, then resolveAndSync', async () => {
+    const callOrder: string[] = [];
+    mockGet.mockResolvedValue({ success: true, status: 'Draft' });
+    mockPut.mockImplementation(async () => { callOrder.push('cancel'); return { success: true }; });
+    mockDelete.mockImplementation(async () => { callOrder.push('delete'); return { success: true }; });
+    mockResolve.mockImplementation(async () => { callOrder.push('resolve'); });
+    await makeProgram().parseAsync(['node', 'zdf', 'delete', 'credit-memo', 'CM-001']);
+    expect(mockGet).toHaveBeenCalledWith('/v1/credit-memos/CM-001');
+    expect(mockPut).toHaveBeenCalledWith('/v1/credit-memos/CM-001/cancel', {});
+    expect(mockDelete).toHaveBeenCalledWith('/v1/credit-memos/CM-001');
+    expect(mockResolve).toHaveBeenCalledWith('credit-memo', 'CM-001', 'delete');
+    // Order is the contract: cancel must precede delete.
+    expect(callOrder).toEqual(['cancel', 'delete', 'resolve']);
+  });
+
+  it('Canceled memo: deletes directly without cancelling', async () => {
+    mockGet.mockResolvedValue({ success: true, status: 'Canceled' });
     mockDelete.mockResolvedValue({ success: true });
     mockResolve.mockResolvedValue(undefined);
     await makeProgram().parseAsync(['node', 'zdf', 'delete', 'credit-memo', 'CM-001']);
+    expect(mockPut).not.toHaveBeenCalled();
     expect(mockDelete).toHaveBeenCalledWith('/v1/credit-memos/CM-001');
-    expect(mockResolve).toHaveBeenCalledWith('credit-memo', 'CM-001', 'delete');
+  });
+
+  it('Posted memo: rejects up front, never cancels or deletes', async () => {
+    mockGet.mockResolvedValue({ success: true, status: 'Posted' });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'delete', 'credit-memo', 'CM-001'])
+    ).rejects.toThrow('exit');
+    expect(mockPut).not.toHaveBeenCalled();
+    expect(mockDelete).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it('unexpected status (e.g. Error / in-progress): rejected, never cancels or deletes', async () => {
+    mockGet.mockResolvedValue({ success: true, status: 'Error' });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'delete', 'credit-memo', 'CM-001'])
+    ).rejects.toThrow('exit');
+    expect(mockPut).not.toHaveBeenCalled();
+    expect(mockDelete).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
   });
 });

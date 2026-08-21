@@ -1,10 +1,10 @@
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
-import { apiPost, apiPut, apiDelete } from '../api/client.js';
+import { apiGet, apiPost, apiPut, apiDelete } from '../api/client.js';
 import { readResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
-import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
+import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync } from '../helpers/dependency-graph.js';
 
@@ -74,11 +74,31 @@ export function register(program: Command): void {
       })()
     );
 
+  // Zuora only allows DELETE on a Canceled credit memo, and only a Draft memo can be
+  // cancelled (status enum: Draft, Posted, Canceled, Error, PendingForTax, Generating,
+  // CancelInProgress). So the deletable path is: Draft -> cancel -> delete; an
+  // already-Canceled memo -> delete directly; any other status (Posted, Error, in-progress,
+  // …) is rejected with a clear message rather than a doomed blind DELETE. This mirrors the
+  // invoice cancel-then-delete flow. A Draft memo created from an invoice is NOT yet applied
+  // (application happens on posting), so no unapply step is required.
   deleteCmd
     .command('credit-memo <id>')
-    .description('Delete a credit memo in Zuora (must be Draft status)')
+    .description('Delete a credit memo in Zuora (Draft memos are cancelled first; only Canceled memos are deletable)')
     .action((id: string) =>
       runCommand(program, async () => {
+        const memo = await apiGet<{ success?: boolean; status?: string }>(`${ENDPOINT}/${id}`);
+        assertReadSuccess(memo, 'credit-memo fetch');
+        const status = memo.status;
+        if (status === 'Draft') {
+          const cancelled = await apiPut<ZuoraWriteResponse>(`${ENDPOINT}/${id}/cancel`, {});
+          assertSuccess(cancelled, 'credit-memo cancel');
+        } else if (status !== 'Canceled') {
+          throw new Error(
+            `Credit memo ${id} has status ${status ?? 'unknown'} and cannot be deleted: only Draft ` +
+            `credit memos (cancelled first) or already-Canceled memos are deletable. Reverse a posted ` +
+            `credit memo through the normal accounting flow instead.`
+          );
+        }
         const res = await apiDelete<ZuoraWriteResponse>(`${ENDPOINT}/${id}`);
         assertSuccess(res, 'credit-memo delete');
         await resolveAndSync(RESOURCE, id, 'delete');

@@ -50,6 +50,7 @@ export function getActiveEnv(): EnvironmentConfig {
       isProduction: process.env.ZDF_IS_PRODUCTION === 'true',
       clientId,
       clientSecret,
+      fromEnv: true,
     };
   }
   const config = readConfig();

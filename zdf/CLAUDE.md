@@ -146,10 +146,16 @@ any network call if omitted) and must point at a **Posted** invoice (a Draft sou
 "Invoice is not posted"). The file is posted verbatim and must be
 `{ "items": [ { "invoiceItemId, amount, skuName } ] }` — **each item requires `invoiceItemId`,
 `amount`, and a non-blank `skuName`** ("SKU name is blank" otherwise). Get `invoiceItemId` from
-`GET /v1/invoices/{id}/items`. **Create is live-verified** (Draft memo with items). **Known gap:**
-`delete credit-memo`/`delete debit-memo` on an invoice-sourced Draft memo is rejected live (the memo
-is applied to its invoice; deletion likely needs a cancel/unapply step first — not yet implemented;
-see TODO.md).
+`GET /v1/invoices/{id}/items`. **Create is live-verified** (Draft memo with items).
+
+**Delete** (`delete credit-memo` / `delete debit-memo`) — RESOLVED 2026-08-21, status-aware
+cancel-then-delete. Zuora only deletes a **Canceled** memo and only cancels a **Draft** one, so
+the command GETs the memo first: `Draft` → `PUT /v1/{memo}s/{id}/cancel` → `DELETE`; already
+`Canceled` → `DELETE`; any other status (`Posted`, `Error`, `PendingForTax`, `Generating`,
+`CancelInProgress`, or missing) → rejected with a clear message (no blind DELETE). No unapply
+step is needed — a Draft memo isn't applied to its invoice yet (application happens on posting).
+Status spelling is Zuora's single-L `Canceled`. GET-first verified live on intQA; branches
+unit-tested; full create→cancel→delete cycle not yet self-tested live.
 
 ### Invoice create / delete
 
@@ -272,8 +278,8 @@ Use `--no-dependency` to skip all traversal. Essential for large accounts.
 | product-rate-plan | ✓ | ✓ | ✓ (`POST /v1/object/product-rate-plan`) | ✓ | |
 | product-rate-plan-charge | ✓ | ✓ | ✓ (requires `POBIdentifier__c` + `ProductRatePlanChargeTierData`) | ✓ | |
 | invoice | ✓ | ✓ | ✓ (`POST /v1/invoices`; accounting fields required in body) | ✓ (cancel-then-delete; disappearance poll) | |
-| credit-memo | ✓ | ✓ | ✓ (`--invoice <id>` required; `skuName` per item) | ✓ (Draft only) | |
-| debit-memo | ✓ | ✓ | ✓ (`--invoice <id>` required; `skuName` per item) | ✓ (Canceled only) | |
+| credit-memo | ✓ | ✓ | ✓ (`--invoice <id>` required; `skuName` per item) | ✓ (Draft→cancel→delete; Cancelled direct; Posted rejected) | |
+| debit-memo | ✓ | ✓ | ✓ (`--invoice <id>` required; `skuName` per item) | ✓ (Draft→cancel→delete; Cancelled direct; Posted rejected) | |
 | bill-run | ✓ | re-fetch (no PUT) | ✓ (⚠ executes real billing) | ✓ (Canceled/Error only) | |
 | workflow | ✓ | ✓ | ✓ | ✓ | |
 | billing-template | ✓ (HTML only) | ✓ | ✓ | ✓ | ✓ |
@@ -506,12 +512,16 @@ jobs:
 
 ### Token persistence in CI
 
-In env-var mode the token is NOT written back to any file (there is no config file to
-update). Each ZDF process fetches a fresh token on first use and holds it in memory.
-If a job runs many ZDF commands sequentially, they each fetch a new token independently —
-no shared state between process invocations. For high-throughput pipelines that issue
-hundreds of commands, consider batching them into a single Node.js script that imports
-`getActiveEnv`/`ensureToken` directly rather than spawning a new process per command.
+In env-var mode (`getActiveEnv` returns `fromEnv: true`) there is no config file to write
+to, so `ensureToken` does NOT call `saveUpdatedEnv` — instead it caches the token in a
+module-level in-memory map (`src/auth/token.ts`, keyed by `clientId`), reused for the life
+of the process. Within a single process, repeated API calls reuse that cached token; a new
+process re-fetches. (Before this was added, `ensureToken` called `saveUpdatedEnv`
+unconditionally, which threw `No ZDF configuration found` in env-var mode after the first
+successful token fetch — env-var auth was effectively broken. Fixed 2026-08-21; regression
+tests in `src/__tests__/auth/token.test.ts`.) For high-throughput pipelines that issue
+hundreds of commands, you can still batch into a single Node.js script — see the caveat
+below about the production write policy.
 
 > ⚠️ **Such a batching script bypasses the CLI entirely** (`buildProgram`/`runCommand`/the
 > preAction hook), so it also bypasses the **production write policy** (financial-write block +
