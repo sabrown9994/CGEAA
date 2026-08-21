@@ -18,6 +18,7 @@ ZDF is a **developer CLI for interacting with Zuora tenants**, not an environmen
   - [create](#create)
   - [delete](#delete)
   - [list](#list)
+  - [template](#template)
 - [Resource Reference](#resource-reference)
   - [account](#account)
   - [contact](#contact)
@@ -238,6 +239,33 @@ Fetch all records of a type and write them to local storage.
 zdf list orders
 zdf list billing-templates
 ```
+
+### template
+
+Generate a **starter JSON file** for creating a catalog resource, pre-shaped with the required
+fields (and `REPLACE_ME` placeholders) so you don't have to hand-build a `create` body. Scoped to
+the three catalog resources:
+
+```
+zdf template product
+zdf template product-rate-plan
+zdf template product-rate-plan-charge
+```
+
+Each writes `template-<resource>-<n>.json` into that resource's output folder and prints the exact
+`create` command to run next, e.g.:
+
+```
+✔ Wrote product template to zdf-output/products/template-product-86193.json. Fill the REPLACE_ME
+  placeholders …, then run: zdf create product template-product-86193
+```
+
+Fill in the placeholders — tenant-specific values (accounting-code names, custom-field picklist
+values, and parent ids like `ProductId` / `ProductRatePlanId`) must be supplied — then run the
+printed `zdf create` command. The `product` template matches the Commerce API body (snake_case,
+`pricing` keyed by currency, full accounting block, `item__c`/`productfamily__c`,
+`pobidentifier__c`/`pobname__c`); the rate-plan/charge templates match the `/v1/object/` PascalCase
+shape.
 
 ---
 
@@ -627,30 +655,35 @@ Note: product, product-rate-plan, and product-rate-plan-charge use the legacy `/
 
 ## Output Directory Layout
 
+Files are named by a resource's **natural key** where its Zuora endpoints accept that key
+(account/subscription/invoice/credit-memo/debit-memo, plus order which has always used the order
+number); everything else is named by the internal id. This makes filenames human-readable and
+stable across a tenant refresh.
+
 ```
 zdf-output/
 ├── accounts/
-│   └── {id}.json
+│   └── {accountNumber}.json
 ├── contacts/
 │   └── {id}.json
 ├── subscriptions/
-│   └── {id}.json
+│   └── {subscriptionNumber}.json
 ├── orders/
 │   └── {orderNumber}.json
 ├── order-line-items/
 │   └── {id}.json
 ├── products/
-│   └── {id}.json
+│   └── {id}.json                 # SKU is NOT a valid key for /v1/object/product — id-named
 ├── product-rate-plans/
 │   └── {id}.json
 ├── product-rate-plan-charges/
 │   └── {id}.json
 ├── invoices/
-│   └── {id}.json
+│   └── {invoiceNumber}.json
 ├── credit-memos/
-│   └── {id}.json
+│   └── {memoNumber}.json
 ├── debit-memos/
-│   └── {id}.json
+│   └── {memoNumber}.json
 ├── bill-runs/
 │   └── {id}.json
 ├── workflows/
@@ -661,4 +694,10 @@ zdf-output/
     └── {jobId}.json
 ```
 
-Files are written atomically (full replacement on every pull/push). The filename is normally the Zuora ID or order number — files are renamed automatically after `create` once Zuora returns the assigned ID. `billing-template` files are named `{name}_{id}.json` (the id is the segment after the last `_`); `data-query` files are keyed by job ID.
+Files are written atomically (full replacement on every pull/push).
+
+**Natural-key naming & round-trips.** For the natural-keyed resources above, `pull <resource> <id>`
+(the Zuora endpoints accept the id **or** the number) writes the file under the natural key — the
+success message prints the exact path. You can then `push`/`delete` using **either** the natural
+key or the internal id: if the direct `<arg>.json` isn't found, ZDF locates the file by the stored
+record id. `template` files (below) and `create <resource> <name>` use the literal name you give.
