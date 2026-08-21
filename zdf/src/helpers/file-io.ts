@@ -1,7 +1,30 @@
-import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, unlinkSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { RESOURCE_SUBFOLDERS, OUTPUT_DIR } from '../constants.js';
-import { fileNameFor } from './resource-registry.js';
+import { fileNameFor, hasNaturalKey, recordId } from './resource-registry.js';
+
+/**
+ * Natural-key-named resources write their file as `<naturalKey>.json`, but `pull` is typically
+ * invoked with the internal Zuora id — so a later `push`/`delete` by that same id would miss the
+ * file. When the direct `<nameOrId>.json` path doesn't exist for such a resource, scan the folder
+ * for the .json whose STORED record id matches `nameOrId` and return that path. Returns null if
+ * nothing matches (or the resource isn't natural-keyed / dir absent). JSON only.
+ */
+function findByStoredId(resourceType: string, nameOrId: string): string | null {
+  if (!hasNaturalKey(resourceType)) return null;
+  const dir = join(outputDir(), sanitizeSegment(RESOURCE_SUBFOLDERS[resourceType] ?? resourceType));
+  if (!existsSync(dir)) return null;
+  for (const f of readdirSync(dir)) {
+    if (!f.endsWith('.json')) continue;
+    try {
+      const rec = JSON.parse(readFileSync(join(dir, f), 'utf-8')) as Record<string, unknown>;
+      if (recordId(rec) === nameOrId) return join(dir, f);
+    } catch {
+      // ignore unparseable files
+    }
+  }
+  return null;
+}
 
 function outputDir(): string {
   return process.env.ZDF_OUTPUT_DIR ?? OUTPUT_DIR;
@@ -40,11 +63,20 @@ function resourcePath(resourceType: string, nameOrId: string, ext = 'json'): str
 }
 
 export function readResourceFile(resourceType: string, nameOrId: string, ext = 'json'): unknown {
-  const p = resourcePath(resourceType, nameOrId, ext);
+  let p = resourcePath(resourceType, nameOrId, ext);
   if (!existsSync(p)) {
-    throw new Error(
-      `No file found at ${p}. Run 'zdf pull ${resourceType} ${nameOrId}' first or provide --file <path>.`
-    );
+    // Natural-key-named resource pulled by internal id: find the file by its stored id.
+    const alt = ext === 'json' ? findByStoredId(resourceType, nameOrId) : null;
+    if (alt) {
+      p = alt;
+    } else {
+      const hint = hasNaturalKey(resourceType)
+        ? ` (Note: ${resourceType} files are named by their natural key — check the path printed by 'pull'.)`
+        : '';
+      throw new Error(
+        `No file found at ${p}. Run 'zdf pull ${resourceType} ${nameOrId}' first or provide --file <path>.${hint}`
+      );
+    }
   }
   const contents = readFileSync(p, 'utf-8');
   if (ext === 'sql') return contents;
@@ -88,7 +120,12 @@ export function renameResourceFile(resourceType: string, oldName: string, newId:
 }
 
 export function deleteResourceFile(resourceType: string, id: string, ext = 'json'): void {
-  const p = resourcePath(resourceType, id, ext);
+  let p = resourcePath(resourceType, id, ext);
+  // Natural-key-named resource being cleaned up by internal id: find the real file by stored id
+  // so we don't leave an orphaned local file after the remote record is gone.
+  if (!existsSync(p) && ext === 'json') {
+    p = findByStoredId(resourceType, id) ?? p;
+  }
   if (existsSync(p)) unlinkSync(p);
 }
 

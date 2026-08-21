@@ -53,3 +53,15 @@ export function fileNameFor(resource: string, id: string, record?: Rec): string 
 export function sanitizeForFilename(value: string): string {
   return value.replace(/[^a-zA-Z0-9\-_.]/g, '_');
 }
+
+/** True if this resource is stored under a natural-key filename (so a lookup by internal id must
+ * fall back to scanning for the file whose stored record id matches). */
+export function hasNaturalKey(resource: string): boolean {
+  return resource in NATURAL_KEY;
+}
+
+/** Extract the internal Zuora id from a stored record (covers the shapes ZDF writes: top-level
+ * id/Id, and account's nested basicInfo.id). Used to match a natural-key-named file to an id arg. */
+export function recordId(record: Rec): string | undefined {
+  return str(record['id'] ?? record['Id'] ?? (record['basicInfo'] as Rec | undefined)?.['id']);
+}
