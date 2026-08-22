@@ -8,6 +8,7 @@ ZDF is a **developer CLI for interacting with Zuora tenants**, not an environmen
 
 - [Use Cases](#use-cases)
 - [Resources & Supported Actions](#resources--supported-actions)
+- [Cross-Tenant Sync (env-id map & upsert)](#cross-tenant-sync-env-id-map--upsert)
 - [Production Safety](#production-safety)
 - [Setup](#setup)
 - [Global Flags](#global-flags)
@@ -112,6 +113,62 @@ be rejected. `workflow` `pull`/`create`/`push` operate on the full **export** de
 applies edits (including task-graph logic) by importing a new active version — see
 [workflow](#workflow). Per-resource endpoints, body requirements, and status constraints are in
 the [Resource Reference](#resource-reference).
+
+---
+
+## Cross-Tenant Sync (env-id map & upsert)
+
+Zuora assigns different internal ids to the "same" record in different tenants (and re-keys
+sandboxes on refresh), so a record can't be addressed by id across environments. ZDF bridges this
+with a per-resource **env-id map** stored in each local file under a `_zdf` key:
+
+```json
+"_zdf": {
+  "prod":  { "id": "8a1…", "key": "ACG00026617" },
+  "intQA": { "id": "9c4…", "key": "ACG00031002" }
+}
+```
+
+`_zdf` is **local only** and is **always stripped** before any body is sent to Zuora. The map is
+keyed by the active `auth` environment's **name**.
+
+**Scope:** `account`, `product`, `invoice`, `credit-memo`, `debit-memo` participate in cross-tenant
+**upsert**; `bill-run` gets the id-map on pull only (its `create` runs real billing — not a copy).
+
+**How it works:**
+- **`pull`** records `_zdf[activeEnv] = { id, key }` for the pulled resource (the map **accumulates**
+  across envs — pulling the same logical record under another env adds that env's entry rather than
+  overwriting).
+- **`push` = upsert** against the active env:
+  1. If the active env's id is already mapped → verify it (GET) and **update**.
+  2. Else search the tenant by natural key (accountNumber / SKU / invoiceNumber / memoNumber) — if
+     found, adopt its id and **update**; if not, **create**.
+- **`create`** stays an explicit create and records `_zdf[activeEnv]` on success.
+- **Foreign keys are remapped** to the active env before create: an **invoice**'s `accountNumber`
+  is remapped from the sibling local **account** file's active-env key; a **memo**'s
+  `invoiceItemId`s are remapped by matching each item to the target invoice's items by
+  `skuName` + `amount` (the target invoice is resolved from the memo's source-invoice reference —
+  pass `--invoice <sourceInvoice>`). If a referenced parent isn't mapped into the active env yet,
+  the command errors clearly (seed/pull the parent first).
+
+**Typical flow (seed/sync a record into a lower env):**
+```
+zdf auth use prod   && zdf pull account <id>       # writes accounts/<accountNumber>.json + _zdf.prod
+zdf auth use intQA  && zdf push account <accountNumber>   # upsert into intQA; _zdf.intQA added
+```
+
+**Limitations (important):**
+- **`update` is the fully-supported path.** Creating a resource into an *empty* target tenant from
+  a *pulled* file is best-effort: a pulled body's shape can differ from the create API's shape
+  (e.g. `product` pull is the `/v1/object` PascalCase shape but create needs the Commerce snake_case
+  shape; `account` GET nests fields the POST doesn't) — such a create surfaces Zuora's validation
+  error verbatim. Use a create-shaped file (or `zdf template`) for brand-new resources.
+- `product` and `bill-run` files are **id-named** (their endpoints don't accept the natural key), so
+  their local files don't unify across tenants the way natural-key-named resources do.
+- **Not yet verified against two live tenants.** The mechanics (map accumulation across differing
+  ids, FK remap, item matching) are covered by unit + real-filesystem integration tests and the
+  `pull → _zdf` population is confirmed live on intQA, but a true tenant-A → tenant-B round trip
+  awaits a second configured tenant.
 
 ---
 

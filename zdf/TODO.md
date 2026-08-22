@@ -254,6 +254,20 @@ Both subcommands were removed from ZDF entirely (commit dbee8c1). `subscription`
 
 ## Backlog (deferred minors from the fix effort)
 
+- ✅ **DELIVERED (2026-08-21) — cross-tenant env-id map & upsert** (SDD plan
+  `docs/superpowers/plans/2026-08-21-cross-tenant-upsert.md`). Per-file `_zdf` map (keyed by active
+  env name; stripped before send); `pull` populates + accumulates it; `push` = upsert (verify mapped
+  id / natural-key search → update, else create) for account/product/invoice/credit-memo/debit-memo;
+  bill-run is id-map-on-pull only. FK remap: invoice→account by number; memo→invoiceItemId by
+  skuName+amount item matching. Helpers: env-map.ts, upsert.ts, upsert-command.ts; file-io
+  readResourceFileIfExists / readResourceFileByIdOrName. Unit + real-fs integration tests; 423 tests.
+  **Known limitations:** (1) the UPDATE path is fully supported; CREATE-into-empty-target from a
+  *pulled* file can hit pull-shape-vs-create-shape mismatches (use `zdf template` / a create-shaped
+  file). (2) product & bill-run are id-named (endpoints reject their natural key), so their local
+  files don't unify across tenants like natural-key-named resources. (3) **Not verified against two
+  live tenants** — only intQA is configured; mechanics are unit/real-fs tested and `pull→_zdf` is
+  live-confirmed on intQA, but a true tenant-A→tenant-B round trip awaits a 2nd tenant.
+
 - ✅ **RESOLVED (2026-08-21) — dependent-pull failures are now collected and surfaced.** Every
   dependency discovery lookup (contacts/orders/subscriptions/invoices/credit-memos/debit-memos/
   bill-runs/product-rate-plans/charges) is wrapped (`traverseCategory`), and individual child

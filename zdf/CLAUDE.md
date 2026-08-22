@@ -329,13 +329,15 @@ selected `auth` environment), not a promotion pipeline. It has exactly three in-
 
 1. **Config editing** — pull/push `workflow` and `billing-template` between Zuora and the IDE,
    so they can be edited with Claude Code or other AI tooling.
-2. **Test data** — inspect / round-trip financial/test data (account, contact, subscription,
-   order, order-line-item, invoice, credit-memo, debit-memo, bill-run) for QA and bug repro in
-   **lower** environments. NOTE: `push` is `PUT /{resource}/{id}` against the **active** tenant —
-   it updates an object that already exists *there*, by its per-tenant id. It is **not** a
-   cross-tenant importer: a file pulled from tenant A cannot be `push`ed into tenant B (the id
-   doesn't exist in B → 404). Seeding data into another env is a `create` (new id, per-resource
-   body requirements), not a `push`. ZDF does not auto-remap ids/parent refs across tenants.
+2. **Test data** — sync financial/test data (account, contact, subscription, order,
+   order-line-item, invoice, credit-memo, debit-memo, bill-run) into **lower** environments for QA
+   and bug repro. `push` is a cross-tenant **upsert** for the resources with a stable unique key
+   (account, product, invoice, credit-memo, debit-memo): it resolves the record's id in the ACTIVE
+   tenant via the in-file `_zdf` env-id map (verify) or a natural-key search, then updates it; if it
+   doesn't exist there it creates it. See "Cross-tenant env-id map / upsert" below and
+   README-ZDF.md → "Cross-Tenant Sync". Caveat: the UPDATE path is fully supported; creating a
+   brand-new record into an empty target from a *pulled* file can hit pull-shape-vs-create-shape
+   mismatches (use `zdf template` / a create-shaped file for those).
 3. **Targeted automation** — scripted one-off tasks such as creating products (and their rate
    plans / charges) in production from a ticket.
 
@@ -403,6 +405,43 @@ regression in the hook/plumbing fails a test.
 **throw** (never hang in CI); else inquirer prompt, declined → `throw new Error('Aborted by
 user.')` (runCommand maps that message to exit 0). See README → "Production Safety" for the
 user-facing contract.
+
+## Cross-tenant env-id map / upsert
+
+Moves a resource between tenants despite per-tenant internal ids. In-file `_zdf` map keyed by the
+active `auth` env name, each `{ id, key }`; ALWAYS stripped before send (`stripEnvMap`). Scope:
+account, product, invoice, credit-memo, debit-memo (upsert); bill-run (id-map on pull only,
+`upsertable:false`). Config in `resource-registry.ts` `CROSS_TENANT` (zoqlObject/zoqlKeyField).
+
+Key modules/functions:
+- `src/helpers/env-map.ts`: `ENV_MAP_KEY='_zdf'`, `stripEnvMap`, `getEnvEntry`, `setEnvEntry`
+  (merges, preserves other envs), `activeEnvName()`, `mergeExistingEnvMap(resource,id,record)` (reads
+  the existing local file by its **write filename** `fileNameFor(...)` and folds in OTHER envs'
+  entries so the map ACCUMULATES rather than being overwritten by a fresh fetch).
+- `src/helpers/upsert.ts`: `crossTenantKeyValue(resource,record)` (body natural key), `searchByKey`
+  (ZOQL, single-quote-escaped, 1-row-only), `verifyId` (GET, never throws → bool),
+  `resolveTargetId(resource,record) → {id,found}` (verify mapped id → else key-search → else not
+  found), `matchInvoiceItems(memoItems,targetItems)` (match by skuName+amount; throws on
+  no-match/ambiguous).
+- `src/helpers/upsert-command.ts`: shared command glue — `getOrCreate`, prior-map capture, and
+  `carryForwardEnvMapToFile` (after write, re-read the file and fold the in-memory prior map's
+  other-env entries in — needed because id-keyed resources like product can't re-find the old file).
+- `src/helpers/file-io.ts`: `readResourceFileIfExists` (EXACT filename, no id-scan — for the merge
+  lookup) and `readResourceFileByIdOrName` (exact name → `findByStoredId` id-scan fallback,
+  non-throwing — for locating a sibling file when the ref may be an id OR a natural key, e.g. the
+  memo→invoice lookup).
+- `pull` populates `_zdf[active]` centrally in `dependency-graph.ts` `fetchAndWrite` for every
+  `CROSS_TENANT` resource. `push`/`create` in the account/product/invoice/memo commands do the
+  upsert (see R6/R7 rulings in the plan / commit messages).
+- **FK remap:** invoice→account by `accountNumber` (from the sibling account file's `_zdf[active].key`,
+  CREATE branch only — accountNumber isn't in the invoice PUT allowlist); memo→invoiceItemId via the
+  source-invoice file's `_zdf[active]` + `matchInvoiceItems`.
+
+**Verification reality:** only intQA is configured, so a TRUE tenant-A→tenant-B run isn't
+live-verified. Mechanics are covered by unit + real-filesystem integration tests
+(`src/__tests__/integration/cross-tenant-env-map.test.ts`, `memo-cross-tenant-create.test.ts`) and
+`pull → _zdf` is confirmed live on intQA. The UPDATE path is the supported one; create-into-empty-
+target can hit pull-shape-vs-create-shape mismatches (documented limitation).
 
 ## Test conventions
 
