@@ -22,9 +22,9 @@ vi.mock('../../helpers/dependency-graph.js', () => ({
 
 const mockWrite = vi.hoisted(() => vi.fn());
 const mockRead = vi.hoisted(() => vi.fn());
-const mockReadIfExists = vi.hoisted(() => vi.fn());
+const mockReadByIdOrName = vi.hoisted(() => vi.fn());
 const mockRename = vi.hoisted(() => vi.fn());
-vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, readResourceFileIfExists: mockReadIfExists, renameResourceFile: mockRename, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
+vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, readResourceFileByIdOrName: mockReadByIdOrName, renameResourceFile: mockRename, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
 
@@ -136,14 +136,14 @@ describe('zdf push debit-memo', () => {
       invoiceId: 'source-inv-id',
       debitMemoItems: [{ invoiceItemId: 'source-item-1', skuName: 'SKU-A', amount: 100 }],
     });
-    mockReadIfExists.mockReturnValue({ _zdf: { sandbox: { id: 'target-inv-internal-id', key: 'INV-ACTIVE' } } });
+    mockReadByIdOrName.mockReturnValue({ _zdf: { sandbox: { id: 'target-inv-internal-id', key: 'INV-ACTIVE' } } });
     mockGet.mockResolvedValue({ invoiceItems: [{ id: 'target-item-1', skuName: 'SKU-A', amount: 100 }] });
     mockPost.mockResolvedValue({ success: true, id: 'new-dm-id' });
     mockResolve.mockResolvedValue(undefined);
 
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'debit-memo', 'DM-001']);
 
-    expect(mockReadIfExists).toHaveBeenCalledWith('invoice', 'source-inv-id');
+    expect(mockReadByIdOrName).toHaveBeenCalledWith('invoice', 'source-inv-id');
     expect(mockGet).toHaveBeenCalledWith('/v1/invoices/INV-ACTIVE/items');
     expect(mockPost).toHaveBeenCalledWith('/v1/debit-memos/invoice/INV-ACTIVE', {
       items: [{ invoiceItemId: 'target-item-1', amount: 100, skuName: 'SKU-A' }],
@@ -155,14 +155,14 @@ describe('zdf push debit-memo', () => {
   it('target not found: an explicit --invoice option is used as the source invoice id', async () => {
     mockResolveTargetId.mockResolvedValue({ id: null, found: false });
     mockRead.mockReturnValue({ debitMemoItems: [{ skuName: 'SKU-A', amount: 100 }] });
-    mockReadIfExists.mockReturnValue({ _zdf: { sandbox: { id: 'target-inv-id', key: 'INV-ACTIVE' } } });
+    mockReadByIdOrName.mockReturnValue({ _zdf: { sandbox: { id: 'target-inv-id', key: 'INV-ACTIVE' } } });
     mockGet.mockResolvedValue({ invoiceItems: [{ id: 'target-item-1', skuName: 'SKU-A', amount: 100 }] });
     mockPost.mockResolvedValue({ success: true, id: 'new-dm-id' });
     mockResolve.mockResolvedValue(undefined);
 
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'debit-memo', 'DM-001', '--invoice', 'explicit-inv-id']);
 
-    expect(mockReadIfExists).toHaveBeenCalledWith('invoice', 'explicit-inv-id');
+    expect(mockReadByIdOrName).toHaveBeenCalledWith('invoice', 'explicit-inv-id');
   });
 
   it('target not found: throws before any Zuora write when the source invoice cannot be determined', async () => {
@@ -174,7 +174,7 @@ describe('zdf push debit-memo', () => {
       makeProgram().parseAsync(['node', 'zdf', 'push', 'debit-memo', 'DM-001'])
     ).rejects.toThrow('exit');
 
-    expect(mockReadIfExists).not.toHaveBeenCalled();
+    expect(mockReadByIdOrName).not.toHaveBeenCalled();
     expect(mockGet).not.toHaveBeenCalled();
     expect(mockPost).not.toHaveBeenCalled();
     exitSpy.mockRestore();
@@ -183,7 +183,7 @@ describe('zdf push debit-memo', () => {
   it('target not found: throws before any Zuora write when the source invoice file is not mapped into the active env', async () => {
     mockResolveTargetId.mockResolvedValue({ id: null, found: false });
     mockRead.mockReturnValue({ invoiceId: 'source-inv-id', debitMemoItems: [{ skuName: 'SKU-A', amount: 100 }] });
-    mockReadIfExists.mockReturnValue({ _zdf: { otherEnv: { id: 'x', key: 'INV-OTHER' } } });
+    mockReadByIdOrName.mockReturnValue({ _zdf: { otherEnv: { id: 'x', key: 'INV-OTHER' } } });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
 
     await expect(
@@ -198,7 +198,7 @@ describe('zdf push debit-memo', () => {
   it('target not found: throws before any Zuora write when the source invoice file does not exist locally', async () => {
     mockResolveTargetId.mockResolvedValue({ id: null, found: false });
     mockRead.mockReturnValue({ invoiceId: 'source-inv-id', debitMemoItems: [{ skuName: 'SKU-A', amount: 100 }] });
-    mockReadIfExists.mockReturnValue(undefined);
+    mockReadByIdOrName.mockReturnValue(undefined);
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
 
     await expect(
@@ -216,7 +216,7 @@ describe('zdf push debit-memo', () => {
       invoiceId: 'source-inv-id',
       debitMemoItems: [{ skuName: 'SKU-A', amount: 100 }],
     });
-    mockReadIfExists.mockReturnValue({ _zdf: { sandbox: { id: 'x', key: 'INV-ACTIVE' } } });
+    mockReadByIdOrName.mockReturnValue({ _zdf: { sandbox: { id: 'x', key: 'INV-ACTIVE' } } });
     mockGet.mockResolvedValue({ invoiceItems: [{ id: 'target-item-1', skuName: 'SKU-B', amount: 999 }] });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
 

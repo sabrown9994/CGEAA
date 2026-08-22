@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
 import { apiGet, apiPost, apiPut, apiDelete } from '../api/client.js';
-import { readResourceFile, readResourceFileIfExists, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
+import { readResourceFile, readResourceFileByIdOrName, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
@@ -40,11 +40,14 @@ function resolveSourceInvoiceId(fileRecord: Rec, explicitInvoiceId: string | und
 
 /** Resolves the source invoice's mapped key in the ACTIVE tenant — the invoice this memo will be
  * created against — by reading the sibling local invoice file and its `_zdf[activeEnv]` entry.
- * Throws BEFORE any Zuora write if that file is missing or not yet mapped into this env; there is
- * nothing safe to create the memo against otherwise. */
+ * `sourceInvoiceId` may be EITHER the invoice's natural key (invoiceNumber — the file's actual
+ * on-disk name) OR its internal Zuora id (e.g. when derived from a memo's `invoiceId` field, which
+ * is an id, not a number) — `readResourceFileByIdOrName` resolves either. Throws BEFORE any Zuora
+ * write if that file is missing or not yet mapped into this env; there is nothing safe to create
+ * the memo against otherwise. */
 function resolveTargetInvoiceKey(sourceInvoiceId: string): string {
   const active = activeEnvName();
-  const invoiceFile = readResourceFileIfExists('invoice', sourceInvoiceId) as Rec | undefined;
+  const invoiceFile = readResourceFileByIdOrName('invoice', sourceInvoiceId) as Rec | undefined;
   const entry = invoiceFile ? getEnvEntry(invoiceFile, active) : undefined;
   const key = entry?.key ?? entry?.id;
   if (!invoiceFile || !key) {

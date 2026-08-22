@@ -6,7 +6,7 @@ import os from 'os';
 const testOutputDir = join(os.tmpdir(), `zdf-fileio-test-${Date.now()}`);
 process.env.ZDF_OUTPUT_DIR = testOutputDir;
 
-import { readResourceFile, writeResourceFile, renameResourceFile, resolveFilePath, deleteResourceFile } from '../../helpers/file-io.js';
+import { readResourceFile, writeResourceFile, renameResourceFile, resolveFilePath, deleteResourceFile, readResourceFileByIdOrName } from '../../helpers/file-io.js';
 
 afterEach(() => { if (existsSync(testOutputDir)) rmSync(testOutputDir, { recursive: true }); });
 
@@ -34,6 +34,33 @@ describe('natural-key file naming round-trip (account, keyed by accountNumber)',
 
   it('error message hints at natural-key naming when a natural-keyed file is missing', () => {
     expect(() => readResourceFile('account', 'nope')).toThrow(/named by their natural key/);
+  });
+});
+
+describe('readResourceFileByIdOrName (natural-key resource, e.g. invoice)', () => {
+  const invoiceRecord = { id: 'inv-internal-1', invoiceNumber: 'INV-1', _zdf: { intQA: { id: 'intqa-inv-9', key: 'INV-1-INTQA' } } };
+
+  it('resolves by the natural key (direct filename match)', () => {
+    writeResourceFile('invoice', 'inv-internal-1', invoiceRecord);
+    expect(readResourceFileByIdOrName('invoice', 'INV-1')).toMatchObject({ invoiceNumber: 'INV-1' });
+  });
+
+  it('resolves by the INTERNAL id via the stored-id scan fallback, even though the file is named by natural key', () => {
+    writeResourceFile('invoice', 'inv-internal-1', invoiceRecord);
+    // The file on disk is invoices/INV-1.json (natural-key-named) — 'inv-internal-1' matches no
+    // filename directly, only the record's stored `id` field inside that file.
+    expect(existsSync(join(testOutputDir, 'invoices', 'INV-1.json'))).toBe(true);
+    expect(existsSync(join(testOutputDir, 'invoices', 'inv-internal-1.json'))).toBe(false);
+    expect(readResourceFileByIdOrName('invoice', 'inv-internal-1')).toMatchObject({ invoiceNumber: 'INV-1' });
+  });
+
+  it('returns undefined (never throws) when neither the name nor a stored id matches', () => {
+    writeResourceFile('invoice', 'inv-internal-1', invoiceRecord);
+    expect(readResourceFileByIdOrName('invoice', 'nope-not-here')).toBeUndefined();
+  });
+
+  it('returns undefined (never throws) when the resource directory does not exist at all', () => {
+    expect(readResourceFileByIdOrName('invoice', 'anything')).toBeUndefined();
   });
 });
 

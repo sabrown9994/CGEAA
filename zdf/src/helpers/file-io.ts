@@ -108,6 +108,28 @@ export function readResourceFileIfExists(resourceType: string, fileName: string,
   }
 }
 
+/**
+ * Reads a resource file when the caller's reference could be EITHER the natural key (the file's
+ * actual on-disk name for natural-keyed resources) OR the resource's internal Zuora id (e.g. a
+ * cross-tenant FK captured on another record, like a memo's `invoiceId`) — mirrors
+ * `readResourceFile`'s own id-scan fallback, but never throws. Tries the exact filename first
+ * (`readResourceFileIfExists`); if that misses and the resource is natural-keyed, falls back to
+ * `findByStoredId` to scan for the file whose STORED record id matches `idOrName`. Returns
+ * `undefined` (never throws) when nothing matches either way. JSON only (no `sql` ext — that
+ * extension has no natural-key/id ambiguity to resolve).
+ */
+export function readResourceFileByIdOrName(resourceType: string, idOrName: string): unknown | undefined {
+  const direct = readResourceFileIfExists(resourceType, idOrName);
+  if (direct !== undefined) return direct;
+  const altPath = findByStoredId(resourceType, idOrName);
+  if (!altPath) return undefined;
+  try {
+    return JSON.parse(readFileSync(altPath, 'utf-8'));
+  } catch {
+    return undefined;
+  }
+}
+
 export function writeResourceFile(resourceType: string, id: string, data: unknown, ext = 'json'): string {
   // Name the file by the resource's natural key when it has one (derived from the record);
   // otherwise fall back to the id. JSON only — non-JSON artifacts (e.g. data-query .sql) use the id.
