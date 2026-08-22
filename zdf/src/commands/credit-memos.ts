@@ -1,15 +1,15 @@
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
 import { apiGet, apiPost, apiPut, apiDelete } from '../api/client.js';
-import { readResourceFile, readResourceFileByIdOrName, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
+import { readResourceFile, readResourceFileByIdOrName, renameResourceFile, resolveFilePath, getOutputDir, writeResourceFile } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.js';
-import { resolveTargetId, matchInvoiceItems } from '../helpers/upsert.js';
-import { stripEnvMap, activeEnvName, getEnvEntry } from '../helpers/env-map.js';
-import { getOrCreate, capturePriorEnvMap, carryForwardEnvMapToFile } from '../helpers/upsert-command.js';
+import { resolveTargetId, matchInvoiceItems, crossTenantKeyValue } from '../helpers/upsert.js';
+import { stripEnvMap, activeEnvName, getEnvEntry, setEnvEntry } from '../helpers/env-map.js';
+import { getOrCreate, capturePriorEnvMap, carryForwardEnvMap, carryForwardEnvMapToFile, deleteStaleSourceFile } from '../helpers/upsert-command.js';
 
 const RESOURCE = 'credit-memo';
 const ENDPOINT = '/v1/credit-memos';
@@ -96,9 +96,21 @@ export function register(program: Command): void {
         const body: unknown = opts.file
           ? JSON.parse(readFileSync(opts.file, 'utf-8')) as unknown
           : readResourceFile(RESOURCE, name);
-        const res = await apiPost<ZuoraWriteResponse & { id: string }>(`${ENDPOINT}/invoice/${opts.invoice}`, body);
+        // Captured BEFORE any mutation — see accounts.ts/products.ts create for why this must be
+        // read straight off the in-memory record before stripEnvMap/setEnvEntry run.
+        const priorMap = capturePriorEnvMap(body as Record<string, unknown> | undefined);
+        // `pull` writes `_zdf` into credit-memo files, so a create off a pulled file must never
+        // let it reach Zuora — strip it from the outbound body (matches accounts.ts/products.ts).
+        const res = await apiPost<ZuoraWriteResponse & { id: string }>(`${ENDPOINT}/invoice/${opts.invoice}`, stripEnvMap(body));
         assertSuccess(res, 'credit-memo create');
-        if (!opts.file) renameResourceFile(RESOURCE, name, res.id);
+        if (!opts.file) {
+          const fileRecord = body as Record<string, unknown>;
+          const key = crossTenantKeyValue(RESOURCE, res as unknown as Record<string, unknown>) ?? crossTenantKeyValue(RESOURCE, fileRecord);
+          setEnvEntry(fileRecord, activeEnvName(), { id: res.id, key });
+          carryForwardEnvMap(fileRecord, priorMap);
+          writeResourceFile(RESOURCE, name, fileRecord);
+          renameResourceFile(RESOURCE, name, res.id);
+        }
         output.success(`Credit memo created. Zuora ID: ${res.id}`);
       })()
     );
@@ -138,6 +150,12 @@ export function register(program: Command): void {
           assertSuccess(res, 'credit-memo create');
           await resolveAndSync(RESOURCE, res.id, 'push');
           carryForwardEnvMapToFile(RESOURCE, res.id, priorMap);
+          // Credit memo is natural-keyed (memoNumber, tenant-assigned — NOT preserved from the
+          // source). The file resolveAndSync just wrote is named by the NEW tenant's memoNumber,
+          // which almost always differs from the source file's; delete the now-stale source so a
+          // repeat `push <arg>` can't re-read it (still unmapped, still keyed by the OLD number)
+          // and duplicate-create. No-op when the names happen to match.
+          deleteStaleSourceFile(RESOURCE, id, fileRecord, res.id);
           output.success(`Credit memo created. Zuora ID: ${res.id}`);
         }
       })()

@@ -9,7 +9,7 @@ import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.js';
 import { resolveTargetId, crossTenantKeyValue } from '../helpers/upsert.js';
 import { stripEnvMap, setEnvEntry, activeEnvName } from '../helpers/env-map.js';
-import { getOrCreate, capturePriorEnvMap, carryForwardEnvMap, carryForwardEnvMapToFile } from '../helpers/upsert-command.js';
+import { getOrCreate, capturePriorEnvMap, carryForwardEnvMap, carryForwardEnvMapToFile, deleteStaleSourceFile } from '../helpers/upsert-command.js';
 
 const RESOURCE = 'account';
 const ENDPOINT = '/v1/accounts';
@@ -106,6 +106,11 @@ export function register(program: Command): void {
           assertSuccess(res, 'account create');
           await resolveAndSync(RESOURCE, res.accountId, 'push');
           carryForwardEnvMapToFile(RESOURCE, res.accountId, priorMap);
+          // Account is natural-keyed (accountNumber). If the target tenant assigned a DIFFERENT
+          // accountNumber than the source record's, the file resolveAndSync just wrote is named
+          // differently from the original arg-keyed source file — delete the now-stale source so a
+          // repeat `push <arg>` can't re-read it and duplicate-create. No-op when the names match.
+          deleteStaleSourceFile(RESOURCE, id, fileRecord, res.accountId);
           output.success(`Account created. Zuora ID: ${res.accountId}`);
         }
       })()

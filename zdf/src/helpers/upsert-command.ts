@@ -7,6 +7,8 @@
 // resources, and can't run at all before the record has a target-tenant id on create).
 import { Command } from 'commander';
 import { ENV_MAP_KEY, EnvMap, carryForwardEnvMap, carryForwardEnvMapToFile } from './env-map.js';
+import { deleteResourceFile, readResourceFile } from './file-io.js';
+import { fileNameFor } from './resource-registry.js';
 
 type Rec = Record<string, unknown>;
 
@@ -29,3 +31,40 @@ export function capturePriorEnvMap(record: Rec | undefined): EnvMap | undefined 
 }
 
 export { carryForwardEnvMap, carryForwardEnvMapToFile };
+
+/**
+ * After a push UPSERT CREATE branch (target not found -> create) writes the new record under a
+ * filename derived from the CREATED record's natural key (via `resolveAndSync`'s re-fetch +
+ * `carryForwardEnvMapToFile`), the ORIGINAL source file — the one the CLI arg pointed at — is
+ * stale whenever that natural key differs from the source file's own key (e.g. Zuora assigns a
+ * NEW invoiceNumber/memoNumber/accountNumber in the target tenant). Left on disk, that stale file
+ * would be re-read by a repeat `push <arg>` — still unmapped for this env, still keyed by the OLD
+ * natural key — so `resolveTargetId` would report not-found again, causing an UNBOUNDED duplicate
+ * create on every repeat push. This deletes the stale source file, but ONLY when the computed
+ * filenames actually differ: a same-tenant push-create, or a create that happens to preserve the
+ * source's natural key, is a no-op — it must never delete the file it (or `resolveAndSync`) just
+ * wrote. Mirrors the pattern `push product` already uses (product has no natural key, so its
+ * equivalent check is simply `id !== finalId`); this generalizes it to natural-keyed resources
+ * (account/invoice/credit-memo/debit-memo) via `fileNameFor`, since for those the on-disk filename
+ * is the natural key, not the internal id. Never throws — if the final file can't be (re)read,
+ * nothing is deleted (an orphaned source file is a lesser problem than deleting the wrong one).
+ */
+export function deleteStaleSourceFile(
+  resource: string,
+  arg: string,
+  sourceRecord: Rec,
+  finalId: string
+): void {
+  const sourceFileName = fileNameFor(resource, arg, sourceRecord);
+  let finalRecord: unknown;
+  try {
+    finalRecord = readResourceFile(resource, finalId);
+  } catch {
+    return;
+  }
+  if (!finalRecord || typeof finalRecord !== 'object' || Array.isArray(finalRecord)) return;
+  const finalFileName = fileNameFor(resource, finalId, finalRecord as Rec);
+  if (sourceFileName !== finalFileName) {
+    deleteResourceFile(resource, arg);
+  }
+}

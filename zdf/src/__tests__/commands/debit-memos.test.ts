@@ -24,7 +24,8 @@ const mockWrite = vi.hoisted(() => vi.fn());
 const mockRead = vi.hoisted(() => vi.fn());
 const mockReadByIdOrName = vi.hoisted(() => vi.fn());
 const mockRename = vi.hoisted(() => vi.fn());
-vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, readResourceFileByIdOrName: mockReadByIdOrName, renameResourceFile: mockRename, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
+const mockDeleteFile = vi.hoisted(() => vi.fn());
+vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, readResourceFileByIdOrName: mockReadByIdOrName, renameResourceFile: mockRename, deleteResourceFile: mockDeleteFile, resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
 
@@ -92,6 +93,26 @@ describe('zdf create debit-memo', () => {
     ).rejects.toThrow('exit');
     expect(mockPost).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it('the body posted to Zuora never carries a _zdf map (create off a file that was previously pulled)', async () => {
+    const body = { accountId: 'acct-1', invoiceId: 'INV-001', _zdf: { sandbox: { id: 'old-id', key: 'OLD-1' } } };
+    mockRead.mockReturnValue(body);
+    mockPost.mockResolvedValue({ success: true, id: 'new-dm-id' });
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'debit-memo', 'my-dm', '--invoice', 'inv-001']);
+    const postedBody = mockPost.mock.calls[0][1] as Record<string, unknown>;
+    expect(postedBody).not.toHaveProperty('_zdf');
+  });
+
+  it('records _zdf[<env>] on the written file after create, before renaming', async () => {
+    const body = { accountId: 'acct-1', invoiceId: 'INV-001' };
+    mockRead.mockReturnValue(body);
+    mockPost.mockResolvedValue({ success: true, id: 'new-dm-id' });
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'debit-memo', 'my-dm', '--invoice', 'inv-001']);
+    expect(mockWrite).toHaveBeenCalledWith('debit-memo', 'my-dm', expect.objectContaining({
+      _zdf: { sandbox: { id: 'new-dm-id', key: null } },
+    }));
+    expect(mockRename).toHaveBeenCalledWith('debit-memo', 'my-dm', 'new-dm-id');
   });
 });
 
@@ -226,6 +247,50 @@ describe('zdf push debit-memo', () => {
 
     expect(mockPost).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it('target not found (create branch): deletes the stale source file when the created memo is assigned a DIFFERENT memoNumber than the source', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    const sourceRecord = {
+      memoNumber: 'DM-001',
+      invoiceId: 'source-inv-id',
+      debitMemoItems: [{ invoiceItemId: 'source-item-1', skuName: 'SKU-A', amount: 100 }],
+    };
+    mockRead.mockImplementation((_resource: string, arg: string) => {
+      if (arg === 'DM-001') return sourceRecord;
+      if (arg === 'new-dm-id') return { memoNumber: 'DM-999' };
+      return undefined;
+    });
+    mockReadByIdOrName.mockReturnValue({ _zdf: { sandbox: { id: 'target-inv-internal-id', key: 'INV-ACTIVE' } } });
+    mockGet.mockResolvedValue({ invoiceItems: [{ id: 'target-item-1', skuName: 'SKU-A', amount: 100 }] });
+    mockPost.mockResolvedValue({ success: true, id: 'new-dm-id' });
+    mockResolve.mockResolvedValue(undefined);
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'debit-memo', 'DM-001']);
+
+    expect(mockDeleteFile).toHaveBeenCalledWith('debit-memo', 'DM-001');
+  });
+
+  it('target not found (create branch): does NOT delete the source file when the created memo keeps the same memoNumber', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    const sourceRecord = {
+      memoNumber: 'DM-001',
+      invoiceId: 'source-inv-id',
+      debitMemoItems: [{ invoiceItemId: 'source-item-1', skuName: 'SKU-A', amount: 100 }],
+    };
+    mockRead.mockImplementation((_resource: string, arg: string) => {
+      if (arg === 'DM-001') return sourceRecord;
+      if (arg === 'new-dm-id') return { memoNumber: 'DM-001' };
+      return undefined;
+    });
+    mockReadByIdOrName.mockReturnValue({ _zdf: { sandbox: { id: 'target-inv-internal-id', key: 'INV-ACTIVE' } } });
+    mockGet.mockResolvedValue({ invoiceItems: [{ id: 'target-item-1', skuName: 'SKU-A', amount: 100 }] });
+    mockPost.mockResolvedValue({ success: true, id: 'new-dm-id' });
+    mockResolve.mockResolvedValue(undefined);
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'debit-memo', 'DM-001']);
+
+    expect(mockDeleteFile).not.toHaveBeenCalled();
   });
 });
 

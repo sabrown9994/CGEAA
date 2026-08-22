@@ -24,7 +24,8 @@ const mockWrite = vi.hoisted(() => vi.fn());
 const mockRead = vi.hoisted(() => vi.fn());
 const mockReadIfExists = vi.hoisted(() => vi.fn());
 const mockRename = vi.hoisted(() => vi.fn());
-vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, readResourceFileIfExists: mockReadIfExists, renameResourceFile: mockRename, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
+const mockDeleteFile = vi.hoisted(() => vi.fn());
+vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, readResourceFileIfExists: mockReadIfExists, renameResourceFile: mockRename, deleteResourceFile: mockDeleteFile, resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
 
@@ -66,11 +67,17 @@ describe('zdf pull invoice', () => {
 
 describe('zdf create invoice', () => {
   it('posts the file body verbatim to /v1/invoices and renames the local file to res.id', async () => {
+    // NOTE: passed by reference — the command mutates this object in place (records _zdf onto it
+    // before writing it back), so the POST assertion below compares against a literal shape rather
+    // than this `body` reference (which no longer reflects its pre-create state by the time the
+    // assertion runs).
     const body = { accountNumber: 'A00000001', invoiceDate: '2026-08-18', invoiceItems: [{ amount: 10 }] };
     mockRead.mockReturnValue(body);
     mockPost.mockResolvedValue({ success: true, id: 'INV-1' });
     await makeProgram().parseAsync(['node', 'zdf', 'create', 'invoice', 'my-invoice']);
-    expect(mockPost).toHaveBeenCalledWith('/v1/invoices', body);
+    expect(mockPost).toHaveBeenCalledWith('/v1/invoices', {
+      accountNumber: 'A00000001', invoiceDate: '2026-08-18', invoiceItems: [{ amount: 10 }],
+    });
     expect(mockRename).toHaveBeenCalledWith('invoice', 'my-invoice', 'INV-1');
   });
 
@@ -94,6 +101,31 @@ describe('zdf create invoice', () => {
     expect(mockPost).toHaveBeenCalledWith('/v1/invoices', expect.objectContaining({ status: 'Posted' }));
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
+  });
+
+  it('the body posted to Zuora never carries a _zdf map (create off a file that was previously pulled)', async () => {
+    const body = {
+      accountNumber: 'A00000001',
+      invoiceDate: '2026-08-18',
+      invoiceItems: [{ amount: 10 }],
+      _zdf: { sandbox: { id: 'old-id', key: 'OLD-1' } },
+    };
+    mockRead.mockReturnValue(body);
+    mockPost.mockResolvedValue({ success: true, id: 'INV-1' });
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'invoice', 'my-invoice']);
+    const postedBody = mockPost.mock.calls[0][1] as Record<string, unknown>;
+    expect(postedBody).not.toHaveProperty('_zdf');
+  });
+
+  it('records _zdf[<env>] on the written file after create, before renaming', async () => {
+    const body = { accountNumber: 'A00000001', invoiceDate: '2026-08-18', invoiceItems: [{ amount: 10 }] };
+    mockRead.mockReturnValue(body);
+    mockPost.mockResolvedValue({ success: true, id: 'INV-1' });
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'invoice', 'my-invoice']);
+    expect(mockWrite).toHaveBeenCalledWith('invoice', 'my-invoice', expect.objectContaining({
+      _zdf: { sandbox: { id: 'INV-1', key: null } },
+    }));
+    expect(mockRename).toHaveBeenCalledWith('invoice', 'my-invoice', 'INV-1');
   });
 });
 
@@ -239,6 +271,38 @@ describe('zdf push invoice', () => {
     expect(mockPut).not.toHaveBeenCalled();
     expect(mockPost).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it('target not found (create branch): deletes the stale source file when the created invoice is assigned a DIFFERENT invoiceNumber than the source', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    const sourceRecord = { invoiceNumber: 'INV-001', accountNumber: 'A-SOURCE', invoiceItems: [{ amount: 10 }] };
+    mockRead.mockImplementation((_resource: string, arg: string) => {
+      if (arg === 'INV-001') return sourceRecord;
+      if (arg === 'created-inv-id') return { invoiceNumber: 'INV-999', accountNumber: 'A-ACTIVE' };
+      return undefined;
+    });
+    mockPost.mockResolvedValue({ success: true, id: 'created-inv-id' });
+    mockResolve.mockResolvedValue(undefined);
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001']);
+
+    expect(mockDeleteFile).toHaveBeenCalledWith('invoice', 'INV-001');
+  });
+
+  it('target not found (create branch): does NOT delete the source file when the created invoice keeps the same invoiceNumber', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    const sourceRecord = { invoiceNumber: 'INV-001', accountNumber: 'A-SOURCE', invoiceItems: [{ amount: 10 }] };
+    mockRead.mockImplementation((_resource: string, arg: string) => {
+      if (arg === 'INV-001') return sourceRecord;
+      if (arg === 'created-inv-id') return { invoiceNumber: 'INV-001', accountNumber: 'A-ACTIVE' };
+      return undefined;
+    });
+    mockPost.mockResolvedValue({ success: true, id: 'created-inv-id' });
+    mockResolve.mockResolvedValue(undefined);
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001']);
+
+    expect(mockDeleteFile).not.toHaveBeenCalled();
   });
 });
 

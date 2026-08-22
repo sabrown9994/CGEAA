@@ -11,7 +11,8 @@ vi.mock('../../api/client.js', () => ({ apiGet: mockGet, apiPost: mockPost, apiP
 const mockWrite = vi.hoisted(() => vi.fn());
 const mockRead = vi.hoisted(() => vi.fn());
 const mockRename = vi.hoisted(() => vi.fn());
-vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, renameResourceFile: mockRename, resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT') }));
+const mockDeleteFile = vi.hoisted(() => vi.fn());
+vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, renameResourceFile: mockRename, deleteResourceFile: mockDeleteFile, resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT') }));
 
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
@@ -216,5 +217,37 @@ describe('zdf push account', () => {
       makeProgram().parseAsync(['node', 'zdf', 'push', 'account', 'acc-1'])
     ).rejects.toThrow('exit');
     exitSpy.mockRestore();
+  });
+
+  it('target not found (create branch): deletes the stale source file when the created account is assigned a DIFFERENT accountNumber than the source', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    const sourceRecord = { basicInfo: { accountNumber: 'A-SOURCE', name: 'Brand New Acct' } };
+    mockRead.mockImplementation((_resource: string, arg: string) => {
+      if (arg === 'acc-1') return sourceRecord;
+      if (arg === 'created-id') return { basicInfo: { accountNumber: 'A-TARGET', name: 'Brand New Acct' } };
+      return undefined;
+    });
+    mockPost.mockResolvedValue({ accountId: 'created-id', success: true });
+    mockResolve.mockResolvedValue(undefined);
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'account', 'acc-1']);
+
+    expect(mockDeleteFile).toHaveBeenCalledWith('account', 'acc-1');
+  });
+
+  it('target not found (create branch): does NOT delete the source file when the created account keeps the same accountNumber', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    const sourceRecord = { basicInfo: { accountNumber: 'A-SOURCE', name: 'Brand New Acct' } };
+    mockRead.mockImplementation((_resource: string, arg: string) => {
+      if (arg === 'acc-1') return sourceRecord;
+      if (arg === 'created-id') return { basicInfo: { accountNumber: 'A-SOURCE', name: 'Brand New Acct' } };
+      return undefined;
+    });
+    mockPost.mockResolvedValue({ accountId: 'created-id', success: true });
+    mockResolve.mockResolvedValue(undefined);
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'account', 'acc-1']);
+
+    expect(mockDeleteFile).not.toHaveBeenCalled();
   });
 });

@@ -1,15 +1,15 @@
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
 import { apiGet, apiPost, apiPut, apiDelete } from '../api/client.js';
-import { readResourceFile, readResourceFileIfExists, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
+import { readResourceFile, readResourceFileIfExists, renameResourceFile, resolveFilePath, getOutputDir, writeResourceFile } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.js';
-import { resolveTargetId } from '../helpers/upsert.js';
-import { stripEnvMap, activeEnvName, ENV_MAP_KEY, EnvMap } from '../helpers/env-map.js';
-import { getOrCreate, capturePriorEnvMap, carryForwardEnvMapToFile } from '../helpers/upsert-command.js';
+import { resolveTargetId, crossTenantKeyValue } from '../helpers/upsert.js';
+import { stripEnvMap, activeEnvName, ENV_MAP_KEY, EnvMap, setEnvEntry } from '../helpers/env-map.js';
+import { getOrCreate, capturePriorEnvMap, carryForwardEnvMap, carryForwardEnvMapToFile, deleteStaleSourceFile } from '../helpers/upsert-command.js';
 
 const RESOURCE = 'invoice';
 const ENDPOINT = '/v1/invoices';
@@ -74,15 +74,28 @@ export function register(program: Command): void {
         const body: unknown = opts.file
           ? JSON.parse(readFileSync(opts.file, 'utf-8')) as unknown
           : readResourceFile(RESOURCE, name);
+        // Captured BEFORE any mutation — see accounts.ts/products.ts create for why this must be
+        // read straight off the in-memory record before stripEnvMap/setEnvEntry run.
+        const priorMap = capturePriorEnvMap(body as Record<string, unknown> | undefined);
         if (opts.post && typeof body === 'object' && body !== null) {
           (body as Record<string, unknown>).status = 'Posted';
         }
         if (opts.post) {
           output.warn('--post creates the invoice in Posted status; a Posted invoice cannot be cancelled or deleted via zdf on this tenant.');
         }
-        const res = await apiPost<ZuoraWriteResponse & { id: string }>(ENDPOINT, body);
+        // `pull` writes `_zdf` into invoice files, so a create off a pulled file must never let it
+        // reach Zuora — strip it from the outbound body on every post path (matches
+        // accounts.ts/products.ts create).
+        const res = await apiPost<ZuoraWriteResponse & { id: string }>(ENDPOINT, stripEnvMap(body));
         assertSuccess(res, 'invoice create');
-        if (!opts.file) renameResourceFile(RESOURCE, name, res.id);
+        if (!opts.file) {
+          const fileRecord = body as Record<string, unknown>;
+          const key = crossTenantKeyValue(RESOURCE, res as unknown as Record<string, unknown>) ?? crossTenantKeyValue(RESOURCE, fileRecord);
+          setEnvEntry(fileRecord, activeEnvName(), { id: res.id, key });
+          carryForwardEnvMap(fileRecord, priorMap);
+          writeResourceFile(RESOURCE, name, fileRecord);
+          renameResourceFile(RESOURCE, name, res.id);
+        }
         output.success(`Invoice created. Zuora ID: ${res.id}`);
       })()
     );
@@ -123,6 +136,12 @@ export function register(program: Command): void {
           assertSuccess(res, 'invoice create');
           await resolveAndSync(RESOURCE, res.id, 'push');
           carryForwardEnvMapToFile(RESOURCE, res.id, priorMap);
+          // Invoice is natural-keyed (invoiceNumber, tenant-assigned — NOT preserved from the
+          // source). The file resolveAndSync just wrote is named by the NEW tenant's invoiceNumber,
+          // which almost always differs from the source file's; delete the now-stale source so a
+          // repeat `push <arg>` can't re-read it (still unmapped, still keyed by the OLD number)
+          // and duplicate-create. No-op when the names happen to match.
+          deleteStaleSourceFile(RESOURCE, id, fileRecord, res.id);
           output.success(`Invoice created. Zuora ID: ${res.id}`);
         }
       })()
