@@ -10,7 +10,7 @@ vi.mock('../../api/client.js', () => ({
 const mockGetActiveEnv = vi.hoisted(() => vi.fn());
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: mockGetActiveEnv }));
 
-import { crossTenantKeyValue, searchByKey, verifyId, resolveTargetId } from '../../helpers/upsert.js';
+import { crossTenantKeyValue, searchByKey, verifyId, resolveTargetId, matchInvoiceItems } from '../../helpers/upsert.js';
 
 beforeEach(() => {
   mockApiGet.mockReset();
@@ -212,5 +212,81 @@ describe('resolveTargetId', () => {
     const result = await resolveTargetId('account', record);
     expect(result).toEqual({ id: 'staging-id', found: true });
     expect(mockApiGet).toHaveBeenCalledWith('/v1/accounts/staging-id');
+  });
+});
+
+describe('matchInvoiceItems', () => {
+  it('matches a single item by skuName and amount, substituting the target item id', () => {
+    const memoItems = [{ skuName: 'SKU-A', amount: 100 }];
+    const targetItems = [
+      { id: 'target-item-1', skuName: 'SKU-A', amount: 100 },
+      { id: 'target-item-2', skuName: 'SKU-B', amount: 50 },
+    ];
+    const result = matchInvoiceItems(memoItems, targetItems);
+    expect(result).toEqual([{ invoiceItemId: 'target-item-1', amount: 100, skuName: 'SKU-A' }]);
+  });
+
+  it('matches multiple items independently and preserves input order', () => {
+    const memoItems = [
+      { skuName: 'SKU-A', amount: 100 },
+      { skuName: 'SKU-B', amount: 50 },
+    ];
+    const targetItems = [
+      { id: 'target-item-2', skuName: 'SKU-B', amount: 50 },
+      { id: 'target-item-1', skuName: 'SKU-A', amount: 100 },
+    ];
+    const result = matchInvoiceItems(memoItems, targetItems);
+    expect(result).toEqual([
+      { invoiceItemId: 'target-item-1', amount: 100, skuName: 'SKU-A' },
+      { invoiceItemId: 'target-item-2', amount: 50, skuName: 'SKU-B' },
+    ]);
+  });
+
+  it('falls back to the `sku` field name on both sides when `skuName` is absent', () => {
+    const memoItems = [{ sku: 'SKU-A', amount: 100 }];
+    const targetItems = [{ id: 'target-item-1', sku: 'SKU-A', amount: 100 }];
+    const result = matchInvoiceItems(memoItems, targetItems);
+    expect(result).toEqual([{ invoiceItemId: 'target-item-1', amount: 100, skuName: 'SKU-A' }]);
+  });
+
+  it('throws naming the skuName/amount when no target item matches', () => {
+    const memoItems = [{ skuName: 'SKU-A', amount: 100 }];
+    const targetItems = [{ id: 'target-item-1', skuName: 'SKU-A', amount: 999 }];
+    expect(() => matchInvoiceItems(memoItems, targetItems)).toThrow(/SKU-A.*100/);
+  });
+
+  it('throws when zero target items exist at all', () => {
+    const memoItems = [{ skuName: 'SKU-A', amount: 100 }];
+    expect(() => matchInvoiceItems(memoItems, [])).toThrow(/No matching item/);
+  });
+
+  it('throws when more than one target item matches (ambiguous)', () => {
+    const memoItems = [{ skuName: 'SKU-A', amount: 100 }];
+    const targetItems = [
+      { id: 'target-item-1', skuName: 'SKU-A', amount: 100 },
+      { id: 'target-item-2', skuName: 'SKU-A', amount: 100 },
+    ];
+    expect(() => matchInvoiceItems(memoItems, targetItems)).toThrow(/Ambiguous match/);
+  });
+
+  it('throws when a memo item has no skuName/sku', () => {
+    const memoItems = [{ amount: 100 }];
+    expect(() => matchInvoiceItems(memoItems, [{ id: 'x', skuName: 'SKU-A', amount: 100 }])).toThrow(/skuName\/sku/);
+  });
+
+  it('throws when a memo item has no numeric amount', () => {
+    const memoItems = [{ skuName: 'SKU-A' }];
+    expect(() => matchInvoiceItems(memoItems, [{ id: 'x', skuName: 'SKU-A', amount: 100 }])).toThrow(/numeric amount/);
+  });
+
+  it('matches a string-valued amount against a numeric target amount', () => {
+    const memoItems = [{ skuName: 'SKU-A', amount: '100' }];
+    const targetItems = [{ id: 'target-item-1', skuName: 'SKU-A', amount: 100 }];
+    const result = matchInvoiceItems(memoItems, targetItems);
+    expect(result).toEqual([{ invoiceItemId: 'target-item-1', amount: 100, skuName: 'SKU-A' }]);
+  });
+
+  it('returns an empty array for an empty memoItems input', () => {
+    expect(matchInvoiceItems([], [{ id: 'x', skuName: 'SKU-A', amount: 100 }])).toEqual([]);
   });
 });

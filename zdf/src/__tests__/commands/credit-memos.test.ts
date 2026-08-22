@@ -22,10 +22,19 @@ vi.mock('../../helpers/dependency-graph.js', () => ({
 
 const mockWrite = vi.hoisted(() => vi.fn());
 const mockRead = vi.hoisted(() => vi.fn());
+const mockReadIfExists = vi.hoisted(() => vi.fn());
 const mockRename = vi.hoisted(() => vi.fn());
-vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, renameResourceFile: mockRename, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
+vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, readResourceFileIfExists: mockReadIfExists, renameResourceFile: mockRename, deleteResourceFile: vi.fn(), resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
+
+// resolveTargetId is mocked per-test (drives the push upsert branch); matchInvoiceItems is kept
+// real (pure) — mirrors invoices.test.ts / products.test.ts.
+const mockResolveTargetId = vi.hoisted(() => vi.fn());
+vi.mock('../../helpers/upsert.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/upsert.js')>();
+  return { ...actual, resolveTargetId: mockResolveTargetId };
+});
 
 import { register } from '../../commands/credit-memos.js';
 
@@ -87,12 +96,136 @@ describe('zdf create credit-memo', () => {
 });
 
 describe('zdf push credit-memo', () => {
-  it('reads file, puts to Zuora', async () => {
-    mockRead.mockReturnValue({ id: 'CM-001', creditMemoItems: [{ id: 'item-1', amount: 50 }] });
+  it('target found: PUTs the RESOLVED id, header fields only (creditMemoItems stripped), and calls resolveAndSync', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: 'resolved-cm-id', found: true });
+    mockRead.mockReturnValue({
+      memoNumber: 'CM-001',
+      comment: 'hi',
+      reasonCode: 'Adjustment',
+      creditMemoItems: [{ id: 'item-1', amount: 50 }],
+    });
     mockPut.mockResolvedValue({ success: true });
     mockResolve.mockResolvedValue(undefined);
+
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'credit-memo', 'CM-001']);
-    expect(mockPut).toHaveBeenCalledWith('/v1/credit-memos/CM-001', expect.any(Object));
+
+    expect(mockPut).toHaveBeenCalledWith('/v1/credit-memos/resolved-cm-id', { comment: 'hi', reasonCode: 'Adjustment' });
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(mockResolve).toHaveBeenCalledWith('credit-memo', 'resolved-cm-id', 'push');
+  });
+
+  it('target found: the body PUT to Zuora never carries a _zdf map', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: 'CM-001', found: true });
+    mockRead.mockReturnValue({
+      memoNumber: 'CM-001',
+      comment: 'hi',
+      _zdf: { sandbox: { id: 'CM-001', key: 'CM-001' } },
+    });
+    mockPut.mockResolvedValue({ success: true });
+    mockResolve.mockResolvedValue(undefined);
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'credit-memo', 'CM-001']);
+
+    const body = mockPut.mock.calls[0][1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty('_zdf');
+  });
+
+  it('target not found: creates from the source invoice, remapping each item\'s invoiceItemId to the matched target-invoice item', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    mockRead.mockReturnValue({
+      invoiceId: 'source-inv-id',
+      creditMemoItems: [{ invoiceItemId: 'source-item-1', skuName: 'SKU-A', amount: 100 }],
+    });
+    mockReadIfExists.mockReturnValue({ _zdf: { sandbox: { id: 'target-inv-internal-id', key: 'INV-ACTIVE' } } });
+    mockGet.mockResolvedValue({ invoiceItems: [{ id: 'target-item-1', skuName: 'SKU-A', amount: 100 }] });
+    mockPost.mockResolvedValue({ success: true, id: 'new-cm-id' });
+    mockResolve.mockResolvedValue(undefined);
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'credit-memo', 'CM-001']);
+
+    expect(mockReadIfExists).toHaveBeenCalledWith('invoice', 'source-inv-id');
+    expect(mockGet).toHaveBeenCalledWith('/v1/invoices/INV-ACTIVE/items');
+    expect(mockPost).toHaveBeenCalledWith('/v1/credit-memos/invoice/INV-ACTIVE', {
+      items: [{ invoiceItemId: 'target-item-1', amount: 100, skuName: 'SKU-A' }],
+    });
+    expect(mockPut).not.toHaveBeenCalled();
+    expect(mockResolve).toHaveBeenCalledWith('credit-memo', 'new-cm-id', 'push');
+  });
+
+  it('target not found: an explicit --invoice option is used as the source invoice id', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    mockRead.mockReturnValue({ creditMemoItems: [{ skuName: 'SKU-A', amount: 100 }] });
+    mockReadIfExists.mockReturnValue({ _zdf: { sandbox: { id: 'target-inv-id', key: 'INV-ACTIVE' } } });
+    mockGet.mockResolvedValue({ invoiceItems: [{ id: 'target-item-1', skuName: 'SKU-A', amount: 100 }] });
+    mockPost.mockResolvedValue({ success: true, id: 'new-cm-id' });
+    mockResolve.mockResolvedValue(undefined);
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'credit-memo', 'CM-001', '--invoice', 'explicit-inv-id']);
+
+    expect(mockReadIfExists).toHaveBeenCalledWith('invoice', 'explicit-inv-id');
+  });
+
+  it('target not found: throws before any Zuora write when the source invoice cannot be determined', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    mockRead.mockReturnValue({ creditMemoItems: [{ skuName: 'SKU-A', amount: 100 }] });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'push', 'credit-memo', 'CM-001'])
+    ).rejects.toThrow('exit');
+
+    expect(mockReadIfExists).not.toHaveBeenCalled();
+    expect(mockGet).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it('target not found: throws before any Zuora write when the source invoice file is not mapped into the active env', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    mockRead.mockReturnValue({ invoiceId: 'source-inv-id', creditMemoItems: [{ skuName: 'SKU-A', amount: 100 }] });
+    mockReadIfExists.mockReturnValue({ _zdf: { otherEnv: { id: 'x', key: 'INV-OTHER' } } });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'push', 'credit-memo', 'CM-001'])
+    ).rejects.toThrow('exit');
+
+    expect(mockGet).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it('target not found: throws before any Zuora write when the source invoice file does not exist locally', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    mockRead.mockReturnValue({ invoiceId: 'source-inv-id', creditMemoItems: [{ skuName: 'SKU-A', amount: 100 }] });
+    mockReadIfExists.mockReturnValue(undefined);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'push', 'credit-memo', 'CM-001'])
+    ).rejects.toThrow('exit');
+
+    expect(mockGet).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it('target not found: throws and makes no Zuora write when a memo item cannot be matched on the target invoice', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    mockRead.mockReturnValue({
+      invoiceId: 'source-inv-id',
+      creditMemoItems: [{ skuName: 'SKU-A', amount: 100 }],
+    });
+    mockReadIfExists.mockReturnValue({ _zdf: { sandbox: { id: 'x', key: 'INV-ACTIVE' } } });
+    mockGet.mockResolvedValue({ invoiceItems: [{ id: 'target-item-1', skuName: 'SKU-B', amount: 999 }] });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'push', 'credit-memo', 'CM-001'])
+    ).rejects.toThrow('exit');
+
+    expect(mockPost).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
   });
 });
 

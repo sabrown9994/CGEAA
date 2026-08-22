@@ -114,3 +114,55 @@ export async function resolveTargetId(
 
   return { id: null, found: false };
 }
+
+export interface MatchedMemoItem {
+  invoiceItemId: string;
+  amount: unknown;
+  skuName: string;
+}
+
+/** A source-tenant memo item's identifying fields for matching. Accepts either `skuName` (the
+ * field name required by the credit-/debit-memo create body — see zdf/CLAUDE.md) or `sku`, since
+ * it is not confirmed against live data which field name the item carries in every response shape. */
+function itemSkuName(item: Rec): string | undefined {
+  return str(item['skuName'] ?? item['sku']);
+}
+
+function itemAmount(item: Rec): number | undefined {
+  const v = item['amount'];
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v))) return Number(v);
+  return undefined;
+}
+
+/**
+ * Matches each SOURCE-tenant memo item to exactly one item on the TARGET (active-tenant) invoice,
+ * by (skuName, amount), and returns the create-body item shape with the target item's `id`
+ * substituted in as `invoiceItemId`. Pure — no I/O. Throws (naming the offending skuName/amount) on:
+ * a memo item missing skuName or a numeric amount, zero matches, or more than one match (ambiguous
+ * — refuses to guess). Order of the returned array matches the input `memoItems` order.
+ */
+export function matchInvoiceItems(memoItems: Rec[], targetInvoiceItems: Rec[]): MatchedMemoItem[] {
+  return memoItems.map((memoItem) => {
+    const skuName = itemSkuName(memoItem);
+    if (!skuName) {
+      throw new Error('Memo item is missing a skuName/sku — cannot match it against the target invoice\'s items.');
+    }
+    const amount = itemAmount(memoItem);
+    if (amount === undefined) {
+      throw new Error(`Memo item "${skuName}" is missing a numeric amount — cannot match it against the target invoice's items.`);
+    }
+    const matches = targetInvoiceItems.filter((ti) => itemSkuName(ti) === skuName && itemAmount(ti) === amount);
+    if (matches.length === 0) {
+      throw new Error(`No matching item found on the target invoice for skuName "${skuName}" and amount ${amount}.`);
+    }
+    if (matches.length > 1) {
+      throw new Error(`Ambiguous match: ${matches.length} items on the target invoice have skuName "${skuName}" and amount ${amount}.`);
+    }
+    const targetId = str(matches[0]['id']);
+    if (!targetId) {
+      throw new Error(`Matched target invoice item for skuName "${skuName}" has no id.`);
+    }
+    return { invoiceItemId: targetId, amount, skuName };
+  });
+}

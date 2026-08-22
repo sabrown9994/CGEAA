@@ -1,18 +1,58 @@
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
 import { apiGet, apiPost, apiPut, apiDelete } from '../api/client.js';
-import { readResourceFile, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
+import { readResourceFile, readResourceFileIfExists, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.js';
+import { resolveTargetId, matchInvoiceItems } from '../helpers/upsert.js';
+import { stripEnvMap, activeEnvName, getEnvEntry } from '../helpers/env-map.js';
+import { getOrCreate, capturePriorEnvMap, carryForwardEnvMapToFile } from '../helpers/upsert-command.js';
 
 const RESOURCE = 'credit-memo';
 const ENDPOINT = '/v1/credit-memos';
+const ITEMS_KEY = 'creditMemoItems';
 
-function getOrCreate(program: Command, name: string, description: string): Command {
-  return program.commands.find((c) => c.name() === name) ?? program.command(name).description(description);
+type Rec = Record<string, unknown>;
+
+/** Determines the SOURCE invoice id a memo-being-created should be built from: prefer the explicit
+ * --invoice option, else look for `invoiceId` on the memo record's header or (per-item, the more
+ * commonly populated spot) its items array — the most reliable field this tenant's memo body is
+ * known to expose (see zdf/CLAUDE.md; UNCONFIRMED against live cross-tenant data). Throws if neither
+ * is present — the create branch cannot proceed without a source invoice to remap from. */
+function resolveSourceInvoiceId(fileRecord: Rec, explicitInvoiceId: string | undefined): string {
+  if (explicitInvoiceId) return explicitInvoiceId;
+  const direct = fileRecord['invoiceId'];
+  if (typeof direct === 'string' && direct.trim()) return direct.trim();
+  const items = fileRecord[ITEMS_KEY] as Rec[] | undefined;
+  if (Array.isArray(items)) {
+    for (const item of items) {
+      const v = item?.['invoiceId'];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+  }
+  throw new Error(
+    `create ${RESOURCE} requires --invoice <sourceInvoiceId>: the local file has no invoiceId to derive it from.`
+  );
+}
+
+/** Resolves the source invoice's mapped key in the ACTIVE tenant — the invoice this memo will be
+ * created against — by reading the sibling local invoice file and its `_zdf[activeEnv]` entry.
+ * Throws BEFORE any Zuora write if that file is missing or not yet mapped into this env; there is
+ * nothing safe to create the memo against otherwise. */
+function resolveTargetInvoiceKey(sourceInvoiceId: string): string {
+  const active = activeEnvName();
+  const invoiceFile = readResourceFileIfExists('invoice', sourceInvoiceId) as Rec | undefined;
+  const entry = invoiceFile ? getEnvEntry(invoiceFile, active) : undefined;
+  const key = entry?.key ?? entry?.id;
+  if (!invoiceFile || !key) {
+    throw new Error(
+      `Cannot create ${RESOURCE} in ${active}: source invoice not mapped there — pull/push invoice ${sourceInvoiceId} into ${active} first.`
+    );
+  }
+  return String(key);
 }
 
 export function register(program: Command): void {
@@ -62,15 +102,41 @@ export function register(program: Command): void {
 
   pushCmd
     .command('credit-memo <id>')
-    .description('Update a credit memo in Zuora from a local file')
-    .action((id: string) =>
+    .description('Update a credit memo in Zuora from a local file (upsert: creates from a source invoice if not found in the active tenant)')
+    .option('--invoice <invoiceId>', 'source invoice ID to create the credit memo from (only used when creating)')
+    .action((id: string, opts: { invoice?: string }) =>
       runCommand(program, async () => {
-        const fileData = readResourceFile(RESOURCE, id) as Record<string, unknown>;
-        const body = filterUpdatableFields(RESOURCE, fileData);
-        const res = await apiPut<ZuoraWriteResponse>(`${ENDPOINT}/${id}`, body);
-        assertSuccess(res, 'credit-memo push');
-        await resolveAndSync(RESOURCE, id, 'push');
-        output.success(`Credit memo ${id} updated.`);
+        const fileRecord = readResourceFile(RESOURCE, id) as Rec;
+        // Captured BEFORE the upsert — see env-map.ts / upsert-command.ts for why this must be
+        // captured up front and carried forward explicitly after resolveAndSync's re-fetch/write.
+        const priorMap = capturePriorEnvMap(fileRecord);
+        const target = await resolveTargetId(RESOURCE, fileRecord);
+
+        if (target.found) {
+          // Header fields only — filterUpdatableFields' credit-memo allowlist has no items entry,
+          // so creditMemoItems is stripped automatically; Zuora rejects items in a memo PUT anyway.
+          const body = stripEnvMap(filterUpdatableFields(RESOURCE, fileRecord));
+          const res = await apiPut<ZuoraWriteResponse>(`${ENDPOINT}/${target.id}`, body);
+          assertSuccess(res, 'credit-memo push');
+          await resolveAndSync(RESOURCE, target.id, 'push');
+          carryForwardEnvMapToFile(RESOURCE, target.id, priorMap);
+          output.success(`Credit memo ${target.id} updated.`);
+        } else {
+          // R3: cross-tenant create from a source invoice. Both the target invoice key and each
+          // item's invoiceItemId are SOURCE-tenant ids and must be remapped to the ACTIVE tenant
+          // before any Zuora write — see resolveSourceInvoiceId / resolveTargetInvoiceKey above.
+          const sourceInvoiceId = resolveSourceInvoiceId(fileRecord, opts.invoice);
+          const targetInvoiceKey = resolveTargetInvoiceKey(sourceInvoiceId);
+          const itemsRes = await apiGet<{ invoiceItems?: Rec[] }>(`/v1/invoices/${targetInvoiceKey}/items`);
+          const targetItems = itemsRes.invoiceItems ?? [];
+          const memoItems = (fileRecord[ITEMS_KEY] as Rec[] | undefined) ?? (fileRecord['items'] as Rec[] | undefined) ?? [];
+          const matched = matchInvoiceItems(memoItems, targetItems);
+          const res = await apiPost<ZuoraWriteResponse & { id: string }>(`${ENDPOINT}/invoice/${targetInvoiceKey}`, { items: matched });
+          assertSuccess(res, 'credit-memo create');
+          await resolveAndSync(RESOURCE, res.id, 'push');
+          carryForwardEnvMapToFile(RESOURCE, res.id, priorMap);
+          output.success(`Credit memo created. Zuora ID: ${res.id}`);
+        }
       })()
     );
 
