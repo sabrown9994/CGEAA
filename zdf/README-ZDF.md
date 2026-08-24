@@ -215,10 +215,27 @@ CI job that must, e.g., seed a financial fix into production would set **both**
 npm install
 npm run build   # runs: tsup bin/zdf.ts --format cjs --out-dir dist
 
-# Authenticate (saved to ~/.zdf/config.json)
-node dist/zdf.js auth login --name sandbox --url https://rest.sandbox.na.zuora.com --client-id <id> --client-secret <secret>
-node dist/zdf.js auth use sandbox
+# Authenticate — `auth add` is INTERACTIVE (saved to ~/.zdf/config.json):
+#   prompts for: name → region (US/EU/APAC) → environment type → client id → client secret.
+#   The base URL is derived from the region + environment-type you pick (see the table below).
+node dist/zdf.js auth add
+node dist/zdf.js auth use sandbox      # set the active environment
+node dist/zdf.js auth env              # confirm the active environment
 ```
+
+Environment type → base URL (pick the one matching your tenant when prompted):
+
+| Environment type | Base URL |
+|---|---|
+| US Developer & Central Sandbox | `https://rest.test.zuora.com` |
+| US API Sandbox (Cloud 2) | `https://rest.apisandbox.zuora.com` |
+| US API Sandbox (Cloud 1) | `https://rest.sandbox.na.zuora.com` |
+| US Production (Cloud 2) | `https://rest.zuora.com` |
+| US Production (Cloud 1) | `https://rest.na.zuora.com` |
+| EU / APAC Sandbox & Production | `rest.(sandbox.)?(eu\|ap).zuora.com` variants |
+
+For CI / non-interactive use, skip `auth add` entirely and set `ZDF_CLIENT_ID` /
+`ZDF_CLIENT_SECRET` / `ZDF_BASE_URL` (+ optional `ZDF_ENV_NAME`) — see [Production Safety](#production-safety).
 
 ---
 
@@ -249,10 +266,11 @@ A progress indicator (spinner) is shown during long-running pulls when connected
 
 | Subcommand | Description |
 |------------|-------------|
-| `auth login` | Save a new named environment (URL + OAuth credentials) |
+| `auth add` | Add a new named environment — **interactive** (prompts for name → region → environment type → client id → client secret; base URL is derived from region + type) |
 | `auth use <name>` | Set the active environment |
-| `auth show` | Show current active environment |
+| `auth env` | Show the currently active environment |
 | `auth list` | List all saved environments |
+| `auth remove <name>` | Remove a named environment |
 
 The CLI transparently refreshes the OAuth token when it has expired, and also reactively refreshes-and-retries the request once if Zuora responds with an HTTP 401.
 

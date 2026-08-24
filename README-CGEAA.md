@@ -154,22 +154,31 @@ cgeaa zuora --help      # should print the ZDF usage/‑‑help text
 
 ### 2. Authenticate to a tenant
 
+`auth add` is **interactive** — it prompts for the environment name, region, environment
+type, and OAuth client id / secret (the base URL is derived from the region + environment
+type you pick, so there's no `--url` to supply):
+
 ```bash
-cgeaa zuora auth add \
-  --name intQA \
-  --url https://rest.test.zuora.com \
-  --client-id <your-client-id> \
-  --client-secret <your-client-secret>
-cgeaa zuora auth use intQA
+cgeaa zuora auth add
+#   Environment name:   intQA
+#   Region:             US
+#   Environment type:   US Developer & Central Sandbox   → https://rest.test.zuora.com
+#   Client ID:          <your-client-id>
+#   Client Secret:      <your-client-secret>   (masked input)
+cgeaa zuora auth use intQA        # set the active environment
 ```
 
-Use the name and base URL for your environment:
+Pick the environment type matching your tenant when prompted:
 
-| Environment | Base URL |
+| Environment type (prompt choice) | Base URL |
 |---|---|
-| intQA (US Developer & Central Sandbox) | `https://rest.test.zuora.com` |
-| US API Sandbox | `https://rest.apisandbox.zuora.com` |
-| US Production | `https://rest.zuora.com` |
+| US Developer & Central Sandbox | `https://rest.test.zuora.com` |
+| US API Sandbox (Cloud 2) | `https://rest.apisandbox.zuora.com` |
+| US API Sandbox (Cloud 1) | `https://rest.sandbox.na.zuora.com` |
+| US Production (Cloud 2) | `https://rest.zuora.com` |
+| US Production (Cloud 1) | `https://rest.na.zuora.com` |
+
+(EU and APAC regions offer their own Sandbox / Production types with matching `.eu`/`.ap` URLs.)
 
 Credentials are stored in `~/.zdf/config.json` on your machine and are **not** committed to
 the repository. For CI, set `ZDF_CLIENT_ID` / `ZDF_CLIENT_SECRET` / `ZDF_BASE_URL` instead
