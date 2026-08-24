@@ -10,6 +10,7 @@ import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.j
 import { resolveTargetId, crossTenantKeyValue } from '../helpers/upsert.js';
 import { stripEnvMap, activeEnvName, ENV_MAP_KEY, EnvMap, setEnvEntry } from '../helpers/env-map.js';
 import { getOrCreate, capturePriorEnvMap, carryForwardEnvMap, carryForwardEnvMapToFile, deleteStaleSourceFile } from '../helpers/upsert-command.js';
+import { toInvoiceCreateBody } from '../helpers/create-shape.js';
 
 const RESOURCE = 'invoice';
 const ENDPOINT = '/v1/invoices';
@@ -127,11 +128,14 @@ export function register(program: Command): void {
           carryForwardEnvMapToFile(RESOURCE, target.id, priorMap);
           output.success(`Invoice ${target.id} updated.`);
         } else {
-          // R2: the create body is unfiltered (stripEnvMap(fileRecord) verbatim), so accountNumber
-          // DOES reach the POST body — resolve (and fail fast on, before the Zuora write) the
-          // account FK remap only here, where it's actually needed.
+          // A raw pulled body (with embedded invoiceItems carrying ids/read-only fields) is not
+          // the create shape POST /v1/invoices accepts — toInvoiceCreateBody adapts it into the
+          // flat single-invoice create body (see zdf/CLAUDE.md "Invoice create / delete"). The
+          // adapter reads `accountNumber` straight off the pulled record; R2's account FK remap
+          // (source accountNumber → active-env account key) then runs on the adapted body, since
+          // toInvoiceCreateBody's output DOES carry accountNumber through unfiltered.
           const remap = resolveAccountRemap(fileRecord['accountNumber'] as string | undefined);
-          const body = applyAccountRemap(stripEnvMap(fileRecord), remap);
+          const body = applyAccountRemap(stripEnvMap(toInvoiceCreateBody(fileRecord)), remap);
           const res = await apiPost<ZuoraWriteResponse & { id: string }>(ENDPOINT, body);
           assertSuccess(res, 'invoice create');
           await resolveAndSync(RESOURCE, res.id, 'push');

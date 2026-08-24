@@ -217,6 +217,59 @@ describe('zdf push invoice', () => {
     expect(mockResolve).toHaveBeenCalledWith('invoice', 'created-inv-id', 'push');
   });
 
+  it('target not found: POSTs the full toInvoiceCreateBody adapter output for a realistic pulled fixture, with item ids/read-only fields dropped', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    mockRead.mockReturnValue({
+      id: 'stray-invoice-id',
+      invoiceNumber: 'INV-001',
+      status: 'Draft',
+      accountNumber: 'A-SOURCE',
+      invoiceDate: '2026-08-21',
+      invoiceItems: [
+        {
+          id: 'item-1',
+          invoiceId: 'stray-invoice-id',
+          amount: 42,
+          serviceStartDate: '2026-08-21 00:00:00',
+          serviceEndDate: '2026-09-20 00:00:00',
+          chargeName: 'Base Fee',
+          revenueRecognitionRuleName: 'Recognize upon invoicing',
+          deferredRevenueAccountingCode: 'Deferred Rev',
+          recognizedRevenueAccountingCode: 'Recognized Rev',
+          taxAmount: 0,
+        },
+      ],
+      _zdf: { sandbox: { id: 'stray-invoice-id', key: 'INV-001' } },
+    });
+    mockPost.mockResolvedValue({ success: true, id: 'created-inv-id' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001']);
+
+    expect(mockPost).toHaveBeenCalledWith('/v1/invoices', {
+      accountNumber: 'A-ACTIVE',
+      invoiceDate: '2026-08-21',
+      invoiceItems: [
+        {
+          amount: 42,
+          serviceStartDate: '2026-08-21 00:00:00',
+          serviceEndDate: '2026-09-20 00:00:00',
+          chargeName: 'Base Fee',
+          revenueRecognitionRuleName: 'Recognize upon invoicing',
+          deferredRevenueAccountingCode: 'Deferred Rev',
+          recognizedRevenueAccountingCode: 'Recognized Rev',
+        },
+      ],
+    });
+    const body = mockPost.mock.calls[0][1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty('_zdf');
+    expect(body).not.toHaveProperty('id');
+    expect(body).not.toHaveProperty('status');
+    const item = (body.invoiceItems as Record<string, unknown>[])[0];
+    expect(item).not.toHaveProperty('id');
+    expect(item).not.toHaveProperty('invoiceId');
+    expect(item).not.toHaveProperty('taxAmount');
+  });
+
   it('target not found: the body POSTed to Zuora never carries a _zdf map', async () => {
     mockResolveTargetId.mockResolvedValue({ id: null, found: false });
     mockRead.mockReturnValue({

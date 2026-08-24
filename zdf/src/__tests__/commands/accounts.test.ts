@@ -151,12 +151,19 @@ describe('zdf push account', () => {
     expect(mockResolve).toHaveBeenCalledWith('account', 'resolved-id', 'push');
   });
 
-  it('target not found: attempts CREATE from the local file body instead of PUT', async () => {
+  it('target not found: attempts CREATE from the local file body instead of PUT, adapted to the create-shape body', async () => {
     mockResolveTargetId.mockResolvedValue({ id: null, found: false });
     mockRead.mockReturnValue({ basicInfo: { name: 'Brand New Acct' } });
     mockPost.mockResolvedValue({ accountId: 'created-id', success: true });
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'account', 'acc-1']);
-    expect(mockPost).toHaveBeenCalledWith('/v1/accounts', { basicInfo: { name: 'Brand New Acct' } });
+    // toAccountCreateBody adapts the pulled shape — name comes through, plus the create-body
+    // defaults (billCycleDay/autoPay/invoiceCollect); the raw `basicInfo` wrapper is gone.
+    expect(mockPost).toHaveBeenCalledWith('/v1/accounts', {
+      name: 'Brand New Acct',
+      billCycleDay: 1,
+      autoPay: false,
+      invoiceCollect: false,
+    });
     expect(mockPut).not.toHaveBeenCalled();
   });
 
@@ -167,6 +174,61 @@ describe('zdf push account', () => {
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'account', 'acc-1']);
     expect(mockWrite).not.toHaveBeenCalled();
     expect(mockResolve).toHaveBeenCalledWith('account', 'created-id', 'push');
+  });
+
+  it('target not found: POSTs the full toAccountCreateBody adapter output for a realistic pulled fixture, with no read-only/_zdf fields', async () => {
+    mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    mockRead.mockReturnValue({
+      id: 'stray-account-id',
+      status: 'Active',
+      basicInfo: {
+        id: 'stray-account-id',
+        accountId: 'stray-account-id',
+        accountNumber: 'A-SOURCE',
+        name: 'Brand New Acct',
+        currency: 'USD',
+      },
+      billingAndPayment: { billCycleDay: 5, autoPay: true, currency: 'USD' },
+      billToContact: {
+        id: 'contact-1',
+        accountId: 'stray-account-id',
+        contactDescription: 'bill-to',
+        firstName: 'Jane',
+        lastName: 'Doe',
+        workEmail: 'jane@example.com',
+        state: 'CA',
+        country: 'US',
+      },
+      metrics: { balance: 100 },
+      _zdf: { sandbox: { id: 'stray-account-id', key: 'A-SOURCE' } },
+    });
+    mockPost.mockResolvedValue({ accountId: 'created-id', success: true });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'account', 'acc-1']);
+
+    expect(mockPost).toHaveBeenCalledWith('/v1/accounts', {
+      accountNumber: 'A-SOURCE',
+      name: 'Brand New Acct',
+      currency: 'USD',
+      billCycleDay: 5,
+      autoPay: true,
+      billToContact: {
+        firstName: 'Jane',
+        lastName: 'Doe',
+        workEmail: 'jane@example.com',
+        state: 'CA',
+        country: 'US',
+      },
+      invoiceCollect: false,
+    });
+    const body = mockPost.mock.calls[0][1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty('_zdf');
+    expect(body).not.toHaveProperty('id');
+    expect(body).not.toHaveProperty('status');
+    expect(body).not.toHaveProperty('metrics');
+    expect(body.billToContact).not.toHaveProperty('id');
+    expect(body.billToContact).not.toHaveProperty('accountId');
+    expect(body.billToContact).not.toHaveProperty('contactDescription');
   });
 
   it('the body PUT to Zuora on the update path never carries a _zdf map', async () => {

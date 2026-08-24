@@ -10,6 +10,7 @@ import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.j
 import { resolveTargetId, crossTenantKeyValue } from '../helpers/upsert.js';
 import { stripEnvMap, setEnvEntry, activeEnvName } from '../helpers/env-map.js';
 import { getOrCreate, capturePriorEnvMap, carryForwardEnvMap, carryForwardEnvMapToFile, deleteStaleSourceFile } from '../helpers/upsert-command.js';
+import { toAccountCreateBody } from '../helpers/create-shape.js';
 
 const RESOURCE = 'account';
 const ENDPOINT = '/v1/accounts';
@@ -101,7 +102,10 @@ export function register(program: Command): void {
           carryForwardEnvMapToFile(RESOURCE, target.id, priorMap);
           output.success(`Account ${target.id} updated.`);
         } else {
-          const body = stripEnvMap(fileRecord);
+          // A raw pulled body is rejected by POST /v1/accounts (nested read-only fields, ids,
+          // status, etc.) — toAccountCreateBody transforms it into the known-good create shape
+          // (see zdf/CLAUDE.md "Invoice create / delete" and the account create adapter tests).
+          const body = stripEnvMap(toAccountCreateBody(fileRecord));
           const res = await apiPost<ZuoraWriteResponse & { accountId: string }>(`${ENDPOINT}`, body);
           assertSuccess(res, 'account create');
           await resolveAndSync(RESOURCE, res.accountId, 'push');

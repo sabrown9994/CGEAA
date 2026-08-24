@@ -93,10 +93,14 @@ describe('push invoice — CREATE branch cleans up the stale source file (no dup
 
     await makeProgram(registerInvoices).parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-SRC']);
 
+    // toInvoiceCreateBody adapts the pulled shape for the create API — invoiceNumber is the
+    // OLD, tenant-assigned natural key (exactly the kind of read-only source field the adapter
+    // drops; Zuora assigns a fresh one on create), so it must NOT appear in the create body.
     expect(mockApiPost).toHaveBeenCalledWith('/v1/invoices', expect.objectContaining({
-      invoiceNumber: 'INV-SRC',
       invoiceDate: '2026-08-21',
+      invoiceItems: [{ amount: 10 }],
     }));
+    expect(mockApiPost.mock.calls[0][1]).not.toHaveProperty('invoiceNumber');
 
     // The stale source file (keyed by the OLD invoiceNumber) must be gone.
     expect(existsSync(resolveFilePath('invoice', 'INV-SRC'))).toBe(false);
