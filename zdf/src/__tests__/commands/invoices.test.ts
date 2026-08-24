@@ -22,10 +22,10 @@ vi.mock('../../helpers/dependency-graph.js', () => ({
 
 const mockWrite = vi.hoisted(() => vi.fn());
 const mockRead = vi.hoisted(() => vi.fn());
-const mockReadIfExists = vi.hoisted(() => vi.fn());
+const mockReadByIdOrName = vi.hoisted(() => vi.fn());
 const mockRename = vi.hoisted(() => vi.fn());
 const mockDeleteFile = vi.hoisted(() => vi.fn());
-vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, readResourceFileIfExists: mockReadIfExists, renameResourceFile: mockRename, deleteResourceFile: mockDeleteFile, resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
+vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, readResourceFileByIdOrName: mockReadByIdOrName, renameResourceFile: mockRename, deleteResourceFile: mockDeleteFile, resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
 
@@ -133,7 +133,7 @@ describe('zdf push invoice', () => {
   beforeEach(() => {
     // Default: the sibling account is already mapped into the active env with a DIFFERENT key
     // than its source accountNumber, so the remap has a visible effect unless a test overrides it.
-    mockReadIfExists.mockReturnValue({ _zdf: { sandbox: { id: 'acct-active-id', key: 'A-ACTIVE' } } });
+    mockReadByIdOrName.mockReturnValue({ _zdf: { sandbox: { id: 'acct-active-id', key: 'A-ACTIVE' } } });
   });
 
   it('target found: PUTs the RESOLVED id and calls resolveAndSync', async () => {
@@ -162,12 +162,12 @@ describe('zdf push invoice', () => {
 
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001']);
 
-    expect(mockReadIfExists).not.toHaveBeenCalled();
+    expect(mockReadByIdOrName).not.toHaveBeenCalled();
     expect(mockPut).toHaveBeenCalledWith('/v1/invoices/resolved-inv-id', { autoPay: true });
   });
 
   it('target found: does NOT throw for a same-tenant push when there is no local account file at all (pull invoice does not pull the parent account)', async () => {
-    mockReadIfExists.mockReturnValue(undefined);
+    mockReadByIdOrName.mockReturnValue(undefined);
     mockResolveTargetId.mockResolvedValue({ id: 'INV-001', found: true });
     mockRead.mockReturnValue({ invoiceNumber: 'INV-001', accountNumber: 'A-SOURCE', comments: 'trivial edit' });
     mockPut.mockResolvedValue({ success: true });
@@ -217,21 +217,23 @@ describe('zdf push invoice', () => {
     expect(mockResolve).toHaveBeenCalledWith('invoice', 'created-inv-id', 'push');
   });
 
-  it('target not found: POSTs the full toInvoiceCreateBody adapter output for a realistic pulled fixture, with item ids/read-only fields dropped', async () => {
+  it('target not found: POSTs the full toInvoiceCreateBody adapter output for a realistic pulled fixture (accountId FK resolved via sibling account; item chargeAmount→amount), with item ids/read-only fields dropped', async () => {
     mockResolveTargetId.mockResolvedValue({ id: null, found: false });
+    // A real pulled invoice references its account by accountId (source internal id) and has NO
+    // accountNumber; its item line amount is exposed as chargeAmount (both live-verified).
     mockRead.mockReturnValue({
       id: 'stray-invoice-id',
       invoiceNumber: 'INV-001',
       status: 'Draft',
-      accountNumber: 'A-SOURCE',
+      accountId: 'acct-src-id',
       invoiceDate: '2026-08-21',
       invoiceItems: [
         {
           id: 'item-1',
           invoiceId: 'stray-invoice-id',
-          amount: 42,
-          serviceStartDate: '2026-08-21 00:00:00',
-          serviceEndDate: '2026-09-20 00:00:00',
+          chargeAmount: 42,
+          serviceStartDate: '2026-08-21',
+          serviceEndDate: '2026-09-20',
           chargeName: 'Base Fee',
           revenueRecognitionRuleName: 'Recognize upon invoicing',
           deferredRevenueAccountingCode: 'Deferred Rev',
@@ -245,14 +247,16 @@ describe('zdf push invoice', () => {
 
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'invoice', 'INV-001']);
 
+    // FK resolved by accountId against the sibling account file (default beforeEach → key A-ACTIVE)
+    expect(mockReadByIdOrName).toHaveBeenCalledWith('account', 'acct-src-id');
     expect(mockPost).toHaveBeenCalledWith('/v1/invoices', {
       accountNumber: 'A-ACTIVE',
       invoiceDate: '2026-08-21',
       invoiceItems: [
         {
           amount: 42,
-          serviceStartDate: '2026-08-21 00:00:00',
-          serviceEndDate: '2026-09-20 00:00:00',
+          serviceStartDate: '2026-08-21',
+          serviceEndDate: '2026-09-20',
           chargeName: 'Base Fee',
           revenueRecognitionRuleName: 'Recognize upon invoicing',
           deferredRevenueAccountingCode: 'Deferred Rev',
@@ -268,6 +272,7 @@ describe('zdf push invoice', () => {
     expect(item).not.toHaveProperty('id');
     expect(item).not.toHaveProperty('invoiceId');
     expect(item).not.toHaveProperty('taxAmount');
+    expect(item).not.toHaveProperty('chargeAmount');
   });
 
   it('target not found: the body POSTed to Zuora never carries a _zdf map', async () => {
@@ -286,7 +291,7 @@ describe('zdf push invoice', () => {
   });
 
   it('does NOT remap when the active-env account key already matches the source accountNumber', async () => {
-    mockReadIfExists.mockReturnValue({ _zdf: { sandbox: { id: 'acct-1', key: 'A-SOURCE' } } });
+    mockReadByIdOrName.mockReturnValue({ _zdf: { sandbox: { id: 'acct-1', key: 'A-SOURCE' } } });
     mockResolveTargetId.mockResolvedValue({ id: null, found: false });
     mockRead.mockReturnValue({ accountNumber: 'A-SOURCE', invoiceItems: [{ amount: 10 }] });
     mockPost.mockResolvedValue({ success: true, id: 'created-inv-id' });
@@ -297,7 +302,7 @@ describe('zdf push invoice', () => {
   });
 
   it('target not found: throws and makes no Zuora write when the sibling account file does not exist locally', async () => {
-    mockReadIfExists.mockReturnValue(undefined);
+    mockReadByIdOrName.mockReturnValue(undefined);
     mockResolveTargetId.mockResolvedValue({ id: null, found: false });
     mockRead.mockReturnValue({ accountNumber: 'A-SOURCE', invoiceItems: [{ amount: 10 }] });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
@@ -312,7 +317,7 @@ describe('zdf push invoice', () => {
   });
 
   it('target not found: throws and makes no Zuora write when the sibling account file has no active-env entry', async () => {
-    mockReadIfExists.mockReturnValue({ _zdf: { otherEnv: { id: 'acct-1', key: 'A-OTHER' } } });
+    mockReadByIdOrName.mockReturnValue({ _zdf: { otherEnv: { id: 'acct-1', key: 'A-OTHER' } } });
     mockResolveTargetId.mockResolvedValue({ id: null, found: false });
     mockRead.mockReturnValue({ accountNumber: 'A-SOURCE', invoiceItems: [{ amount: 10 }] });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);

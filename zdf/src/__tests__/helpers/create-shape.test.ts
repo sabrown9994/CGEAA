@@ -104,6 +104,18 @@ describe('toAccountCreateBody', () => {
     expect((result['billToContact'] as Record<string, unknown>)['state']).toBe('CA');
   });
 
+  it('carries the contact postal code from the pulled `zipCode` field (the shape the account GET returns)', () => {
+    const result = toAccountCreateBody({
+      basicInfo: { accountNumber: 'A-Z', name: 'Zip Co', currency: 'USD' },
+      billToContact: { firstName: 'Z', lastName: 'C', country: 'United States', state: 'MA', zipCode: '02101', id: 'c-1', accountId: 'a-1', contactDescription: 'drop me' },
+    });
+    const billTo = result['billToContact'] as Record<string, unknown>;
+    expect(billTo['zipCode']).toBe('02101');
+    expect(billTo).not.toHaveProperty('id');
+    expect(billTo).not.toHaveProperty('accountId');
+    expect(billTo).not.toHaveProperty('contactDescription');
+  });
+
   it('falls back to basicInfo.currency and basicInfo.billCycleDay / autoPay defaults when billingAndPayment is absent', () => {
     const result = toAccountCreateBody({
       basicInfo: { accountNumber: 'A-2', name: 'No Billing Block', currency: 'EUR', billCycleDay: 12 },

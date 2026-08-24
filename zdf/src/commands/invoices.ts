@@ -1,49 +1,43 @@
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
 import { apiGet, apiPost, apiPut, apiDelete } from '../api/client.js';
-import { readResourceFile, readResourceFileIfExists, renameResourceFile, resolveFilePath, getOutputDir, writeResourceFile } from '../helpers/file-io.js';
+import { readResourceFile, readResourceFileByIdOrName, renameResourceFile, resolveFilePath, getOutputDir, writeResourceFile } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.js';
 import { resolveTargetId, crossTenantKeyValue } from '../helpers/upsert.js';
-import { stripEnvMap, activeEnvName, ENV_MAP_KEY, EnvMap, setEnvEntry } from '../helpers/env-map.js';
+import { stripEnvMap, activeEnvName, getEnvEntry, setEnvEntry } from '../helpers/env-map.js';
 import { getOrCreate, capturePriorEnvMap, carryForwardEnvMap, carryForwardEnvMapToFile, deleteStaleSourceFile } from '../helpers/upsert-command.js';
 import { toInvoiceCreateBody } from '../helpers/create-shape.js';
 
 const RESOURCE = 'invoice';
 const ENDPOINT = '/v1/invoices';
 
-/** An invoice body references its owning account by `accountNumber` — a natural key that is the
- * SOURCE tenant's number. Resolves what that field should read in the ACTIVE tenant by looking up
- * the sibling local account file (natural-key-named by accountNumber) and reading its `_zdf[active]`
- * key. Throws (before any Zuora write) if that account hasn't been seeded/mapped into the active
- * env yet — there is nothing safe to substitute. Returns `undefined` when there's nothing to remap
- * (no accountNumber on the record at all). */
-function resolveAccountRemap(sourceAccountNumber: string | undefined): { sourceAccountNumber: string; activeKey: string } | undefined {
-  if (!sourceAccountNumber) return undefined;
+/** Resolves the accountNumber a cross-tenant invoice CREATE must carry, in the ACTIVE tenant.
+ * A pulled invoice references its owning account by `accountId` — the SOURCE tenant's internal id —
+ * and does NOT carry `accountNumber` at all (live-verified). So find the sibling local account file
+ * (by accountId via findByStoredId's id-scan, or by accountNumber if one is somehow present) and
+ * read its `_zdf[active].key` — the account's number in the target tenant. Throws BEFORE any Zuora
+ * write if that account isn't seeded/mapped into the active env yet — there is no safe accountNumber
+ * to create the invoice under otherwise. */
+function resolveTargetAccountNumber(invoiceRecord: Record<string, unknown>): string {
   const active = activeEnvName();
-  const acct = readResourceFileIfExists('account', sourceAccountNumber) as Record<string, unknown> | undefined;
-  const activeKey = (acct?.[ENV_MAP_KEY] as EnvMap | undefined)?.[active]?.key ?? undefined;
+  const accountId = invoiceRecord['accountId'];
+  const accountNumber = invoiceRecord['accountNumber'];
+  const ref = (typeof accountNumber === 'string' && accountNumber.trim()) ? accountNumber.trim()
+    : (typeof accountId === 'string' && accountId.trim()) ? accountId.trim()
+    : undefined;
+  const acct = ref ? (readResourceFileByIdOrName('account', ref) as Record<string, unknown> | undefined) : undefined;
+  const activeKey = acct ? getEnvEntry(acct, active)?.key : undefined;
   if (!acct || !activeKey) {
     throw new Error(
-      `Cannot remap invoice's account to ${active}: seed/pull account ${sourceAccountNumber} into ${active} first (zdf pull account ... / zdf push account ...).`
+      `Cannot create invoice in ${active}: its account (${ref ?? 'unknown'}) is not mapped there — ` +
+      `pull/push that account into ${active} first (zdf push account ...).`
     );
   }
-  return { sourceAccountNumber, activeKey };
-}
-
-/** Applies a resolved account remap to an outbound body's `accountNumber`, if present — a no-op
- * when the active-env key matches the source (nothing to change) or the field isn't in the body
- * (e.g. stripped by filterUpdatableFields, which doesn't allowlist accountNumber for invoice PUT). */
-function applyAccountRemap(
-  body: Record<string, unknown>,
-  remap: { sourceAccountNumber: string; activeKey: string } | undefined
-): Record<string, unknown> {
-  if (!remap || remap.activeKey === remap.sourceAccountNumber) return body;
-  if (!('accountNumber' in body)) return body;
-  return { ...body, accountNumber: remap.activeKey };
+  return String(activeKey);
 }
 
 export function register(program: Command): void {
@@ -131,11 +125,12 @@ export function register(program: Command): void {
           // A raw pulled body (with embedded invoiceItems carrying ids/read-only fields) is not
           // the create shape POST /v1/invoices accepts — toInvoiceCreateBody adapts it into the
           // flat single-invoice create body (see zdf/CLAUDE.md "Invoice create / delete"). The
-          // adapter reads `accountNumber` straight off the pulled record; R2's account FK remap
-          // (source accountNumber → active-env account key) then runs on the adapted body, since
-          // toInvoiceCreateBody's output DOES carry accountNumber through unfiltered.
-          const remap = resolveAccountRemap(fileRecord['accountNumber'] as string | undefined);
-          const body = applyAccountRemap(stripEnvMap(toInvoiceCreateBody(fileRecord)), remap);
+          // pulled invoice carries `accountId` (source-tenant internal id), NOT `accountNumber`, so
+          // the FK to its account must be resolved to the ACTIVE tenant's accountNumber from the
+          // sibling account file's `_zdf[active]` map and injected here (the adapter can't derive it).
+          const targetAccountNumber = resolveTargetAccountNumber(fileRecord);
+          const body = stripEnvMap(toInvoiceCreateBody(fileRecord));
+          body['accountNumber'] = targetAccountNumber;
           const res = await apiPost<ZuoraWriteResponse & { id: string }>(ENDPOINT, body);
           assertSuccess(res, 'invoice create');
           await resolveAndSync(RESOURCE, res.id, 'push');

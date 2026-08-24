@@ -40,6 +40,10 @@ const CONTACT_CREATE_FIELDS = [
   'city',
   'state',
   'country',
+  // The pulled account GET nests the contact's postal code under `zipCode` (live-verified), and the
+  // account-create contact body accepts the same `zipCode` key — NOT `postalCode`. Carry both keys
+  // defensively (pick() drops whichever is absent), so a record using either spelling is preserved.
+  'zipCode',
   'postalCode',
   'county',
   'taxRegion',
@@ -126,10 +130,16 @@ const INVOICE_ITEM_CREATE_FIELDS = [
 
 /** Maps a single pulled invoice item to the create-body item shape: carries through whatever of
  * the allowed fields the pulled item actually has, dropping ids and any other read-only fields.
- * Never invents values. */
+ * Never invents values. The pulled item exposes its line amount as `chargeAmount` (live-verified),
+ * but `POST /v1/invoices` expects `amount` — map it across when a literal `amount` isn't present. */
 function toInvoiceItemCreateBody(item: unknown): Rec {
   if (!isRec(item)) return {};
-  return pick(item, INVOICE_ITEM_CREATE_FIELDS);
+  const out = pick(item, INVOICE_ITEM_CREATE_FIELDS);
+  if (out['amount'] === undefined) {
+    const amount = item['amount'] ?? item['chargeAmount'];
+    if (amount !== undefined && amount !== null) out['amount'] = amount;
+  }
+  return out;
 }
 
 /**

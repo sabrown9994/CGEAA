@@ -68,11 +68,18 @@ afterEach(() => {
 
 describe('push invoice — CREATE branch cleans up the stale source file (no duplicate on repeat push)', () => {
   it('deletes the old invoiceNumber-keyed source file and writes the new one under the target-assigned invoiceNumber; a repeat push of the old arg fails loudly instead of duplicate-creating', async () => {
-    // Source file: no accountNumber/accountId/billRunId, so the CREATE branch skips the account-FK
-    // remap and resolveAndSync's re-fetch skips further traversal (see dependency-graph.ts
-    // rulesInvoice) — keeping this test focused on the stale-file cleanup itself.
+    // Sibling account file mapped into the active env, so the invoice CREATE branch can resolve its
+    // accountId FK to the target-tenant accountNumber (a real pulled invoice references its account
+    // by accountId, not accountNumber). findByStoredId matches it by basicInfo.id.
+    writeResourceFile('account', 'A-TGT', {
+      basicInfo: { id: 'acct-src-id', accountNumber: 'A-TGT', name: 'Sibling Acct' },
+      _zdf: { intQA: { id: 'acct-src-id', key: 'A-TGT' } },
+    });
+    // Source invoice file: references its account by accountId (the pulled shape). This test stays
+    // focused on the stale-file cleanup itself.
     writeResourceFile('invoice', 'INV-SRC', {
       invoiceNumber: 'INV-SRC',
+      accountId: 'acct-src-id',
       invoiceDate: '2026-08-21',
       invoiceItems: [{ amount: 10 }],
     });
@@ -97,6 +104,7 @@ describe('push invoice — CREATE branch cleans up the stale source file (no dup
     // OLD, tenant-assigned natural key (exactly the kind of read-only source field the adapter
     // drops; Zuora assigns a fresh one on create), so it must NOT appear in the create body.
     expect(mockApiPost).toHaveBeenCalledWith('/v1/invoices', expect.objectContaining({
+      accountNumber: 'A-TGT',
       invoiceDate: '2026-08-21',
       invoiceItems: [{ amount: 10 }],
     }));
