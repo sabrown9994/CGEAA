@@ -104,16 +104,19 @@ describe('cross-tenant _zdf accumulation — account (natural-keyed)', () => {
   });
 });
 
-describe('cross-tenant _zdf accumulation — product (id-keyed, no natural key)', () => {
-  it('push under a NEW active env, where the same logical product has a DIFFERENT internal id, preserves the prior env entry on the NEW (post-delete) file', async () => {
-    // Fixture: a product previously pulled from tenant "prod" — internal id 'prod-sku-abc'.
-    // product has no natural key, so it's written (and re-found) by id.
+describe('cross-tenant _zdf accumulation — product (SKU-keyed / natural key)', () => {
+  it('push under a NEW active env, where the same logical product has a DIFFERENT internal id, preserves the prior env entry AND adds the new one, on the SAME SKU-named file (no self-delete)', async () => {
+    // Fixture: a product previously pulled from tenant "prod" — internal id 'prod-sku-abc',
+    // SKU 'SKU1' (the natural key, stable across tenants). product is now SKU-named on disk (like
+    // account/invoice/memos) — writeResourceFile derives the filename from the record's SKU, not
+    // the id argument passed here.
     writeResourceFile('product', 'prod-sku-abc', {
       Id: 'prod-sku-abc',
       Name: 'Test Product',
       SKU: 'SKU1',
       _zdf: { prod: { id: 'prod-sku-abc', key: 'SKU1' } },
     });
+    expect(existsSync(resolveFilePath('product', 'SKU1'))).toBe(true);
 
     mockGetActiveEnv.mockReturnValue({ isProduction: false, name: 'intQA' });
     // resolveTargetId: no _zdf.intQA entry yet -> falls to crossTenantKeyValue (SKU) + searchByKey.
@@ -124,26 +127,28 @@ describe('cross-tenant _zdf accumulation — product (id-keyed, no natural key)'
     });
     mockApiPut.mockResolvedValue({ Success: true });
     // resolveAndSync's re-fetch (fetchAndWrite) GETs the product fresh from the active tenant —
-    // under a DIFFERENT internal id than the prod-tenant file.
+    // under a DIFFERENT internal id than the prod-tenant file, but the SAME SKU.
     mockApiGet.mockResolvedValue({ Id: 'intqa-prod-999', Name: 'Test Product', SKU: 'SKU1' });
 
     const program = makeProgram(registerProducts);
-    await program.parseAsync(['node', 'zdf', 'push', 'product', 'prod-sku-abc']);
+    // CLI arg is the natural-key filename ('SKU1') — the realistic invocation now that product is
+    // SKU-named, mirroring how account/invoice are pushed by their natural key.
+    await program.parseAsync(['node', 'zdf', 'push', 'product', 'SKU1']);
 
     expect(mockApiPut).toHaveBeenCalledWith('/v1/object/product/intqa-prod-999', expect.anything());
     expect(mockApiPut.mock.calls[0][1]).not.toHaveProperty('_zdf');
 
-    // The OLD arg-keyed file must be gone (product has no natural key to converge on).
-    expect(existsSync(resolveFilePath('product', 'prod-sku-abc'))).toBe(false);
-
-    // The NEW target.id-keyed file is the sole survivor, and carries BOTH envs — proving
-    // priorMap (captured in memory before the old file was deleted) survived onto it.
-    const finalPath = resolveFilePath('product', 'intqa-prod-999');
+    // Regression guard: the resolved internal id ('intqa-prod-999') differs from the CLI arg
+    // ('SKU1'), which is exactly the condition that (pre-fix) would have deleted the file
+    // resolveAndSync just wrote — because with product now SKU-named, the arg is almost always
+    // an internal-id/SKU mismatch even in the SAME-tenant case. The file must survive intact.
+    const finalPath = resolveFilePath('product', 'SKU1');
     expect(existsSync(finalPath)).toBe(true);
-    const final = readResourceFile('product', 'intqa-prod-999') as Record<string, unknown>;
+    const final = readResourceFile('product', 'SKU1') as Record<string, unknown>;
     expect(final['_zdf']).toEqual({
       prod: { id: 'prod-sku-abc', key: 'SKU1' },
       intQA: { id: 'intqa-prod-999', key: 'SKU1' },
     });
+    expect(final['Id']).toBe('intqa-prod-999');
   });
 });

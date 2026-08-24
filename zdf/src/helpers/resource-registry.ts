@@ -18,13 +18,17 @@ function str(v: unknown): string | undefined {
  * endpoint returns (e.g. account GET nests accountNumber under basicInfo; product object endpoint
  * is PascalCase `SKU` while Commerce is `sku`; order GET wraps under `order`).
  */
-// IMPORTANT: only resources whose Zuora endpoints accept the natural key as the key/id are listed
-// here. Files are named by the natural key, and push/delete pass the CLI arg straight into the
-// endpoint path — so the natural key MUST be a valid Zuora key for the resource's read AND write
+// IMPORTANT: most resources here are listed because their Zuora endpoints accept the natural key
+// as the key/id directly, and push/delete pass the CLI arg straight into the endpoint path — so
+// for those, the natural key MUST be a valid Zuora key for the resource's read AND write
 // endpoints. Verified live (2026-08-21): account/subscription/invoice accept their number; the
 // order endpoint already uses the order number; credit-/debit-memo keys are ID-or-number per
-// Zuora. Deliberately EXCLUDED: product (its `/v1/object/product/{id}` endpoint rejects the SKU —
-// 400 — so SKU-named files would break push/delete) and bill-run (its GET uses the internal id).
+// Zuora. `product` is the one exception to the "arg passed straight into the endpoint" pattern:
+// its `/v1/object/product/{id}` endpoint rejects the SKU (400), so SKU-named files are safe ONLY
+// because `push` resolves the real write id via `resolveTargetId` (never the CLI arg) and
+// `delete` resolves it from the local file (`_zdf[env].id` / `Id` — see commands/products.ts)
+// instead of using the arg directly. Deliberately EXCLUDED: bill-run (its GET uses the internal
+// id, not a natural key).
 export const NATURAL_KEY: Record<string, (rec: Rec) => string | undefined> = {
   account: (r) => str((r['basicInfo'] as Rec | undefined)?.['accountNumber'] ?? r['accountNumber']),
   subscription: (r) => str(r['subscriptionNumber']),
@@ -32,9 +36,11 @@ export const NATURAL_KEY: Record<string, (rec: Rec) => string | undefined> = {
   invoice: (r) => str(r['invoiceNumber']),
   'credit-memo': (r) => str(r['memoNumber'] ?? r['number']),
   'debit-memo': (r) => str(r['memoNumber'] ?? r['number']),
+  // product: object endpoint is PascalCase `SKU`, Commerce API is lowercase `sku`.
+  product: (r) => str(r['SKU'] ?? r['sku']),
   // No entry → file naming falls back to the Zuora id (or the resource's command manages its own
-  // filename): contact, order-line-item, product, product-rate-plan, product-rate-plan-charge,
-  // bill-run, data-query (id); workflow (id — names not guaranteed unique); billing-template
+  // filename): contact, order-line-item, product-rate-plan, product-rate-plan-charge, bill-run,
+  // data-query (id); workflow (id — names not guaranteed unique); billing-template
   // (`<name>_<id>.json`, written by its own command).
 };
 

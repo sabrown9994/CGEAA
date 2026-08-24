@@ -8,18 +8,20 @@ vi.mock('../../api/client.js', () => ({ apiGet: vi.fn(), apiPost: mockPost, apiP
 
 const mockWrite = vi.hoisted(() => vi.fn());
 const mockRead = vi.hoisted(() => vi.fn());
+const mockReadByIdOrName = vi.hoisted(() => vi.fn());
 const mockRename = vi.hoisted(() => vi.fn());
 const mockDeleteFile = vi.hoisted(() => vi.fn());
-vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, renameResourceFile: mockRename, deleteResourceFile: mockDeleteFile, resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
+vi.mock('../../helpers/file-io.js', () => ({ writeResourceFile: mockWrite, readResourceFile: mockRead, readResourceFileByIdOrName: mockReadByIdOrName, renameResourceFile: mockRename, deleteResourceFile: mockDeleteFile, resolveFilePath: vi.fn((r: string, id: string) => `MOCK_OUTPUT/${r}/${id}.json`), getOutputDir: vi.fn(() => 'MOCK_OUTPUT'), }));
 
 vi.mock('../../helpers/production-guard.js', () => ({ confirmProduction: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../auth/config.js', () => ({ getActiveEnv: () => ({ isProduction: false, name: 'sandbox' }) }));
 
 const mockResolve = vi.hoisted(() => vi.fn());
+const mockGetLastPulledPath = vi.hoisted(() => vi.fn((): string | null => null));
 vi.mock('../../helpers/dependency-graph.js', () => ({
   resolveAndSync: mockResolve,
   setNoDependency: vi.fn(),
-  getLastPulledPath: vi.fn(() => null),
+  getLastPulledPath: mockGetLastPulledPath,
   isNoDependency: vi.fn().mockReturnValue(false),
   setMaxTraversalNodes: vi.fn(),
   setMaxItems: vi.fn(),
@@ -180,32 +182,20 @@ describe('zdf push product', () => {
     mockPut.mockResolvedValue({ Success: true });
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'product', 'prod-001']);
     // The command itself must not write the file — resolveAndSync's own re-fetch-and-write is
-    // what populates _zdf (merged with other envs — see dependency-graph.test.ts). product has
-    // no natural-key filename, so a second explicit write here would risk diverging from
-    // resolveAndSync's write whenever the resolved id differs from the CLI arg (Finding 2).
+    // what populates _zdf (merged with other envs — see dependency-graph.test.ts).
     expect(mockWrite).not.toHaveBeenCalled();
     expect(mockResolve).toHaveBeenCalledWith('product', 'prod-001', 'push');
   });
 
-  it('target found, resolved id SAME as the CLI arg: single write, no stale-file cleanup needed', async () => {
-    mockResolveTargetId.mockResolvedValue({ id: 'prod-001', found: true });
-    mockRead.mockReturnValue({ Name: 'Test Product', SKU: 'SKU-001' });
-    mockPut.mockResolvedValue({ Success: true });
-    await makeProgram().parseAsync(['node', 'zdf', 'push', 'product', 'prod-001']);
-    expect(mockDeleteFile).not.toHaveBeenCalled();
-  });
-
-  it('target found, resolved id differs from the CLI arg: PUTs and syncs using the resolved id, not the arg, and deletes the now-stale arg-keyed file', async () => {
+  it('target found: never deletes any file, regardless of whether the resolved internal id differs from the CLI arg — SKU (the natural key) does not change on an update, so resolveAndSync\'s write lands under the SAME SKU-named file the source was read from', async () => {
     mockResolveTargetId.mockResolvedValue({ id: 'resolved-id', found: true });
     mockRead.mockReturnValue({ Name: 'Test Product', SKU: 'SKU-001' });
     mockPut.mockResolvedValue({ Success: true });
-    await makeProgram().parseAsync(['node', 'zdf', 'push', 'product', 'prod-001']);
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'product', 'SKU-001']);
     expect(mockPut).toHaveBeenCalledWith('/v1/object/product/resolved-id', expect.objectContaining({ SKU: 'SKU-001' }));
     expect(mockResolve).toHaveBeenCalledWith('product', 'resolved-id', 'push');
-    // Only ONE file should remain on disk for this product — the stale arg-keyed one (product
-    // has no natural-key filename, so it wouldn't otherwise get cleaned up / reconciled later).
     expect(mockWrite).not.toHaveBeenCalled();
-    expect(mockDeleteFile).toHaveBeenCalledWith('product', 'prod-001');
+    expect(mockDeleteFile).not.toHaveBeenCalled();
   });
 
   it('target not found: attempts CREATE via the Commerce API from the local file body instead of PUT', async () => {
@@ -258,11 +248,43 @@ describe('zdf push product', () => {
 });
 
 describe('zdf delete product', () => {
-  it('calls delete endpoint and resolveAndSync with delete action', async () => {
+  it('no local file found: falls back to treating the CLI arg as the internal id (back-compat)', async () => {
+    mockReadByIdOrName.mockReturnValue(undefined);
     mockDelete.mockResolvedValue({ success: true });
     mockResolve.mockResolvedValue(undefined);
     await makeProgram().parseAsync(['node', 'zdf', 'delete', 'product', 'prod-001']);
     expect(mockDelete).toHaveBeenCalledWith('/v1/object/product/prod-001');
     expect(mockResolve).toHaveBeenCalledWith('product', 'prod-001', 'delete');
+  });
+
+  it('local file has a _zdf[sandbox].id entry: DELETEs using the resolved internal id, not the SKU arg', async () => {
+    mockReadByIdOrName.mockReturnValue({
+      Name: 'Test Product',
+      SKU: 'SKU-123',
+      _zdf: { sandbox: { id: 'internal-xyz', key: 'SKU-123' } },
+    });
+    mockDelete.mockResolvedValue({ success: true });
+    mockResolve.mockResolvedValue(undefined);
+    await makeProgram().parseAsync(['node', 'zdf', 'delete', 'product', 'SKU-123']);
+    expect(mockDelete).toHaveBeenCalledWith('/v1/object/product/internal-xyz');
+    // resolveAndSync cleanup still gets the ORIGINAL arg — findByStoredId/natural-key lookup
+    // handles locating the SKU-named file from there.
+    expect(mockResolve).toHaveBeenCalledWith('product', 'SKU-123', 'delete');
+  });
+
+  it('local file has no _zdf entry for the active env: falls back to the record\'s Id', async () => {
+    mockReadByIdOrName.mockReturnValue({ Id: 'record-id-1', SKU: 'SKU-456' });
+    mockDelete.mockResolvedValue({ success: true });
+    mockResolve.mockResolvedValue(undefined);
+    await makeProgram().parseAsync(['node', 'zdf', 'delete', 'product', 'SKU-456']);
+    expect(mockDelete).toHaveBeenCalledWith('/v1/object/product/record-id-1');
+  });
+
+  it('local file has neither a _zdf entry nor Id/id: falls back to the CLI arg', async () => {
+    mockReadByIdOrName.mockReturnValue({ SKU: 'SKU-789' });
+    mockDelete.mockResolvedValue({ success: true });
+    mockResolve.mockResolvedValue(undefined);
+    await makeProgram().parseAsync(['node', 'zdf', 'delete', 'product', 'SKU-789']);
+    expect(mockDelete).toHaveBeenCalledWith('/v1/object/product/SKU-789');
   });
 });

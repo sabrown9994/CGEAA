@@ -15,9 +15,13 @@ describe('fileNameFor — natural-key file naming', () => {
     expect(fileNameFor('order', 'id', { orderNumber: 'O-1' })).toBe('O-1');
   });
 
+  it('uses SKU for product — the object endpoint rejects the SKU directly, but push resolves the real write id via resolveTargetId and delete resolves it from the local file, so SKU-naming is safe', () => {
+    expect(fileNameFor('product', 'internal-id-1', { SKU: 'SKU-9' })).toBe('SKU-9');
+    // Commerce API responses use lowercase `sku`.
+    expect(fileNameFor('product', 'internal-id-1', { sku: 'sku-lower' })).toBe('sku-lower');
+  });
+
   it('falls back to the id where the natural key is NOT a valid Zuora endpoint key or is absent', () => {
-    // product: /v1/object/product/{id} rejects the SKU (verified live) -> id-named.
-    expect(fileNameFor('product', 'PROD-id', { SKU: 'SKU-9' })).toBe('PROD-id');
     // bill-run: GET uses the internal id -> id-named.
     expect(fileNameFor('bill-run', 'BR-id', { billRunNumber: 'BR-1' })).toBe('BR-id');
     // no natural key at all:
@@ -30,6 +34,9 @@ describe('fileNameFor — natural-key file naming', () => {
   it('falls back to the id when the natural-key field is missing/blank on the record', () => {
     expect(fileNameFor('account', 'fallback-id', {})).toBe('fallback-id');
     expect(fileNameFor('invoice', 'fallback-id', { invoiceNumber: '   ' })).toBe('fallback-id');
+    // product with no SKU on the record -> falls back to id, same as the other resources.
+    expect(fileNameFor('product', 'fallback-id', {})).toBe('fallback-id');
+    expect(fileNameFor('product', 'fallback-id', { SKU: '   ' })).toBe('fallback-id');
   });
 
   it('sanitizes characters not allowed in a path segment', () => {
