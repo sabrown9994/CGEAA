@@ -55,8 +55,9 @@ failure. **Live-verified:** `pull billing-template 1` now fails loudly (exit 1),
 ### ✅ P0 — `workflow` endpoint corrected
 `src/commands/workflows.ts` `ENDPOINT` changed `/v1/api/workflows` → `/workflows`.
 **Live-verified:** `pull workflow 1` returns the real workflow object ("Administration :
-Create Order"). Write-side (create/push/delete) body shapes and a `filterUpdatableFields`
-allowlist for `workflow` remain follow-ups (not live-tested per read-only constraint).
+Create Order"). (Write-side was a follow-up here; **since RESOLVED 2026-08-21** — workflow full
+CRUD reworked to the export/import model incl. in-place logic editing via versions/import, and
+live-verified end-to-end. See the "workflow full CRUD" entry in the Backlog.)
 
 ### ✅ P1 — Credit-memo / debit-memo items no longer dropped
 `dependency-graph.ts` `fetchAllItems` now reads the sub-item array under `items` for
@@ -79,8 +80,8 @@ throws) when hit:
 `src/commands/orders.ts` gained `--limit <n>`, `--account <id>`, `--status <status>`, and
 `--all`. With no flags it refuses to run and **exits non-zero** (throws → `process.exit(1)`),
 preventing an accidental full-tenant export. **Live-verified:** `--limit 5` wrote exactly 5;
-no-flags fetched nothing. (See open item #2 below — `accountId` filtering needs a different
-endpoint.)
+no-flags fetched nothing. (`accountId` filtering **RESOLVED 2026-08-05** — `--account` uses
+`GET /v1/orders/subscriptionOwner/{accountKey}`; see the billing-template/orders section below.)
 
 ### ✅ P2 — Success messages show the real output path
 All hardcoded `zdf-output/...` message strings (27 across 14 command files) now use
