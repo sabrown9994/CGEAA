@@ -335,9 +335,13 @@ selected `auth` environment), not a promotion pipeline. It has exactly three in-
    (account, product, invoice, credit-memo, debit-memo): it resolves the record's id in the ACTIVE
    tenant via the in-file `_zdf` env-id map (verify) or a natural-key search, then updates it; if it
    doesn't exist there it creates it. See "Cross-tenant env-id map / upsert" below and
-   README-ZDF.md → "Cross-Tenant Sync". Caveat: the UPDATE path is fully supported; creating a
-   brand-new record into an empty target from a *pulled* file can hit pull-shape-vs-create-shape
-   mismatches (use `zdf template` / a create-shaped file for those).
+   README-ZDF.md → "Cross-Tenant Sync". Both paths are supported: the create-into-empty-target case
+   is handled by per-resource **create-shape adapters** (`src/helpers/create-shape.ts`) that
+   transform the *pulled* GET shape into the create-API body (account, invoice, credit/debit-memo) —
+   so a net-new record can be created in a lower env from a pulled file. **product** is the
+   exception: its net-new creation still needs `zdf template product` + `create` (a Commerce body
+   can't be reconstructed from the product object-GET — no plan/charge/pricing/accounting), so
+   product cross-tenant is search-by-SKU + UPDATE only.
 3. **Targeted automation** — scripted one-off tasks such as creating products (and their rate
    plans / charges) in production from a ticket.
 
@@ -426,28 +430,49 @@ Key modules/functions:
 - `src/helpers/upsert-command.ts`: shared command glue — `getOrCreate`, prior-map capture, and
   `carryForwardEnvMapToFile` (after write, re-read the file and fold the in-memory prior map's
   other-env entries in — needed because id-keyed resources like product can't re-find the old file).
+- `src/helpers/create-shape.ts`: **create-shape adapters** — `toAccountCreateBody` /
+  `toInvoiceCreateBody` / `toMemoCreateBody` map a *pulled* GET-shape record to the flat create-API
+  body (drop read-only/ids/`_zdf` via allowlists; never spread the raw record). Wired into the push
+  CREATE (target-not-found) branch. Field-shape notes (live-verified 2026-08-24): the pulled account
+  contact nests its postal code under `zipCode` (not `postalCode`); the pulled invoice item exposes
+  its amount as `chargeAmount` (mapped → `amount`); a pulled invoice carries `accountId`, NOT
+  `accountNumber`. Product has NO create-shape adapter by design (Commerce body unreconstructable
+  from the object-GET) — net-new product = `zdf template` + `create`.
 - `src/helpers/file-io.ts`: `readResourceFileIfExists` (EXACT filename, no id-scan — for the merge
   lookup) and `readResourceFileByIdOrName` (exact name → `findByStoredId` id-scan fallback,
   non-throwing — for locating a sibling file when the ref may be an id OR a natural key, e.g. the
-  memo→invoice lookup).
+  invoice→account and memo→invoice FK lookups). `findByStoredId` matches `recordId` OR any
+  `_zdf[env].id` — so a record stays findable by its id in ANY tenant it's known in (needed because a
+  cross-tenant push re-fetches from the target, changing the file's own id to the target's, while
+  sibling FKs still hold the source id).
 - `pull` populates `_zdf[active]` centrally in `dependency-graph.ts` `fetchAndWrite` for every
   `CROSS_TENANT` resource. `push`/`create` in the account/product/invoice/memo commands do the
   upsert (see R6/R7 rulings in the plan / commit messages).
-- **FK remap:** invoice→account by `accountNumber` (from the sibling account file's `_zdf[active].key`,
-  CREATE branch only — accountNumber isn't in the invoice PUT allowlist); memo→invoiceItemId via the
-  source-invoice file's `_zdf[active]` + `matchInvoiceItems`.
+- **FK remap:** invoice→account resolved by the pulled invoice's `accountId` (a SOURCE-tenant id →
+  the sibling account file found via `findByStoredId`'s `_zdf`-aware match → its `_zdf[active].key`
+  = target accountNumber, injected on the CREATE branch — accountNumber isn't in the invoice PUT
+  allowlist so the update branch skips it); memo→invoiceItemId via the source-invoice file's
+  `_zdf[active]` + `matchInvoiceItems`.
 
-**Verification reality:** the **account** cross-tenant flow is **live-verified A→B (2026-08-24,
-intQA↔StagingUAT — two real tenants on rest.test.zuora.com)**: `pull` in intQA → `push` in
-StagingUAT resolved the record via natural-key search to StagingUAT's **different internal id**,
-UPDATED it, and the file's `_zdf` accumulated BOTH envs' distinct ids (same key); a repeat push was
-idempotent (used the mapped id, no duplicate). The **create-into-empty-target** path was live-
-confirmed to hit the documented pull-shape-vs-create-shape mismatch — `POST /v1/accounts` rejected
-the pulled GET-shaped body with a clear verbatim error, no crash, no partial `_zdf` written.
-Invoice FK remap and memo item-matching are covered by unit + real-filesystem integration tests
-(`src/__tests__/integration/cross-tenant-env-map.test.ts`, `memo-cross-tenant-create.test.ts`); a
-live A→B run for them isn't practical because invoiceNumber/memoNumber are server-assigned and can't
-be aligned across two independent sandboxes. The UPDATE path is the supported one.
+**Verification reality (live-verified A→B, 2026-08-24, intQA↔StagingUAT — two real tenants on
+rest.test.zuora.com):**
+- **account** — create-into-empty via `toAccountCreateBody` (pull in intQA → push in StagingUAT
+  where absent → CREATED), plus UPDATE + idempotent re-push (PUT the mapped id, no duplicate); `_zdf`
+  accumulated both envs' distinct ids. (An earlier raw-pulled-body push was rejected — the adapter
+  is what makes create-into-empty work.)
+- **invoice** — create-into-empty via `toInvoiceCreateBody` (CREATED in StagingUAT; item amount
+  landed correctly via `chargeAmount`→`amount`; account FK resolved from the sibling account's
+  `_zdf[StagingUAT].key`; stale source file cleaned up), plus idempotent re-push (PUT).
+- **product** — search-by-SKU → UPDATE the pre-existing StagingUAT product (SKU-named file resolved
+  the different target id), idempotent.
+- No duplicates created (verified counts); all throwaway data deleted in both tenants afterward.
+- **credit/debit-memo** cross-tenant create is NOT live-verifiable here: a standalone
+  (non-subscription) invoice item has no `skuName`, which the memo item-matcher + invoice-scoped memo
+  create both require. Covered by unit + real-filesystem integration tests
+  (`cross-tenant-env-map.test.ts`, `memo-cross-tenant-create.test.ts`). `toMemoCreateBody`'s header
+  fields (comment/reasonCode/effectiveDate) are therefore not yet live-confirmed on that endpoint —
+  the body is a strict superset of the previously-verified `{ items }`, so a rejected field would be
+  a one-line trim.
 
 ## Test conventions
 

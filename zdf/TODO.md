@@ -262,16 +262,25 @@ Both subcommands were removed from ZDF entirely (commit dbee8c1). `subscription`
   bill-run is id-map-on-pull only. FK remap: invoice→account by number; memo→invoiceItemId by
   skuName+amount item matching. Helpers: env-map.ts, upsert.ts, upsert-command.ts; file-io
   readResourceFileIfExists / readResourceFileByIdOrName. Unit + real-fs integration tests; 423 tests.
-  **Known limitations:** (1) the UPDATE path is fully supported; CREATE-into-empty-target from a
-  *pulled* file can hit pull-shape-vs-create-shape mismatches (use `zdf template` / a create-shaped
-  file). (2) product & bill-run are id-named (endpoints reject their natural key), so their local
-  files don't unify across tenants like natural-key-named resources. (3) **Live A→B: the account
-  update path is verified across two real tenants (intQA↔StagingUAT, 2026-08-24)** — pull in one →
-  push in the other resolves by natural key to the other tenant's different internal id, updates it,
-  `_zdf` accumulates both, and re-push is idempotent; the create-into-empty-target path was
-  live-confirmed to hit the shape limitation in (1) with a clear error. Invoice FK remap / memo
-  item-matching remain unit + real-fs tested only (server-assigned invoice/memo numbers can't be
-  aligned across two independent sandboxes to run their update path live).
+- ✅ **DELIVERED (2026-08-24) — create-shape adapters + product SKU key** (SDD plan
+  `docs/superpowers/plans/2026-08-24-cross-tenant-create-adapters.md`). `src/helpers/create-shape.ts`
+  (`toAccountCreateBody`/`toInvoiceCreateBody`/`toMemoCreateBody`) transforms a *pulled* GET shape
+  into the create-API body, wired into the push CREATE branch — so account/invoice/memo can be
+  created net-new into an empty target. product adopts **SKU** as its natural key (file naming +
+  search + update); `delete product` resolves the internal id. `findByStoredId` now matches `_zdf`
+  ids (cross-tenant FK lookup). 460 tests.
+
+  **Known limitations / status:** (1) **CREATE-into-empty now works** for account/invoice/memo via
+  the adapters; **product** net-new still needs `zdf template product` + `create` (Commerce body
+  unreconstructable from the object-GET) — product cross-tenant = search-by-SKU + update only.
+  (2) product is now **SKU-named**; only **bill-run** stays id-named (pull + id-map only, no
+  create/update). (3) **Live A→B verified (intQA↔StagingUAT, 2026-08-24, two real tenants):**
+  **account** and **invoice** create-into-empty (adapters + invoice→account FK remap) + UPDATE +
+  idempotent re-push (no duplicates); **product** search-by-SKU update. **credit/debit-memo**
+  cross-tenant create is unit + real-fs tested only — a live run needs a subscription-billed invoice
+  (a standalone invoice item has no `skuName`, required by the memo matcher), out of scope for a
+  throwaway test; `toMemoCreateBody`'s header fields thus aren't live-confirmed (strict superset of
+  the verified `{ items }` body → a rejected field is a one-line trim).
 
 - ✅ **RESOLVED (2026-08-21) — dependent-pull failures are now collected and surfaced.** Every
   dependency discovery lookup (contacts/orders/subscriptions/invoices/credit-memos/debit-memos/

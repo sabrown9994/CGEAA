@@ -158,21 +158,24 @@ zdf auth use intQA  && zdf push account <accountNumber>   # upsert into intQA; _
 ```
 
 **Limitations (important):**
-- **`update` is the fully-supported path.** Creating a resource into an *empty* target tenant from
-  a *pulled* file is best-effort: a pulled body's shape can differ from the create API's shape
-  (e.g. `product` pull is the `/v1/object` PascalCase shape but create needs the Commerce snake_case
-  shape; `account` GET nests fields the POST doesn't) — such a create surfaces Zuora's validation
-  error verbatim. Use a create-shaped file (or `zdf template`) for brand-new resources.
-- `product` and `bill-run` files are **id-named** (their endpoints don't accept the natural key), so
-  their local files don't unify across tenants the way natural-key-named resources do.
-- **Live A→B status.** The **account** update path is **verified across two real tenants**
-  (intQA↔StagingUAT, 2026-08-24): pull in one → push in the other resolves the record by natural
-  key to that tenant's *different* internal id, updates it, and `_zdf` accumulates both envs;
-  re-push is idempotent (no duplicate). The **create-into-empty-target** path was confirmed to hit
-  the pull-shape-vs-create-shape limitation above (clear Zuora error, no partial state). Invoice FK
-  remap and memo item-matching are covered by unit + real-filesystem integration tests; a live A→B
-  run for them isn't practical (invoiceNumber/memoNumber are server-assigned, so they can't be
-  aligned across two independent sandboxes to exercise the update path).
+- **Both create-into-empty and update are supported.** When a pulled record doesn't exist in the
+  target tenant, `push` adapts the *pulled* GET shape into the create-API body (per-resource
+  create-shape adapters) and creates it — for `account`, `invoice`, `credit-memo`, and `debit-memo`.
+  The created record's id is recorded in `_zdf[targetEnv]`, so a later push updates rather than
+  duplicates.
+- **`product` is the exception for net-new creation:** a Commerce product body (plans/charges/
+  pricing/accounting) can't be reconstructed from the `/v1/object` product GET, so a product that
+  doesn't exist in the target must be created with `zdf template product` + `zdf create` — product
+  cross-tenant `push` is search-by-SKU + **update** only.
+- `product` files are **SKU-named** (its natural key); `push`/`delete` resolve the tenant-internal
+  id from the file's `_zdf`/record before calling the object endpoint (which rejects the SKU).
+  `bill-run` files remain **id-named** (no natural-key endpoint; pull + id-map only, no create/update).
+- **Live A→B status (intQA↔StagingUAT, 2026-08-24 — two real tenants):** **account** and **invoice**
+  create-into-empty (via the adapters, incl. the invoice→account FK remap) are **verified**, along
+  with UPDATE + idempotent re-push (no duplicates) for account/invoice and search-by-SKU **update**
+  for product. **credit/debit-memo** cross-tenant create is covered by unit + real-filesystem tests
+  only — a live A→B run needs a subscription-billed invoice (a standalone invoice item has no
+  `skuName`, which the memo item-matcher requires), which is out of scope for a throwaway test.
 
 ---
 
@@ -734,7 +737,7 @@ zdf-output/
 ├── order-line-items/
 │   └── {id}.json
 ├── products/
-│   └── {id}.json                 # SKU is NOT a valid key for /v1/object/product — id-named
+│   └── {SKU}.json                # SKU-named; push/delete resolve the internal id from _zdf/record
 ├── product-rate-plans/
 │   └── {id}.json
 ├── product-rate-plan-charges/
