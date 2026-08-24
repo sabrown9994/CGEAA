@@ -9,6 +9,7 @@ import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.js';
 import { resolveTargetId, matchInvoiceItems, crossTenantKeyValue } from '../helpers/upsert.js';
 import { stripEnvMap, activeEnvName, getEnvEntry, setEnvEntry } from '../helpers/env-map.js';
+import { toMemoCreateBody } from '../helpers/create-shape.js';
 import { getOrCreate, capturePriorEnvMap, carryForwardEnvMap, carryForwardEnvMapToFile, deleteStaleSourceFile } from '../helpers/upsert-command.js';
 
 const RESOURCE = 'debit-memo';
@@ -146,7 +147,7 @@ export function register(program: Command): void {
           const targetItems = itemsRes.invoiceItems ?? [];
           const memoItems = (fileRecord[ITEMS_KEY] as Rec[] | undefined) ?? (fileRecord['items'] as Rec[] | undefined) ?? [];
           const matched = matchInvoiceItems(memoItems, targetItems);
-          const res = await apiPost<ZuoraWriteResponse & { id: string }>(`${ENDPOINT}/invoice/${targetInvoiceKey}`, { items: matched });
+          const res = await apiPost<ZuoraWriteResponse & { id: string }>(`${ENDPOINT}/invoice/${targetInvoiceKey}`, toMemoCreateBody(fileRecord, matched));
           assertSuccess(res, 'debit-memo create');
           await resolveAndSync(RESOURCE, res.id, 'push');
           carryForwardEnvMapToFile(RESOURCE, res.id, priorMap);

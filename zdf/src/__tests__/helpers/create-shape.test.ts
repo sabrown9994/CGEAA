@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toAccountCreateBody, toInvoiceCreateBody } from '../../helpers/create-shape.js';
+import { toAccountCreateBody, toInvoiceCreateBody, toMemoCreateBody } from '../../helpers/create-shape.js';
 
 describe('toAccountCreateBody', () => {
   const pulledAccount = {
@@ -235,5 +235,44 @@ describe('toInvoiceCreateBody', () => {
   it('tolerates non-object items in the invoiceItems array without throwing', () => {
     const result = toInvoiceCreateBody({ accountNumber: 'A-1', invoiceItems: [null, 'not-an-object', 5] });
     expect(result['invoiceItems']).toEqual([{}, {}, {}]);
+  });
+});
+
+describe('toMemoCreateBody', () => {
+  const matchedItems = [{ invoiceItemId: 'target-item-1', amount: 100, skuName: 'SKU-A' }];
+
+  it('carries comment/reasonCode/effectiveDate header fields alongside items, dropping id/status/_zdf/item-array-key', () => {
+    const pulledMemo = {
+      id: 'stray-memo-id',
+      status: 'Draft',
+      comment: 'Promoted from source',
+      reasonCode: 'Adjustment',
+      effectiveDate: '2026-08-24',
+      creditMemoItems: [{ id: 'source-item-1', amount: 100 }],
+      _zdf: { sandbox: { id: 'stray-memo-id', key: 'CM-001' } },
+    };
+
+    const result = toMemoCreateBody(pulledMemo, matchedItems);
+
+    expect(result).toEqual({
+      items: matchedItems,
+      comment: 'Promoted from source',
+      reasonCode: 'Adjustment',
+      effectiveDate: '2026-08-24',
+    });
+    expect(result).not.toHaveProperty('id');
+    expect(result).not.toHaveProperty('status');
+    expect(result).not.toHaveProperty('_zdf');
+    expect(result).not.toHaveProperty('creditMemoItems');
+  });
+
+  it('returns just { items } when the pulled memo has no header fields (same shape as before)', () => {
+    const result = toMemoCreateBody({ id: 'stray-id', creditMemoItems: [] }, matchedItems);
+    expect(result).toEqual({ items: matchedItems });
+  });
+
+  it('drops header fields that are null or blank strings, never inventing values', () => {
+    const result = toMemoCreateBody({ comment: '', reasonCode: null, effectiveDate: '2026-08-24' }, matchedItems);
+    expect(result).toEqual({ items: matchedItems, effectiveDate: '2026-08-24' });
   });
 });

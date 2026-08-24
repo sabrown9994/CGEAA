@@ -155,6 +155,9 @@ describe('zdf push credit-memo', () => {
     mockResolveTargetId.mockResolvedValue({ id: null, found: false });
     mockRead.mockReturnValue({
       invoiceId: 'source-inv-id',
+      comment: 'Promoted from source',
+      reasonCode: 'Adjustment',
+      effectiveDate: '2026-08-24',
       creditMemoItems: [{ invoiceItemId: 'source-item-1', skuName: 'SKU-A', amount: 100 }],
     });
     mockReadByIdOrName.mockReturnValue({ _zdf: { sandbox: { id: 'target-inv-internal-id', key: 'INV-ACTIVE' } } });
@@ -168,7 +171,12 @@ describe('zdf push credit-memo', () => {
     expect(mockGet).toHaveBeenCalledWith('/v1/invoices/INV-ACTIVE/items');
     expect(mockPost).toHaveBeenCalledWith('/v1/credit-memos/invoice/INV-ACTIVE', {
       items: [{ invoiceItemId: 'target-item-1', amount: 100, skuName: 'SKU-A' }],
+      comment: 'Promoted from source',
+      reasonCode: 'Adjustment',
+      effectiveDate: '2026-08-24',
     });
+    const postedBody = mockPost.mock.calls[0][1] as Record<string, unknown>;
+    expect(postedBody).not.toHaveProperty('_zdf');
     expect(mockPut).not.toHaveBeenCalled();
     expect(mockResolve).toHaveBeenCalledWith('credit-memo', 'new-cm-id', 'push');
   });

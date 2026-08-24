@@ -152,3 +152,20 @@ export function toInvoiceCreateBody(pulled: Rec): Rec {
 
   return body;
 }
+
+const MEMO_HEADER_CREATE_FIELDS = ['comment', 'reasonCode', 'effectiveDate'];
+
+/**
+ * Enriches the invoice-scoped memo create body (`POST /v1/{memo}s/invoice/{targetInvoiceKey}`,
+ * see zdf/CLAUDE.md "Credit-memo / debit-memo creates") with the promoted memo's own header
+ * fields, so a cross-tenant create carries more than just the matched line items. Only the
+ * create-safe allowlisted header fields are carried — never ids, status, item arrays, or `_zdf`
+ * (this function never reads those off `pulled` in the first place). A superset of today's
+ * `{ items }`-only body: when none of the header fields are present, the result is identical.
+ */
+export function toMemoCreateBody(pulled: Rec, matchedItems: unknown[]): Rec {
+  return {
+    items: matchedItems,
+    ...pick(pulled, MEMO_HEADER_CREATE_FIELDS),
+  };
+}
