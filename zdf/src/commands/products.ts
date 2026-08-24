@@ -157,7 +157,12 @@ export function register(program: Command): void {
         }
         const res = await apiDelete<ZuoraWriteResponse>(`${OBJECT_ENDPOINT}/${resolvedId}`);
         assertSuccess(res, 'product delete');
-        await resolveAndSync(RESOURCE, id, 'delete');
+        // Clean up by the RESOLVED internal id, not the CLI arg: resolveAndSync re-fetches via
+        // GET /v1/object/product/{id} and only deletes the local file on a 404. A SKU arg would
+        // 400 (not 404), leaving the file orphaned + printing a misleading "failed to re-fetch"
+        // warning; the internal id correctly 404s post-delete, and deleteResourceFile's
+        // findByStoredId fallback then locates and removes the SKU-named file.
+        await resolveAndSync(RESOURCE, resolvedId, 'delete');
         output.success(`Product ${id} deleted.`);
       })()
     );

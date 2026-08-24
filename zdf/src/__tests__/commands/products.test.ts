@@ -267,9 +267,11 @@ describe('zdf delete product', () => {
     mockResolve.mockResolvedValue(undefined);
     await makeProgram().parseAsync(['node', 'zdf', 'delete', 'product', 'SKU-123']);
     expect(mockDelete).toHaveBeenCalledWith('/v1/object/product/internal-xyz');
-    // resolveAndSync cleanup still gets the ORIGINAL arg — findByStoredId/natural-key lookup
-    // handles locating the SKU-named file from there.
-    expect(mockResolve).toHaveBeenCalledWith('product', 'SKU-123', 'delete');
+    // resolveAndSync cleanup must ALSO use the resolved internal id: it GETs
+    // /v1/object/product/{id} and only deletes the local file on a 404. A SKU arg would 400
+    // (not 404), orphaning the file and printing a misleading warning; the internal id 404s
+    // correctly and deleteResourceFile's findByStoredId fallback removes the SKU-named file.
+    expect(mockResolve).toHaveBeenCalledWith('product', 'internal-xyz', 'delete');
   });
 
   it('local file has no _zdf entry for the active env: falls back to the record\'s Id', async () => {
