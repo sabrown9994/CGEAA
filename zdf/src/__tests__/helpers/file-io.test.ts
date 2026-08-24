@@ -54,7 +54,15 @@ describe('readResourceFileByIdOrName (natural-key resource, e.g. invoice)', () =
     expect(readResourceFileByIdOrName('invoice', 'inv-internal-1')).toMatchObject({ invoiceNumber: 'INV-1' });
   });
 
-  it('returns undefined (never throws) when neither the name nor a stored id matches', () => {
+  it('resolves by a SOURCE-tenant id stored in _zdf (cross-tenant FK lookup after a push re-fetch)', () => {
+    // After a cross-tenant push the file is re-fetched from the target tenant, so its own `id`
+    // becomes the target id — but a sibling FK still references the source id, which survives in
+    // `_zdf[sourceEnv].id`. Lookup by that source id must still find the file.
+    writeResourceFile('invoice', 'inv-internal-1', invoiceRecord);
+    expect(readResourceFileByIdOrName('invoice', 'intqa-inv-9')).toMatchObject({ invoiceNumber: 'INV-1' });
+  });
+
+  it('returns undefined (never throws) when neither the name, stored id, nor any _zdf id matches', () => {
     writeResourceFile('invoice', 'inv-internal-1', invoiceRecord);
     expect(readResourceFileByIdOrName('invoice', 'nope-not-here')).toBeUndefined();
   });

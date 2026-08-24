@@ -18,12 +18,28 @@ function findByStoredId(resourceType: string, nameOrId: string): string | null {
     if (!f.endsWith('.json')) continue;
     try {
       const rec = JSON.parse(readFileSync(join(dir, f), 'utf-8')) as Record<string, unknown>;
-      if (recordId(rec) === nameOrId) return join(dir, f);
+      if (matchesStoredId(rec, nameOrId)) return join(dir, f);
     } catch {
       // ignore unparseable files
     }
   }
   return null;
+}
+
+/** A record matches an internal id if it's the record's own current id (recordId) OR ANY id stored
+ * in its `_zdf` cross-tenant map. The `_zdf` fallback matters after a cross-tenant push: the file is
+ * re-fetched from the target tenant, so `recordId` becomes the TARGET id, while a sibling FK (e.g. an
+ * invoice's `accountId`) still references the SOURCE-tenant id — which lives on in `_zdf[sourceEnv].id`.
+ * Matching on `_zdf` ids keeps the file findable by the id in any tenant it's known in. */
+function matchesStoredId(rec: Record<string, unknown>, id: string): boolean {
+  if (recordId(rec) === id) return true;
+  const envMap = rec['_zdf'];
+  if (envMap && typeof envMap === 'object') {
+    for (const entry of Object.values(envMap as Record<string, unknown>)) {
+      if (entry && typeof entry === 'object' && (entry as Record<string, unknown>)['id'] === id) return true;
+    }
+  }
+  return false;
 }
 
 function outputDir(): string {
