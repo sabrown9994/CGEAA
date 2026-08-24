@@ -165,10 +165,14 @@ zdf auth use intQA  && zdf push account <accountNumber>   # upsert into intQA; _
   error verbatim. Use a create-shaped file (or `zdf template`) for brand-new resources.
 - `product` and `bill-run` files are **id-named** (their endpoints don't accept the natural key), so
   their local files don't unify across tenants the way natural-key-named resources do.
-- **Not yet verified against two live tenants.** The mechanics (map accumulation across differing
-  ids, FK remap, item matching) are covered by unit + real-filesystem integration tests and the
-  `pull → _zdf` population is confirmed live on intQA, but a true tenant-A → tenant-B round trip
-  awaits a second configured tenant.
+- **Live A→B status.** The **account** update path is **verified across two real tenants**
+  (intQA↔StagingUAT, 2026-08-24): pull in one → push in the other resolves the record by natural
+  key to that tenant's *different* internal id, updates it, and `_zdf` accumulates both envs;
+  re-push is idempotent (no duplicate). The **create-into-empty-target** path was confirmed to hit
+  the pull-shape-vs-create-shape limitation above (clear Zuora error, no partial state). Invoice FK
+  remap and memo item-matching are covered by unit + real-filesystem integration tests; a live A→B
+  run for them isn't practical (invoiceNumber/memoNumber are server-assigned, so they can't be
+  aligned across two independent sandboxes to exercise the update path).
 
 ---
 

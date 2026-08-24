@@ -437,11 +437,17 @@ Key modules/functions:
   CREATE branch only — accountNumber isn't in the invoice PUT allowlist); memo→invoiceItemId via the
   source-invoice file's `_zdf[active]` + `matchInvoiceItems`.
 
-**Verification reality:** only intQA is configured, so a TRUE tenant-A→tenant-B run isn't
-live-verified. Mechanics are covered by unit + real-filesystem integration tests
-(`src/__tests__/integration/cross-tenant-env-map.test.ts`, `memo-cross-tenant-create.test.ts`) and
-`pull → _zdf` is confirmed live on intQA. The UPDATE path is the supported one; create-into-empty-
-target can hit pull-shape-vs-create-shape mismatches (documented limitation).
+**Verification reality:** the **account** cross-tenant flow is **live-verified A→B (2026-08-24,
+intQA↔StagingUAT — two real tenants on rest.test.zuora.com)**: `pull` in intQA → `push` in
+StagingUAT resolved the record via natural-key search to StagingUAT's **different internal id**,
+UPDATED it, and the file's `_zdf` accumulated BOTH envs' distinct ids (same key); a repeat push was
+idempotent (used the mapped id, no duplicate). The **create-into-empty-target** path was live-
+confirmed to hit the documented pull-shape-vs-create-shape mismatch — `POST /v1/accounts` rejected
+the pulled GET-shaped body with a clear verbatim error, no crash, no partial `_zdf` written.
+Invoice FK remap and memo item-matching are covered by unit + real-filesystem integration tests
+(`src/__tests__/integration/cross-tenant-env-map.test.ts`, `memo-cross-tenant-create.test.ts`); a
+live A→B run for them isn't practical because invoiceNumber/memoNumber are server-assigned and can't
+be aligned across two independent sandboxes. The UPDATE path is the supported one.
 
 ## Test conventions
 

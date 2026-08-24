@@ -264,9 +264,13 @@ Both subcommands were removed from ZDF entirely (commit dbee8c1). `subscription`
   **Known limitations:** (1) the UPDATE path is fully supported; CREATE-into-empty-target from a
   *pulled* file can hit pull-shape-vs-create-shape mismatches (use `zdf template` / a create-shaped
   file). (2) product & bill-run are id-named (endpoints reject their natural key), so their local
-  files don't unify across tenants like natural-key-named resources. (3) **Not verified against two
-  live tenants** — only intQA is configured; mechanics are unit/real-fs tested and `pull→_zdf` is
-  live-confirmed on intQA, but a true tenant-A→tenant-B round trip awaits a 2nd tenant.
+  files don't unify across tenants like natural-key-named resources. (3) **Live A→B: the account
+  update path is verified across two real tenants (intQA↔StagingUAT, 2026-08-24)** — pull in one →
+  push in the other resolves by natural key to the other tenant's different internal id, updates it,
+  `_zdf` accumulates both, and re-push is idempotent; the create-into-empty-target path was
+  live-confirmed to hit the shape limitation in (1) with a clear error. Invoice FK remap / memo
+  item-matching remain unit + real-fs tested only (server-assigned invoice/memo numbers can't be
+  aligned across two independent sandboxes to run their update path live).
 
 - ✅ **RESOLVED (2026-08-21) — dependent-pull failures are now collected and surfaced.** Every
   dependency discovery lookup (contacts/orders/subscriptions/invoices/credit-memos/debit-memos/
