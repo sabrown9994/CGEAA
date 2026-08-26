@@ -13,7 +13,7 @@ export function readConfig(): ZdfConfig | null {
   try {
     return JSON.parse(readFileSync(p, 'utf-8')) as ZdfConfig;
   } catch {
-    throw new Error(`Config file at ${p} is not valid JSON. Delete it or run \`zdf auth add\` to recreate it.`);
+    throw new Error(`Config file at ${p} is not valid JSON. Delete it or run \`cgeaa zuora auth add\` to recreate it.`);
   }
 }
 
@@ -54,9 +54,9 @@ export function getActiveEnv(): EnvironmentConfig {
     };
   }
   const config = readConfig();
-  if (!config) throw new Error('No ZDF configuration found. Run `zdf auth add` to get started, or set ZDF_CLIENT_ID, ZDF_CLIENT_SECRET, and ZDF_BASE_URL environment variables.');
+  if (!config) throw new Error('No ZDF configuration found. Run `cgeaa zuora auth add` to get started, or set ZDF_CLIENT_ID, ZDF_CLIENT_SECRET, and ZDF_BASE_URL environment variables.');
   const env = config.environments[config.active];
-  if (!env) throw new Error(`Active environment "${config.active}" not found in config. Run \`zdf auth list\`.`);
+  if (!env) throw new Error(`Active environment "${config.active}" not found in config. Run \`cgeaa zuora auth list\`.`);
   return env;
 }
 

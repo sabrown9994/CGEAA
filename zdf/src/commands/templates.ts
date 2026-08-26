@@ -88,7 +88,7 @@ function emit(program: Command, resource: string): void {
   const path = writeResourceFileAs(resource, fileName, TEMPLATES[resource]);
   output.success(
     `Wrote ${resource} template to ${path}. Fill the REPLACE_ME placeholders (accounting codes / ` +
-    `custom-field values / parent ids are tenant-specific), then run: zdf create ${resource} ${fileName}`
+    `custom-field values / parent ids are tenant-specific), then run: cgeaa zuora create ${resource} ${fileName}`
   );
 }
 
@@ -101,7 +101,7 @@ export function register(program: Command): void {
   for (const resource of Object.keys(TEMPLATES)) {
     templateCmd
       .command(resource)
-      .description(`Write a starter template-${resource}-<n>.json usable by 'zdf create ${resource}'`)
+      .description(`Write a starter template-${resource}-<n>.json usable by 'cgeaa zuora create ${resource}'`)
       .action(() => runCommand(program, async () => { emit(program, resource); })());
   }
 }

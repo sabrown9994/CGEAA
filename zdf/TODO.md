@@ -271,7 +271,7 @@ Both subcommands were removed from ZDF entirely (commit dbee8c1). `subscription`
   ids (cross-tenant FK lookup). 460 tests.
 
   **Known limitations / status:** (1) **CREATE-into-empty now works** for account/invoice/memo via
-  the adapters; **product** net-new still needs `zdf template product` + `create` (Commerce body
+  the adapters; **product** net-new still needs `cgeaa zuora template product` + `create` (Commerce body
   unreconstructable from the object-GET) — product cross-tenant = search-by-SKU + update only.
   (2) product is now **SKU-named**; only **bill-run** stays id-named (pull + id-map only, no
   create/update). (3) **Live A→B verified (intQA↔StagingUAT, 2026-08-24, two real tenants):**
@@ -333,7 +333,7 @@ Both subcommands were removed from ZDF entirely (commit dbee8c1). `subscription`
   cancelled). No unapply step is needed because a Draft memo isn't applied yet (application happens on
   posting). GET-first behavior verified live on intQA; Draft/Cancelled/Posted branches unit-tested.
   Full create→cancel→delete cycle **now live-verified end-to-end (2026-08-21)**: created a
-  throwaway account → Posted invoice → Draft credit + debit memos → `zdf delete {memo}`
+  throwaway account → Posted invoice → Draft credit + debit memos → `cgeaa zuora delete {memo}`
   (GET → cancel → delete) → both confirmed gone; throwaway account cascade-deleted.
 - ✅ **RESOLVED (2026-08-21) — env-var (CI) auth was broken.** `ensureToken` called `saveUpdatedEnv`
   unconditionally; in env-var mode there's no config file, so the first successful token fetch threw

@@ -59,6 +59,19 @@ _build_zdf() {
 }
 
 execute_zuora() {
+    # Honor a configured Zuora output directory so output lands in a fixed location regardless of
+    # the current working directory (ZDF otherwise writes ./zdf-output relative to CWD). Precedence:
+    #   explicit ZDF_OUTPUT_DIR in the environment  >  config `zuora_output_dir`  >  ZDF's own default.
+    if [ -z "${ZDF_OUTPUT_DIR:-}" ] && [ -n "${CONFIG_ZUORA_OUTPUT_DIR:-}" ]; then
+        local out_dir="$CONFIG_ZUORA_OUTPUT_DIR"
+        # Expand a leading ~ (config files store literal strings — the shell won't expand it for us).
+        case "$out_dir" in
+            "~") out_dir="$HOME" ;;
+            "~/"*) out_dir="$HOME/${out_dir#\~/}" ;;
+        esac
+        export ZDF_OUTPUT_DIR="$out_dir"
+    fi
+
     local zdf_cmd
     zdf_cmd="$(_find_zdf)"
 

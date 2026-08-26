@@ -155,7 +155,7 @@ the command GETs the memo first: `Draft` → `PUT /v1/{memo}s/{id}/cancel` → `
 `CancelInProgress`, or missing) → rejected with a clear message (no blind DELETE). No unapply
 step is needed — a Draft memo isn't applied to its invoice yet (application happens on posting).
 Status spelling is Zuora's single-L `Canceled`. **Live-verified end-to-end (2026-08-21):**
-account → Posted invoice → Draft credit + debit memos → `zdf delete {memo}` (GET → cancel →
+account → Posted invoice → Draft credit + debit memos → `cgeaa zuora delete {memo}` (GET → cancel →
 delete) → both confirmed gone, throwaway account cascade-deleted. Branches also unit-tested.
 
 ### Invoice create / delete
@@ -339,7 +339,7 @@ selected `auth` environment), not a promotion pipeline. It has exactly three in-
    is handled by per-resource **create-shape adapters** (`src/helpers/create-shape.ts`) that
    transform the *pulled* GET shape into the create-API body (account, invoice, credit/debit-memo) —
    so a net-new record can be created in a lower env from a pulled file. **product** is the
-   exception: its net-new creation still needs `zdf template product` + `create` (a Commerce body
+   exception: its net-new creation still needs `cgeaa zuora template product` + `create` (a Commerce body
    can't be reconstructed from the product object-GET — no plan/charge/pricing/accounting), so
    product cross-tenant is search-by-SKU + UPDATE only.
 3. **Targeted automation** — scripted one-off tasks such as creating products (and their rate
@@ -437,7 +437,7 @@ Key modules/functions:
   contact nests its postal code under `zipCode` (not `postalCode`); the pulled invoice item exposes
   its amount as `chargeAmount` (mapped → `amount`); a pulled invoice carries `accountId`, NOT
   `accountNumber`. Product has NO create-shape adapter by design (Commerce body unreconstructable
-  from the object-GET) — net-new product = `zdf template` + `create`.
+  from the object-GET) — net-new product = `cgeaa zuora template` + `create`.
 - `src/helpers/file-io.ts`: `readResourceFileIfExists` (EXACT filename, no id-scan — for the merge
   lookup) and `readResourceFileByIdOrName` (exact name → `findByStoredId` id-scan fallback,
   non-throwing — for locating a sibling file when the ref may be an id OR a natural key, e.g. the
@@ -552,25 +552,25 @@ are for human readability — rely on exit codes in scripts, not output scraping
 
 These make no writes to Zuora and are safe in any pipeline stage:
 ```
-zdf pull <resource> <id> [--no-dependency]
-zdf list orders [--account <key>] [--limit <n>]
-zdf list billing-templates
-zdf auth env
+cgeaa zuora pull <resource> <id> [--no-dependency]
+cgeaa zuora list orders [--account <key>] [--limit <n>]
+cgeaa zuora list billing-templates
+cgeaa zuora auth env
 ```
 
 ### Commands that write to Zuora
 
 Use with explicit intent in deployment stages. Always gate with env checks:
 ```
-zdf push <resource> <id>          # updates a resource
-zdf create <resource> <name>      # creates a new record
-zdf delete <resource> <id>        # deletes a record
+cgeaa zuora push <resource> <id>          # updates a resource
+cgeaa zuora create <resource> <name>      # creates a new record
+cgeaa zuora delete <resource> <id>        # deletes a record
 ```
 
 ### Commands with side effects
 
 ```
-zdf create bill-run <name>        # EXECUTES BILLING — generates real invoices/memos
+cgeaa zuora create bill-run <name>        # EXECUTES BILLING — generates real invoices/memos
 ```
 
 The CLI prints a warning before the network call, but in an automated pipeline that warning
@@ -600,8 +600,8 @@ jobs:
           ZDF_BASE_URL: ${{ secrets.ZUORA_BASE_URL }}
           ZDF_OUTPUT_DIR: ${{ github.workspace }}/zuora-state
         run: |
-          node zdf/dist/zdf.js pull product ${{ env.PRODUCT_ID }} --no-dependency
-          node zdf/dist/zdf.js pull product-rate-plan ${{ env.PRP_ID }} --no-dependency
+          ./cgeaa zuora pull product ${{ env.PRODUCT_ID }} --no-dependency
+          ./cgeaa zuora pull product-rate-plan ${{ env.PRP_ID }} --no-dependency
 
       - name: Push updated config to Zuora
         if: github.ref == 'refs/heads/main'
@@ -611,7 +611,7 @@ jobs:
           ZDF_BASE_URL: ${{ secrets.ZUORA_BASE_URL }}
           ZDF_OUTPUT_DIR: ${{ github.workspace }}/zuora-state
         run: |
-          node zdf/dist/zdf.js push product-rate-plan ${{ env.PRP_ID }} --no-dependency
+          ./cgeaa zuora push product-rate-plan ${{ env.PRP_ID }} --no-dependency
 ```
 
 ### Token persistence in CI

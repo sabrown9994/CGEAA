@@ -34,7 +34,7 @@ function resolveTargetAccountNumber(invoiceRecord: Record<string, unknown>): str
   if (!acct || !activeKey) {
     throw new Error(
       `Cannot create invoice in ${active}: its account (${ref ?? 'unknown'}) is not mapped there — ` +
-      `pull/push that account into ${active} first (zdf push account ...).`
+      `pull/push that account into ${active} first (cgeaa zuora push account ...).`
     );
   }
   return String(activeKey);
@@ -63,7 +63,7 @@ export function register(program: Command): void {
     .command('invoice <name>')
     .description('Create a standalone invoice in Zuora from a local file')
     .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/invoices/<name>.json)`)
-    .option('--post', 'create the invoice in Posted status (a Posted invoice cannot be deleted via zdf on this tenant)')
+    .option('--post', 'create the invoice in Posted status (a Posted invoice cannot be deleted via cgeaa zuora on this tenant)')
     .action((name: string, opts: { file?: string; post?: boolean }) =>
       runCommand(program, async () => {
         const body: unknown = opts.file
@@ -76,7 +76,7 @@ export function register(program: Command): void {
           (body as Record<string, unknown>).status = 'Posted';
         }
         if (opts.post) {
-          output.warn('--post creates the invoice in Posted status; a Posted invoice cannot be cancelled or deleted via zdf on this tenant.');
+          output.warn('--post creates the invoice in Posted status; a Posted invoice cannot be cancelled or deleted via cgeaa zuora on this tenant.');
         }
         // `pull` writes `_zdf` into invoice files, so a create off a pulled file must never let it
         // reach Zuora — strip it from the outbound body on every post path (matches

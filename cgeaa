@@ -295,7 +295,7 @@ parse_args() {
                 ;;
             *)
                 log_error "Unknown option: $1"
-                usage
+                log_info "Run 'cgeaa' for usage, or 'cgeaa zuora' for Zuora commands."
                 exit 1
                 ;;
         esac
@@ -347,7 +347,7 @@ validate_command() {
             ;;
         *)
             log_error "Invalid command: $COMMAND"
-            usage
+            log_info "Run 'cgeaa' for usage, or 'cgeaa zuora' for Zuora commands."
             exit 1
             ;;
     esac

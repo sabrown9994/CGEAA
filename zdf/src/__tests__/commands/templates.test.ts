@@ -44,7 +44,7 @@ describe('zdf template', () => {
     expect(Object.keys(charge.accounting)).toContain('deferred_revenue_account');
     expect(charge).toHaveProperty('pobidentifier__c');
     // success message tells the user the exact create command to run
-    expect(mockSuccess.mock.calls[0][0]).toMatch(/zdf create product template-product-\d+/);
+    expect(mockSuccess.mock.calls[0][0]).toMatch(/cgeaa zuora create product template-product-\d+/);
   });
 
   it('template product-rate-plan and charge write PascalCase object skeletons with required parent ids', async () => {
