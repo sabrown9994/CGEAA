@@ -147,3 +147,21 @@ cgeaa zuora delete product <SKU>
 - **Useful flags:** `--no-dependency` (skip the dependency tree — essential for large accounts),
   `--debug` (print every HTTP call), `--no-caps` (remove pagination caps).
 - **Full reference:** [`../README-ZDF.md`](../README-ZDF.md).
+
+---
+
+## Optional: teach your Claude Code to use ZDF (plugin)
+
+The repo ships a Claude Code **plugin** (`plugins/zdf`) — a skill that teaches Claude *when and how*
+to run `cgeaa zuora …` across the three use cases. Once installed, your Claude Code sessions will
+reach for ZDF automatically on Zuora-related tasks. Install it manually (two commands):
+
+```
+/plugin marketplace add sabrown9994/CGEAA
+/plugin install zdf@CGEAA
+```
+
+The plugin ships instructions only — it does **not** install the CLI. You still need `cgeaa` on your
+PATH via `./cgeaa-setup` (see Install above). The marketplace lives in this repo, so install from a
+branch/tag where `plugins/zdf` is present (or `main` once merged).
+

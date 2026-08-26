@@ -1,0 +1,13 @@
+{
+  "name": "CGEAA",
+  "owner": {
+    "name": "CarGurus Enterprise Applications"
+  },
+  "plugins": [
+    {
+      "name": "zdf",
+      "source": "./plugins/zdf",
+      "description": "Teaches Claude to use the bundled Zuora Development Framework (cgeaa zuora ...) for config editing, cross-tenant test-data promotion, and product-catalog automation."
+    }
+  ]
+}
