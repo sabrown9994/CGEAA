@@ -20,6 +20,11 @@ DEFAULT_MAX_DEPLOY_WAIT="3600"
 DEFAULT_PARALLEL_JOBS="1"
 DEFAULT_COVERAGE_MAPPINGS_REPO="EA-Salesforce-Mappings"
 DEFAULT_COVERAGE_MAPPINGS_REPO_URL=""
+# Fixed output directory for `cgeaa zuora` (ZDF) commands. Empty = use ZDF's own default
+# (./zdf-output, relative to the current directory). When set, it is exported as ZDF_OUTPUT_DIR
+# so Zuora output always lands here regardless of which folder the command is run from — unless
+# ZDF_OUTPUT_DIR is already set in the environment, which always takes precedence.
+DEFAULT_ZUORA_OUTPUT_DIR=""
 
 # Current configuration variables
 CONFIG_DEFAULT_ORG="$DEFAULT_ORG"
@@ -34,6 +39,7 @@ CONFIG_MAX_DEPLOY_WAIT="$DEFAULT_MAX_DEPLOY_WAIT"
 CONFIG_PARALLEL_JOBS="$DEFAULT_PARALLEL_JOBS"
 CONFIG_COVERAGE_MAPPINGS_REPO="$DEFAULT_COVERAGE_MAPPINGS_REPO"
 CONFIG_COVERAGE_MAPPINGS_REPO_URL="$DEFAULT_COVERAGE_MAPPINGS_REPO_URL"
+CONFIG_ZUORA_OUTPUT_DIR="$DEFAULT_ZUORA_OUTPUT_DIR"
 
 # Load configuration from file
 load_config_file() {
@@ -68,6 +74,7 @@ load_config_file() {
                 "parallel_jobs") CONFIG_PARALLEL_JOBS="$value" ;;
                 "coverage_mappings_repo") CONFIG_COVERAGE_MAPPINGS_REPO="$value" ;;
                 "coverage_mappings_repo_url") CONFIG_COVERAGE_MAPPINGS_REPO_URL="$value" ;;
+                "zuora_output_dir") CONFIG_ZUORA_OUTPUT_DIR="$value" ;;
             esac
             log_debug "Config loaded: $key = $value"
         done < "$config_file"

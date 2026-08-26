@@ -191,9 +191,11 @@ cgeaa zuora auth env                 # prints the active environment name and UR
 cgeaa zuora list billing-templates   # a read-only call to confirm the credentials work
 ```
 
-Output files land in `./zdf-output/<resource-type>/` by default; set `ZDF_OUTPUT_DIR` to
-change that. **That's all you need to get running — everything else (commands, resources,
-options, examples) lives in [`zdf/README-ZDF.md`](zdf/README-ZDF.md).**
+Output files land in `./zdf-output/<resource-type>/` **relative to the directory you run the
+command from**. To keep Zuora output in a fixed location regardless of your current directory,
+set `zuora_output_dir` in `~/.cgeaa/config` (or `.cgeaa/config`), or export `ZDF_OUTPUT_DIR`
+(the env var takes precedence). **That's all you need to get running — everything else (commands,
+resources, options, examples) lives in [`zdf/README-ZDF.md`](zdf/README-ZDF.md).**
 
 ---
 
@@ -267,6 +269,12 @@ coverage_mappings_repo=EA-Salesforce-Mappings
 # Git clone URL for the mappings repository.
 # When set, CGEAA will automatically clone the repo if it is not found on disk.
 coverage_mappings_repo_url=https://github.com/cargurus-ea/EA-Salesforce-Mappings
+
+# Fixed output directory for `cgeaa zuora` (ZDF) commands. When set, Zuora output always
+# lands here regardless of which directory you run the command from (ZDF otherwise writes
+# ./zdf-output relative to the current directory). An explicit ZDF_OUTPUT_DIR environment
+# variable always takes precedence over this. A leading ~ is expanded.
+zuora_output_dir=~/FinSys/Zuora/zdf-output
 ```
 
 ## Command Reference

@@ -45,8 +45,12 @@ cgeaa zuora list billing-templates  # read-only smoke test
 
 Common environment-type choices: `US Developer & Central Sandbox` → `rest.test.zuora.com`;
 `US API Sandbox (Cloud 2)` → `rest.apisandbox.zuora.com`; `US Production (Cloud 2)` →
-`rest.zuora.com`. Credentials are stored in `~/.zdf/config.json` (never committed). Pulled files
-land in `./zdf-output/<resource>/` (override with `ZDF_OUTPUT_DIR`).
+`rest.zuora.com`. Credentials are stored in `~/.zdf/config.json` (never committed).
+
+**Output location:** pulled files land in `./zdf-output/<resource>/` **relative to the directory
+you run the command from**. To pin Zuora output to a fixed folder regardless of where you run,
+set `zuora_output_dir` in `~/.cgeaa/config` (e.g. `zuora_output_dir=~/FinSys/Zuora/zdf-output`),
+or export `ZDF_OUTPUT_DIR` (the env var wins over the config key).
 
 For CI / non-interactive use, skip `auth add` and set `ZDF_CLIENT_ID` / `ZDF_CLIENT_SECRET` /
 `ZDF_BASE_URL` (+ optional `ZDF_ENV_NAME`) instead.
