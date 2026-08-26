@@ -20,12 +20,15 @@ import { register as registerTemplates } from './commands/templates.js';
 export function buildProgram(): Command {
   const program = new Command();
   program
-    .name('zdf')
+    .name('cgeaa zuora')
     .description(
-      'Zuora Development Framework — a developer CLI for pulling Zuora objects to local JSON, ' +
-      'editing them, and pushing them back to a single Zuora tenant.'
+      'Zuora commands (via `cgeaa zuora`) — pull Zuora objects to local JSON, edit them, ' +
+      'and push them back to a single Zuora tenant.'
     )
     .version('1.0.0')
+    // On an error (unknown command, missing arg, bad option) show a one-line pointer, NOT the
+    // full help dump.
+    .showHelpAfterError("Run 'cgeaa zuora' (or 'cgeaa zuora <command> --help') for usage.")
     .option('--debug', 'print every HTTP request URL and response body')
     .option('--no-dependency', 'skip dependency tree traversal')
     .option('--max-rows <n>', 'override the apiQuery pagination row cap for this run')
@@ -39,7 +42,7 @@ export function buildProgram(): Command {
   program.addHelpText(
     'after',
     `
-Use cases (what ZDF is for):
+Use cases (what these commands are for):
   1. Config editing   pull/push workflow & billing-template so they can be edited in your
                       IDE (including with AI tooling), then pushed back.
   2. Test data        pull/push accounts and their billing objects (contact, subscription,
@@ -48,11 +51,11 @@ Use cases (what ZDF is for):
   3. Automation       scripted tasks against one tenant, e.g. creating products (with their
                       rate plans and charges) in production from a ticket.
 
-ZDF operates on ONE tenant at a time (the active 'auth' environment). It is NOT an
+These commands operate on ONE tenant at a time (the active 'auth' environment). This is NOT an
 environment-promotion pipeline: promotion (IntQA -> StagingUAT -> Production) is handled by
-Zuora's native Deployment Manager, outside ZDF. See docs/promotion-deployment-manager.md.
+Zuora's native Deployment Manager. See docs/promotion-deployment-manager.md.
 
-Run 'zdf <command> --help' (e.g. 'zdf pull --help') to see the resources each verb supports.`
+Run 'cgeaa zuora <command> --help' (e.g. 'cgeaa zuora pull --help') to see the resources each verb supports.`
   );
 
   program.hook('preAction', (_thisCommand, actionCommand) => {

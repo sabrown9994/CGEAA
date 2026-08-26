@@ -90,7 +90,7 @@ export function readResourceFile(resourceType: string, nameOrId: string, ext = '
         ? ` (Note: ${resourceType} files are named by their natural key — check the path printed by 'pull'.)`
         : '';
       throw new Error(
-        `No file found at ${p}. Run 'zdf pull ${resourceType} ${nameOrId}' first or provide --file <path>.${hint}`
+        `No file found at ${p}. Run 'cgeaa zuora pull ${resourceType} ${nameOrId}' first or provide --file <path>.${hint}`
       );
     }
   }

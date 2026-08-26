@@ -100,7 +100,7 @@ function findLocalFile(id: string): string {
   const matches = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(suffix)) : [];
   if (matches.length === 0) {
     throw new Error(
-      `No local file found for billing template ${id} in ${dir}. Run 'zdf pull billing-template ${id}' first or provide --file <path>.`
+      `No local file found for billing template ${id} in ${dir}. Run 'cgeaa zuora pull billing-template ${id}' first or provide --file <path>.`
     );
   }
   if (matches.length > 1) {

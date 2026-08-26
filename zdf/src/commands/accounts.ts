@@ -89,7 +89,7 @@ export function register(program: Command): void {
         if (target.found) {
           const basicInfo = fileRecord['basicInfo'] as Record<string, unknown> | undefined;
           if (!basicInfo) {
-            throw new Error("Account file is missing 'basicInfo' field. Run 'zdf get account <id>' to refresh it.");
+            throw new Error("Account file is missing 'basicInfo' field. Run 'cgeaa zuora pull account <id>' to refresh it.");
           }
           const body = stripEnvMap(filterUpdatableFields(RESOURCE, basicInfo));
           const res = await apiPut<ZuoraWriteResponse>(`${ENDPOINT}/${target.id}`, body);

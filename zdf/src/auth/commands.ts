@@ -63,7 +63,7 @@ export function register(program: Command): void {
     .action(() => {
       const config = readConfig();
       if (!config || Object.keys(config.environments).length === 0) {
-        output.warn('No environments configured. Run `zdf auth add` to add one.');
+        output.warn('No environments configured. Run `cgeaa zuora auth add` to add one.');
         return;
       }
       for (const [key, env] of Object.entries(config.environments)) {
@@ -77,7 +77,7 @@ export function register(program: Command): void {
     .description('Switch the active environment')
     .action((name: string) => {
       const config = readConfig();
-      if (!config) { output.error('No config found. Run `zdf auth add`.'); process.exit(1); }
+      if (!config) { output.error('No config found. Run `cgeaa zuora auth add`.'); process.exit(1); }
       if (!config.environments[name]) { output.error(`Environment "${name}" not found.`); process.exit(1); }
       config.active = name;
       writeConfig(config);
@@ -110,7 +110,7 @@ export function register(program: Command): void {
           config.active = remaining[0];
           output.warn(`Active environment switched to "${config.active}".`);
         } else {
-          output.warn('No environments remaining. Run `zdf auth add` to add one.');
+          output.warn('No environments remaining. Run `cgeaa zuora auth add` to add one.');
           config.active = '';
         }
       }
