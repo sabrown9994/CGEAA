@@ -1,0 +1,9 @@
+{
+  "name": "cgeaa",
+  "description": "CarGurus Enterprise Applications Automation — a CLI development tool for working with the applications we support, with SDLC guardrails. Teaches Claude to use the `cgeaa` CLI for Salesforce (deploy/validate/test/diff/logs/rollback) and Zuora (`cgeaa zuora ...` billing-object sync). Additional application domains (e.g. NetSuite) are added as new skills over time.",
+  "version": "1.1.0",
+  "author": {
+    "name": "CarGurus Enterprise Applications"
+  },
+  "homepage": "https://github.com/sabrown9994/CGEAA/blob/main/README-CGEAA.md"
+}

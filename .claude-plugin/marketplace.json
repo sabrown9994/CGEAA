@@ -5,9 +5,9 @@
   },
   "plugins": [
     {
-      "name": "zdf",
-      "source": "./plugins/zdf",
-      "description": "Teaches Claude to use the bundled Zuora Development Framework (cgeaa zuora ...) for config editing, cross-tenant test-data promotion, and product-catalog automation."
+      "name": "cgeaa",
+      "source": ".",
+      "description": "Teaches Claude to use the CGEAA CLI across every application it supports (Salesforce, Zuora; NetSuite planned) with the team's SDLC guardrails. Install once; new application skills arrive on update."
     }
   ]
 }

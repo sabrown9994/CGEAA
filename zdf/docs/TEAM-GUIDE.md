@@ -152,16 +152,19 @@ cgeaa zuora delete product <SKU>
 
 ## Optional: teach your Claude Code to use ZDF (plugin)
 
-The repo ships a Claude Code **plugin** (`plugins/zdf`) — a skill that teaches Claude *when and how*
-to run `cgeaa zuora …` across the three use cases. Once installed, your Claude Code sessions will
-reach for ZDF automatically on Zuora-related tasks. Install it manually (two commands):
+The repo ships a Claude Code **plugin** (`cgeaa`) — a set of skills that teach Claude *when and how*
+to run the `cgeaa` CLI across every application it supports (a `zuora` skill for the ZDF workflows
+below, a `salesforce` skill for deploy/validate/test/diff/logs, and more as they're added). Once
+installed, your Claude Code sessions reach for the right tool automatically per task. Install it
+manually (two commands):
 
 ```
 /plugin marketplace add sabrown9994/CGEAA
-/plugin install zdf@CGEAA
+/plugin install cgeaa@CGEAA
 ```
 
 The plugin ships instructions only — it does **not** install the CLI. You still need `cgeaa` on your
 PATH via `./cgeaa-setup` (see Install above). The marketplace lives in this repo, so install from a
-branch/tag where `plugins/zdf` is present (or `main` once merged).
+branch/tag where the plugin is present (or `main` once merged). New application skills arrive on
+`/plugin update` with no re-install.
 
