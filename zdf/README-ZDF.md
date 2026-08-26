@@ -153,8 +153,8 @@ keyed by the active `auth` environment's **name**.
 
 **Typical flow (seed/sync a record into a lower env):**
 ```
-zdf auth use prod   && zdf pull account <id>       # writes accounts/<accountNumber>.json + _zdf.prod
-zdf auth use intQA  && zdf push account <accountNumber>   # upsert into intQA; _zdf.intQA added
+cgeaa zuora auth use prod   && cgeaa zuora pull account <id>       # writes accounts/<accountNumber>.json + _zdf.prod
+cgeaa zuora auth use intQA  && cgeaa zuora push account <accountNumber>   # upsert into intQA; _zdf.intQA added
 ```
 
 **Limitations (important):**
@@ -165,7 +165,7 @@ zdf auth use intQA  && zdf push account <accountNumber>   # upsert into intQA; _
   duplicates.
 - **`product` is the exception for net-new creation:** a Commerce product body (plans/charges/
   pricing/accounting) can't be reconstructed from the `/v1/object` product GET, so a product that
-  doesn't exist in the target must be created with `zdf template product` + `zdf create` — product
+  doesn't exist in the target must be created with `cgeaa zuora template product` + `cgeaa zuora create` — product
   cross-tenant `push` is search-by-SKU + **update** only.
 - `product` files are **SKU-named** (its natural key); `push`/`delete` resolve the tenant-internal
   id from the file's `_zdf`/record before calling the object endpoint (which rejects the SKU).
@@ -218,9 +218,9 @@ npm run build   # runs: tsup bin/zdf.ts --format cjs --out-dir dist
 # Authenticate — `auth add` is INTERACTIVE (saved to ~/.zdf/config.json):
 #   prompts for: name → region (US/EU/APAC) → environment type → client id → client secret.
 #   The base URL is derived from the region + environment-type you pick (see the table below).
-node dist/zdf.js auth add
-node dist/zdf.js auth use sandbox      # set the active environment
-node dist/zdf.js auth env              # confirm the active environment
+cgeaa zuora auth add
+cgeaa zuora auth use sandbox      # set the active environment
+cgeaa zuora auth env              # confirm the active environment
 ```
 
 Environment type → base URL (pick the one matching your tenant when prompted):
@@ -279,7 +279,7 @@ The CLI transparently refreshes the OAuth token when it has expired, and also re
 Fetch a resource from Zuora and write it (plus all dependent records, unless `--no-dependency`) to `zdf-output/`.
 
 ```
-zdf pull <resource> <id>
+cgeaa zuora pull <resource> <id>
 ```
 
 ### push
@@ -287,13 +287,13 @@ zdf pull <resource> <id>
 Read the local JSON file and update the resource in Zuora. Dependent records are re-fetched (pulled) to keep local files consistent.
 
 ```
-zdf push <resource> <id>
+cgeaa zuora push <resource> <id>
 ```
 
 `billing-template` is also updated via `push` (a Settings API `PUT`, not the standard `/v1/` write endpoints) — see [billing-template](#billing-template) for details:
 
 ```
-zdf push billing-template <id>
+cgeaa zuora push billing-template <id>
 ```
 
 ### create
@@ -301,8 +301,8 @@ zdf push billing-template <id>
 Read a local JSON file and create a new resource in Zuora. The file is renamed to the Zuora-assigned ID after creation.
 
 ```
-zdf create <resource> <name>
-zdf create <resource> <name> --file /path/to/file.json
+cgeaa zuora create <resource> <name>
+cgeaa zuora create <resource> <name> --file /path/to/file.json
 ```
 
 ### delete
@@ -310,7 +310,7 @@ zdf create <resource> <name> --file /path/to/file.json
 Delete a resource in Zuora. Dependent local files are cleaned up.
 
 ```
-zdf delete <resource> <id>
+cgeaa zuora delete <resource> <id>
 ```
 
 ### list
@@ -318,8 +318,8 @@ zdf delete <resource> <id>
 Fetch all records of a type and write them to local storage.
 
 ```
-zdf list orders
-zdf list billing-templates
+cgeaa zuora list orders
+cgeaa zuora list billing-templates
 ```
 
 ### template
@@ -329,9 +329,9 @@ fields (and `REPLACE_ME` placeholders) so you don't have to hand-build a `create
 the three catalog resources:
 
 ```
-zdf template product
-zdf template product-rate-plan
-zdf template product-rate-plan-charge
+cgeaa zuora template product
+cgeaa zuora template product-rate-plan
+cgeaa zuora template product-rate-plan-charge
 ```
 
 Each writes `template-<resource>-<n>.json` into that resource's output folder and prints the exact
@@ -339,12 +339,12 @@ Each writes `template-<resource>-<n>.json` into that resource's output folder an
 
 ```
 ✔ Wrote product template to zdf-output/products/template-product-86193.json. Fill the REPLACE_ME
-  placeholders …, then run: zdf create product template-product-86193
+  placeholders …, then run: cgeaa zuora create product template-product-86193
 ```
 
 Fill in the placeholders — tenant-specific values (accounting-code names, custom-field picklist
 values, and parent ids like `ProductId` / `ProductRatePlanId`) must be supplied — then run the
-printed `zdf create` command. The `product` template matches the Commerce API body (snake_case,
+printed `cgeaa zuora create` command. The `product` template matches the Commerce API body (snake_case,
 `pricing` keyed by currency, full accounting block, `item__c`/`productfamily__c`,
 `pobidentifier__c`/`pobname__c`); the rate-plan/charge templates match the `/v1/object/` PascalCase
 shape.
@@ -420,7 +420,7 @@ Subscriptions support **pull and push only**. There is no `create subscription` 
 - The file from `pull order` stores data under an `order` key; the push command unwraps this automatically before sending to Zuora.
 - `push order` re-pulls the parent account after updating.
 - There is no `create order-line-item` or `delete order-line-item` — line items are managed through the order.
-- `zdf list orders` supports `--account <key>`, `--status <status>`, `--limit <n>`, and `--all`. It refuses to run with no flags at all, to avoid an accidental full-tenant export — pass `--all` to confirm one.
+- `cgeaa zuora list orders` supports `--account <key>`, `--status <status>`, `--limit <n>`, and `--all`. It refuses to run with no flags at all, to avoid an accidental full-tenant export — pass `--all` to confirm one.
 - `--account <key>` scopes the list via `GET /v1/orders/subscriptionOwner/{accountKey}` rather than the generic `?accountId=` filter — the generic filter is ignored server-side by the tenant and returns the unfiltered list. When `--account` and `--status` are combined, the status filter is applied client-side (the `subscriptionOwner` endpoint has no `status` query param).
 - The account → orders dependency traversal (pulling an account's orders) uses the same `GET /v1/orders/subscriptionOwner/{accountKey}` endpoint.
 
@@ -594,7 +594,7 @@ HTML invoice templates only, accessed via the Zuora **Settings API** (`/settings
 | push | `PUT /settings/invoice-templates/{id}` | Re-encodes the local JSON to base64 and sends an allowlisted body |
 | create | `POST /settings/invoice-templates` | Base64-encodes the local design JSON, HTML-only; renames the local file to `<name>_<id>.json` |
 | delete | `DELETE /settings/invoice-templates/{id}` | Removes the remote template and its local file |
-| list | `GET /settings/invoice-templates` (`zdf list billing-templates`) | Metadata only (id, name, templateNumber, templateFormat) |
+| list | `GET /settings/invoice-templates` (`cgeaa zuora list billing-templates`) | Metadata only (id, name, templateNumber, templateFormat) |
 
 **Limitations:**
 - **HTML templates only.** WORD-format templates are not supported — their content is a binary `.doc`, not JSON, so `pull billing-template` rejects them. `create billing-template` always sends `templateFormat: 'HTML'`.
