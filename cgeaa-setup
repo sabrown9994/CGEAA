@@ -305,6 +305,16 @@ install_globally() {
 
 
 # --- Main Setup Logic ---
+# When this script is SOURCED (e.g. cgeaa-lib/update.sh sources it to reuse
+# perform_global_install), ONLY the function definitions above should load — the interactive setup
+# flow below must NOT run. Otherwise `cgeaa update` replays the whole setup (global-install prompt,
+# mappings prompts, and the Zuora-credentials prompt) AND then runs perform_global_install again,
+# which looks like an install loop (answering "no" to the Zuora prompt kicks off a second full
+# rebuild). `return` is valid at the top level of a sourced script and stops here without exiting
+# the caller.
+if [ "${BASH_SOURCE[0]}" != "${0}" ]; then
+    return 0 2>/dev/null || true
+fi
 
 # Check if we're in the right directory
 if [ ! -f "cgeaa" ]; then
