@@ -1,0 +1,93 @@
+// Central per-resource metadata for (a) natural-key local file naming and (b) the cross-tenant
+// env-id map / upsert feature. Kept in one place so file-io, the dependency graph, and the
+// commands all agree on how a resource is identified.
+
+type Rec = Record<string, unknown>;
+
+function str(v: unknown): string | undefined {
+  if (v === undefined || v === null) return undefined;
+  const s = String(v).trim();
+  return s.length ? s : undefined;
+}
+
+/**
+ * Extract a resource's NATURAL KEY (a tenant-stable, human-meaningful unique identifier) from a
+ * fetched record — used both for the local filename and, for cross-tenant resources, as the
+ * fallback search key. Returns undefined for resources that have no reliable natural key (those
+ * fall back to the Zuora id for file naming). Field paths cover the different response shapes each
+ * endpoint returns (e.g. account GET nests accountNumber under basicInfo; product object endpoint
+ * is PascalCase `SKU` while Commerce is `sku`; order GET wraps under `order`).
+ */
+// IMPORTANT: most resources here are listed because their Zuora endpoints accept the natural key
+// as the key/id directly, and push/delete pass the CLI arg straight into the endpoint path — so
+// for those, the natural key MUST be a valid Zuora key for the resource's read AND write
+// endpoints. Verified live (2026-08-21): account/subscription/invoice accept their number; the
+// order endpoint already uses the order number; credit-/debit-memo keys are ID-or-number per
+// Zuora. `product` is the one exception to the "arg passed straight into the endpoint" pattern:
+// its `/v1/object/product/{id}` endpoint rejects the SKU (400), so SKU-named files are safe ONLY
+// because `push` resolves the real write id via `resolveTargetId` (never the CLI arg) and
+// `delete` resolves it from the local file (`_zdf[env].id` / `Id` — see commands/products.ts)
+// instead of using the arg directly. Deliberately EXCLUDED: bill-run (its GET uses the internal
+// id, not a natural key).
+export const NATURAL_KEY: Record<string, (rec: Rec) => string | undefined> = {
+  account: (r) => str((r['basicInfo'] as Rec | undefined)?.['accountNumber'] ?? r['accountNumber']),
+  subscription: (r) => str(r['subscriptionNumber']),
+  order: (r) => str((r['order'] as Rec | undefined)?.['orderNumber'] ?? r['orderNumber']),
+  invoice: (r) => str(r['invoiceNumber']),
+  'credit-memo': (r) => str(r['memoNumber'] ?? r['number']),
+  'debit-memo': (r) => str(r['memoNumber'] ?? r['number']),
+  // product: object endpoint is PascalCase `SKU`, Commerce API is lowercase `sku`.
+  product: (r) => str(r['SKU'] ?? r['sku']),
+  // No entry → file naming falls back to the Zuora id (or the resource's command manages its own
+  // filename): contact, order-line-item, product-rate-plan, product-rate-plan-charge, bill-run,
+  // data-query (id); workflow (id — names not guaranteed unique); billing-template
+  // (`<name>_<id>.json`, written by its own command).
+};
+
+/**
+ * The filename (minus .json) for a resource's local file. Uses the natural key when the resource
+ * has one and it's present on the record; otherwise falls back to `id`. `billing-template` keeps
+ * its historical `<name>_<id>` shape (handled by its own command, not here).
+ */
+export function fileNameFor(resource: string, id: string, record?: Rec): string {
+  const extractor = NATURAL_KEY[resource] as ((rec: Rec) => string | undefined) | undefined;
+  const key = extractor && record ? extractor(record) : undefined;
+  return sanitizeForFilename(key ?? id);
+}
+
+/** Filenames must satisfy file-io's path-segment rules; Zuora keys can contain e.g. spaces. */
+export function sanitizeForFilename(value: string): string {
+  return value.replace(/[^a-zA-Z0-9\-_.]/g, '_');
+}
+
+/** True if this resource is stored under a natural-key filename (so a lookup by internal id must
+ * fall back to scanning for the file whose stored record id matches). */
+export function hasNaturalKey(resource: string): boolean {
+  return resource in NATURAL_KEY;
+}
+
+/** Extract the internal Zuora id from a stored record (covers the shapes ZDF writes: top-level
+ * id/Id, and account's nested basicInfo.id). Used to match a natural-key-named file to an id arg. */
+export function recordId(record: Rec): string | undefined {
+  return str(record['id'] ?? record['Id'] ?? (record['basicInfo'] as Rec | undefined)?.['id']);
+}
+
+/** Per-resource metadata for the cross-tenant env-id map / upsert feature: the ZOQL object name
+ * and key field used to search for an existing record by natural key in a DIFFERENT tenant, and
+ * whether the resource supports upsert (create-or-update) at all. `upsertable: false` (bill-run)
+ * means the resource can be looked up cross-tenant but has no supported create/update path for
+ * upsert purposes (Zuora has no PUT for bill runs; see zdf/CLAUDE.md). */
+export interface CrossTenantConfig {
+  zoqlObject: string;
+  zoqlKeyField: string;
+  upsertable: boolean;
+}
+
+export const CROSS_TENANT: Record<string, CrossTenantConfig> = {
+  account: { zoqlObject: 'Account', zoqlKeyField: 'AccountNumber', upsertable: true },
+  product: { zoqlObject: 'Product', zoqlKeyField: 'SKU', upsertable: true },
+  invoice: { zoqlObject: 'Invoice', zoqlKeyField: 'InvoiceNumber', upsertable: true },
+  'credit-memo': { zoqlObject: 'CreditMemo', zoqlKeyField: 'MemoNumber', upsertable: true },
+  'debit-memo': { zoqlObject: 'DebitMemo', zoqlKeyField: 'MemoNumber', upsertable: true },
+  'bill-run': { zoqlObject: 'BillRun', zoqlKeyField: 'BillRunNumber', upsertable: false },
+};

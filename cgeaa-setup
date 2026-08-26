@@ -32,6 +32,219 @@ Setup & Configuration
 EOF
 echo -e "${NC}"
 
+# Minimum Node.js major version required to build and run zdf.
+ZDF_MIN_NODE_MAJOR=18
+
+# Print the installed Node.js major version, or nothing if node is absent /
+# unparseable. Used to gate the >=18 requirement.
+_node_major_version() {
+    command_exists node || return 0
+    local raw
+    raw="$(node --version 2>/dev/null)" || return 0
+    # Strip a leading 'v' and take the first dot-delimited component.
+    raw="${raw#v}"
+    echo "${raw%%.*}"
+}
+
+# Attempt to install Node.js >=18 using whichever package manager is available.
+# Returns 0 on success (node and npm are both on PATH afterwards), 1 otherwise.
+# Prompts before running anything that requires sudo or a network install.
+_install_node() {
+    local os
+    os="$(uname -s)"
+
+    log_info "Attempting to install Node.js >=${ZDF_MIN_NODE_MAJOR}..."
+
+    if [ "$os" = "Darwin" ]; then
+        if command_exists brew; then
+            read -p "Install Node.js via 'brew install node@${ZDF_MIN_NODE_MAJOR}'? (y/n) " -n 1 -r
+            echo
+            [[ ! $REPLY =~ ^[Yy]$ ]] && return 1
+            if brew install "node@${ZDF_MIN_NODE_MAJOR}" && brew link --overwrite --force "node@${ZDF_MIN_NODE_MAJOR}"; then
+                return 0
+            fi
+            return 1
+        fi
+        log_warning "Homebrew not found. Install brew from https://brew.sh, or install Node.js >=${ZDF_MIN_NODE_MAJOR} manually, then re-run this script."
+        return 1
+    fi
+
+    if [ "$os" = "Linux" ]; then
+        if command_exists apt-get; then
+            read -p "Install Node.js via apt-get (uses NodeSource ${ZDF_MIN_NODE_MAJOR}.x repo, requires sudo)? (y/n) " -n 1 -r
+            echo
+            [[ ! $REPLY =~ ^[Yy]$ ]] && return 1
+            if curl -fsSL "https://deb.nodesource.com/setup_${ZDF_MIN_NODE_MAJOR}.x" | sudo -E bash - && sudo apt-get install -y nodejs; then
+                return 0
+            fi
+            return 1
+        fi
+        if command_exists dnf; then
+            read -p "Install Node.js via dnf (requires sudo)? (y/n) " -n 1 -r
+            echo
+            [[ ! $REPLY =~ ^[Yy]$ ]] && return 1
+            if sudo dnf install -y "nodejs" "npm"; then
+                return 0
+            fi
+            return 1
+        fi
+        if command_exists yum; then
+            read -p "Install Node.js via yum (requires sudo)? (y/n) " -n 1 -r
+            echo
+            [[ ! $REPLY =~ ^[Yy]$ ]] && return 1
+            if sudo yum install -y "nodejs" "npm"; then
+                return 0
+            fi
+            return 1
+        fi
+        log_warning "No supported package manager found (apt-get, dnf, yum). Install Node.js >=${ZDF_MIN_NODE_MAJOR} manually, then re-run this script."
+        return 1
+    fi
+
+    log_warning "Unsupported platform: $os. Install Node.js >=${ZDF_MIN_NODE_MAJOR} manually, then re-run this script."
+    return 1
+}
+
+# Ensure node and npm are on PATH at the required version, offering to install
+# them if not. Returns 0 if the environment is ready, 1 if the caller should
+# skip the ZDF install.
+_ensure_node_toolchain() {
+    local major
+    major="$(_node_major_version)"
+
+    if command_exists node && command_exists npm && [ -n "$major" ] && [ "$major" -ge "$ZDF_MIN_NODE_MAJOR" ]; then
+        log_info "Detected Node.js $(node --version) — meets zdf requirement (>=${ZDF_MIN_NODE_MAJOR})."
+        return 0
+    fi
+
+    if command_exists node && [ -n "$major" ] && [ "$major" -lt "$ZDF_MIN_NODE_MAJOR" ]; then
+        log_warning "Node.js $(node --version) is installed but zdf requires >=${ZDF_MIN_NODE_MAJOR}."
+    else
+        log_warning "Node.js not found on PATH — required by 'cgeaa zuora' (ZDF)."
+    fi
+
+    if ! _install_node; then
+        log_warning "Skipping ZDF install. 'cgeaa zuora' will be unavailable until Node.js >=${ZDF_MIN_NODE_MAJOR} is installed."
+        return 1
+    fi
+
+    # Re-check post-install.
+    major="$(_node_major_version)"
+    if ! command_exists node || ! command_exists npm || [ -z "$major" ] || [ "$major" -lt "$ZDF_MIN_NODE_MAJOR" ]; then
+        log_warning "Node.js install did not yield a usable node/npm on PATH. You may need to open a new shell and re-run ./cgeaa-setup."
+        return 1
+    fi
+
+    log_success "Node.js $(node --version) is now available."
+    return 0
+}
+
+# Public npm registry — used as a fallback when the configured registry
+# (e.g. an internal Artifactory) is unreachable.
+ZDF_PUBLIC_NPM_REGISTRY="https://registry.npmjs.org/"
+
+# Probe the currently-configured npm registry to see if it responds within
+# ~5s. Prints nothing on success; returns non-zero if the registry appears
+# unreachable so the caller can fall back.
+_npm_registry_reachable() {
+    local registry
+    registry="$(npm config get registry 2>/dev/null)"
+    [ -z "$registry" ] && return 1
+    curl --max-time 5 -sI "$registry" -o /dev/null 2>&1
+    local status=$?
+    if [ $status -ne 0 ]; then
+        return 1
+    fi
+    return 0
+}
+
+# Run 'npm install' inside a zdf checkout with progress visible and a fetch
+# timeout so hangs surface as errors. Falls back to the public npm registry
+# on the second attempt when the configured (e.g. internal) registry is
+# unreachable or an install fails outright.
+_npm_install_zdf() {
+    local zdf_src="$1"
+    local install_verb="$2"  # 'install' or 'ci'
+    local configured_registry
+    configured_registry="$(npm config get registry 2>/dev/null)"
+
+    # Common flags: cap fetch retries and timeouts so we do not spin forever.
+    local -a common_flags=(
+        --fetch-retries=2
+        --fetch-timeout=60000
+        --fetch-retry-mintimeout=5000
+        --fetch-retry-maxtimeout=15000
+    )
+
+    log_info "Using npm registry: ${configured_registry:-<default>}"
+
+    if _npm_registry_reachable; then
+        log_info "Running: npm ${install_verb} (in $zdf_src)"
+        if (cd "$zdf_src" && npm "$install_verb" "${common_flags[@]}"); then
+            return 0
+        fi
+        log_warning "npm ${install_verb} against ${configured_registry} failed."
+    else
+        log_warning "Configured npm registry (${configured_registry:-<none>}) is not reachable within 5s."
+        log_warning "This is usually a VPN / network issue with an internal registry."
+    fi
+
+    # Fallback: try the public registry unless that IS the configured one.
+    if [ "$configured_registry" = "$ZDF_PUBLIC_NPM_REGISTRY" ]; then
+        return 1
+    fi
+
+    read -p "Retry using the public npm registry (${ZDF_PUBLIC_NPM_REGISTRY})? (y/n) " -n 1 -r
+    echo
+    [[ ! $REPLY =~ ^[Yy]$ ]] && return 1
+
+    log_info "Retrying with public registry: ${ZDF_PUBLIC_NPM_REGISTRY}"
+    (cd "$zdf_src" && npm "$install_verb" --registry="$ZDF_PUBLIC_NPM_REGISTRY" "${common_flags[@]}")
+}
+
+# --- ZDF Installation Function ---
+# Builds zdf from the checkout and copies the ready-to-run tree (source + dist +
+# node_modules) into /usr/local/share/cgeaa/zdf. Kept as a soft dependency: if
+# node/npm cannot be provisioned or the build fails, we warn and continue so
+# Salesforce functionality still installs cleanly.
+install_zdf_globally() {
+    local zdf_src="${SCRIPT_DIR}/zdf"
+
+    if [ ! -d "$zdf_src" ]; then
+        log_warning "zdf source not found at $zdf_src — skipping Zuora (ZDF) install."
+        return 0
+    fi
+
+    if ! _ensure_node_toolchain; then
+        return 0
+    fi
+
+    log_info "Installing ZDF dependencies (in ${zdf_src})..."
+    local npm_install_cmd="install"
+    if [ -f "${zdf_src}/package-lock.json" ]; then
+        npm_install_cmd="ci"
+    fi
+    if ! _npm_install_zdf "$zdf_src" "$npm_install_cmd"; then
+        log_warning "ZDF dependency install failed — skipping global install of zdf."
+        log_warning "You can retry later by re-running ./cgeaa-setup (verify VPN or npm registry access first)."
+        return 0
+    fi
+
+    log_info "Building ZDF..."
+    if ! (cd "$zdf_src" && npm run build); then
+        log_warning "ZDF build failed — skipping global install of zdf."
+        log_warning "You can retry later by re-running ./cgeaa-setup."
+        return 0
+    fi
+
+    log_info "Copying zdf/ to /usr/local/share/cgeaa/..."
+    # Remove any prior copy first so stale files (e.g. old dist/) do not linger.
+    sudo rm -rf /usr/local/share/cgeaa/zdf
+    sudo cp -r "$zdf_src" /usr/local/share/cgeaa/
+
+    log_success "ZDF installed globally."
+}
+
 # --- Installation Function ---
 perform_global_install() {
     log_step "Performing Global Installation"
@@ -44,15 +257,17 @@ perform_global_install() {
     log_info "Copying cgeaa-lib contents..."
     sudo cp -r "${SCRIPT_DIR}/cgeaa-lib" /usr/local/share/cgeaa/
 
+    # 2b. Build and copy the Zuora Development Framework (soft dependency)
+    install_zdf_globally
+
     # 3. Create a temporary modified cgeaa script
     log_info "Configuring cgeaa script for global use..."
     TEMP_CGEAA_SCRIPT=$(mktemp)
-    # By targeting specific line numbers, we can precisely modify the script for global installation.
-    # This is the most reliable way to avoid regex errors.
-    # 1. Delete line 10 (SCRIPT_DIR=...)
-    # 2. Replace line 11 (CGEAA_LIB_DIR=...) with the global path.
-    # Note: Use separate sed commands to avoid line number shifting issues
-    sed -e '10d' "${SCRIPT_DIR}/cgeaa" | sed '10s|.*|CGEAA_LIB_DIR="/usr/local/share/cgeaa/cgeaa-lib"|' > "$TEMP_CGEAA_SCRIPT"
+    # Rewrite lines 10 and 11 to point at the global install location. SCRIPT_DIR
+    # must remain defined — zuora.sh derives ZDF_SOURCE_DIR from it.
+    sed -e '10s|.*|SCRIPT_DIR="/usr/local/share/cgeaa"|' \
+        -e '11s|.*|CGEAA_LIB_DIR="/usr/local/share/cgeaa/cgeaa-lib"|' \
+        "${SCRIPT_DIR}/cgeaa" > "$TEMP_CGEAA_SCRIPT"
 
     # 4. Copy the modified script to /usr/local/bin
     log_info "Copying cgeaa to /usr/local/bin..."
@@ -196,6 +411,14 @@ echo "Checking dependencies..."
 check_dependencies
 echo "✓ All dependencies are available"
 
+# Final advisory: only fires if the interactive Node.js install was declined or
+# unavailable during global install. Salesforce commands work regardless.
+if ! command_exists node || ! command_exists npm; then
+    echo -e "${YELLOW}⚠ node/npm still not on PATH.${NC}"
+    echo "  These are required for 'cgeaa zuora' (ZDF) commands only."
+    echo "  Install Node.js >=${ZDF_MIN_NODE_MAJOR:-18} and re-run ./cgeaa-setup to enable Zuora support."
+fi
+
 # Test basic functionality
 echo
 echo "Testing CGEAA..."
@@ -223,3 +446,41 @@ echo "4. Try running CGEAA:"
 echo "   cgeaa validate --dry-run"
 echo
 echo "For help, run: cgeaa help"
+
+# --- Configure Zuora (ZDF) authentication ---
+if command_exists node && [ -f "/usr/local/share/cgeaa/zdf/dist/zdf.js" ]; then
+    echo
+    echo -e "${YELLOW}--- Zuora (ZDF) Authentication ---${NC}"
+    echo "To use 'cgeaa zuora' commands you need to authenticate with a Zuora environment."
+    echo "You will need: the Zuora REST API base URL, an OAuth client ID, and a client secret."
+    echo "(These come from your Zuora tenant admin or the API Credentials page in the Zuora UI.)"
+    echo
+    read -p "Configure Zuora credentials now? (y/n) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        read -p "Environment name (e.g. intQA, sandbox, production): " ZDF_ENV_NAME
+        ZDF_ENV_NAME="${ZDF_ENV_NAME:-intQA}"
+        read -p "Zuora REST base URL (e.g. https://rest.test.zuora.com): " ZDF_BASE_URL
+        read -p "OAuth client ID: " ZDF_CLIENT_ID
+        read -s -p "OAuth client secret: " ZDF_CLIENT_SECRET
+        echo
+
+        if [ -n "$ZDF_ENV_NAME" ] && [ -n "$ZDF_BASE_URL" ] && [ -n "$ZDF_CLIENT_ID" ] && [ -n "$ZDF_CLIENT_SECRET" ]; then
+            node /usr/local/share/cgeaa/zdf/dist/zdf.js auth add \
+                --name "$ZDF_ENV_NAME" \
+                --url "$ZDF_BASE_URL" \
+                --client-id "$ZDF_CLIENT_ID" \
+                --client-secret "$ZDF_CLIENT_SECRET" && \
+            node /usr/local/share/cgeaa/zdf/dist/zdf.js auth use "$ZDF_ENV_NAME" && \
+            log_success "Zuora environment '$ZDF_ENV_NAME' configured and set as active." || \
+            log_warning "Zuora auth setup failed. Run manually: cgeaa zuora auth add --name <name> --url <url> --client-id <id> --client-secret <secret>"
+        else
+            log_warning "Incomplete credentials — skipping Zuora auth setup."
+            echo "  Run later: cgeaa zuora auth add --name <name> --url <url> --client-id <id> --client-secret <secret>"
+        fi
+    else
+        echo "Skipping Zuora auth setup."
+        echo "  Run later: cgeaa zuora auth add --name <name> --url <url> --client-id <id> --client-secret <secret>"
+        echo "  Then:      cgeaa zuora auth use <name>"
+    fi
+fi

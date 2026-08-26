@@ -1,0 +1,9 @@
+{
+  "name": "zdf",
+  "description": "Use the CGEAA Zuora Development Framework (cgeaa zuora ...) to pull/push/create/delete Zuora billing objects: config editing (workflows, invoice templates), cross-tenant test-data promotion, and product-catalog automation.",
+  "version": "1.0.0",
+  "author": {
+    "name": "CarGurus Enterprise Applications"
+  },
+  "homepage": "https://github.com/sabrown9994/CGEAA/blob/main/zdf/README-ZDF.md"
+}

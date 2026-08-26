@@ -118,6 +118,85 @@ sf auth web login --alias Playground
 ./cgeaa diff -o BRInt
 ```
 
+## Zuora (ZDF) — Install & Getting Started
+
+CGEAA bundles the **Zuora Development Framework (ZDF)** — a developer CLI for pulling
+Zuora objects to local JSON, editing them (including with AI tooling), and pushing them
+back to a single Zuora tenant. Every ZDF command runs through `cgeaa zuora <args>`, which
+passes its arguments verbatim to the bundled `zdf` binary.
+
+> **This section covers only install and first-run setup.** For the full command reference
+> — every resource, verb, endpoint, flag, and workflow (pull/push/create/delete, the
+> `template` command, the three use cases, production-write safety, etc.) — see
+> **[`zdf/README-ZDF.md`](zdf/README-ZDF.md)**.
+
+### Prerequisites
+
+- **Node.js ≥ 18** — `cgeaa-setup` offers to install it automatically if it's missing.
+- A **Zuora OAuth client id + secret** (from your tenant admin, or the Zuora UI under
+  **Administration → Manage Users → OAuth Clients**).
+
+### 1. Install (build ZDF)
+
+`cgeaa-setup` builds ZDF automatically when Node.js is present (it runs
+`cd zdf && npm install && npm run build`, producing `zdf/dist/zdf.js`). If you're working
+from a clone without running the global installer, you can build it directly:
+
+```bash
+cd zdf && npm install && npm run build && cd ..
+```
+
+Confirm the dispatch works:
+
+```bash
+cgeaa zuora --help      # should print the ZDF usage/‑‑help text
+```
+
+### 2. Authenticate to a tenant
+
+`auth add` is **interactive** — it prompts for the environment name, region, environment
+type, and OAuth client id / secret (the base URL is derived from the region + environment
+type you pick, so there's no `--url` to supply):
+
+```bash
+cgeaa zuora auth add
+#   Environment name:   intQA
+#   Region:             US
+#   Environment type:   US Developer & Central Sandbox   → https://rest.test.zuora.com
+#   Client ID:          <your-client-id>
+#   Client Secret:      <your-client-secret>   (masked input)
+cgeaa zuora auth use intQA        # set the active environment
+```
+
+Pick the environment type matching your tenant when prompted:
+
+| Environment type (prompt choice) | Base URL |
+|---|---|
+| US Developer & Central Sandbox | `https://rest.test.zuora.com` |
+| US API Sandbox (Cloud 2) | `https://rest.apisandbox.zuora.com` |
+| US API Sandbox (Cloud 1) | `https://rest.sandbox.na.zuora.com` |
+| US Production (Cloud 2) | `https://rest.zuora.com` |
+| US Production (Cloud 1) | `https://rest.na.zuora.com` |
+
+(EU and APAC regions offer their own Sandbox / Production types with matching `.eu`/`.ap` URLs.)
+
+Credentials are stored in `~/.zdf/config.json` on your machine and are **not** committed to
+the repository. For CI, set `ZDF_CLIENT_ID` / `ZDF_CLIENT_SECRET` / `ZDF_BASE_URL` instead
+(see the "Production Safety" / CI notes in [`zdf/README-ZDF.md`](zdf/README-ZDF.md)).
+
+### 3. Verify connectivity
+
+```bash
+cgeaa zuora auth env                 # prints the active environment name and URL
+cgeaa zuora list billing-templates   # a read-only call to confirm the credentials work
+```
+
+Output files land in `./zdf-output/<resource-type>/` by default; set `ZDF_OUTPUT_DIR` to
+change that. **That's all you need to get running — everything else (commands, resources,
+options, examples) lives in [`zdf/README-ZDF.md`](zdf/README-ZDF.md).**
+
+---
+
 ## Installation
 
 ### Prerequisites
