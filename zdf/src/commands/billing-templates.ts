@@ -194,8 +194,8 @@ export function register(program: Command): void {
     .action((id: string) =>
       runCommand(program, async () => {
         const encodedId = encodeURIComponent(id);
-        let type: TemplateType;
-        let data: InvoiceTemplateMetadata & ZuoraReadResponse;
+        let type: TemplateType | undefined;
+        let data: (InvoiceTemplateMetadata & ZuoraReadResponse) | undefined;
 
         // Auto-detect the template type by trying each endpoint in order
         for (const candidateType of TEMPLATE_TYPES) {
