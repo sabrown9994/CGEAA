@@ -760,4 +760,18 @@ describe('billing-template invalid marker', () => {
     expect(output.error).toHaveBeenCalledWith(expect.stringContaining('Invalid _zdfTemplateType'));
     exitSpy.mockRestore();
   });
+
+  it('delete with invalid marker in local file throws clear error (does not auto-detect)', async () => {
+    const fileContent = { ...DESIGN_JSON, _zdfTemplateType: 'bogus' };
+    mockReaddirSync.mockReturnValue(['Bad_Template_bt-1.json']);
+    mockReadFileSync.mockReturnValue(JSON.stringify(fileContent));
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'delete', 'billing-template', 'bt-1'])
+    ).rejects.toThrow('exit');
+    expect(mockGet).not.toHaveBeenCalled();
+    expect(output.error).toHaveBeenCalledWith(expect.stringContaining('Invalid _zdfTemplateType'));
+    exitSpy.mockRestore();
+  });
 });

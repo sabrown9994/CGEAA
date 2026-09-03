@@ -212,7 +212,7 @@ export function register(program: Command): void {
           }
         }
 
-        if (!data! || !type!) {
+        if (!data || !type) {
           throw new Error(
             `No billing template found for id "${id}" as an invoice, credit-memo, or debit-memo template.`
           );
@@ -380,16 +380,23 @@ export function register(program: Command): void {
         let type: TemplateType | undefined;
         let localFile: string | undefined;
 
-        // Try to determine the type from the local file first
+        // Try to find the local file first; errors here (no match, ambiguous match) are
+        // non-fatal — fall through to auto-detect below.
         try {
           localFile = findLocalFile(id);
-          const parsed = readJsonFile(localFile);
-          type = readTemplateTypeFromFile(parsed);
         } catch (err) {
-          // If no local file or ambiguous match, we'll auto-detect the type
           if (err instanceof MultipleMatchesError) {
             output.warn(err.message);
           }
+          // else: no local file — localFile stays undefined, auto-detect below
+        }
+
+        // If a local file was found, read the type marker from it. Errors here (invalid
+        // marker, JSON parse failure) are fatal — they indicate a corrupt local file that
+        // the user must fix before retrying.
+        if (localFile) {
+          const parsed = readJsonFile(localFile);
+          type = readTemplateTypeFromFile(parsed);
         }
 
         // If we couldn't determine the type from the local file, auto-detect it
