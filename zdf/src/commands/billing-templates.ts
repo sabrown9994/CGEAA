@@ -9,8 +9,16 @@ import { assertReadSuccess, ZuoraReadResponse } from '../helpers/zuora-response.
 import { RESOURCE_SUBFOLDERS } from '../constants.js';
 
 const RESOURCE = 'billing-template';
-const ENDPOINT = '/settings/invoice-templates';
 const CONTENT_FIELD = 'base64EncodedTemplateFileContent';
+
+const TEMPLATE_TYPES = ['invoice', 'credit-memo', 'debit-memo'] as const;
+type TemplateType = typeof TEMPLATE_TYPES[number];
+const TEMPLATE_ENDPOINTS: Record<TemplateType, string> = {
+  'invoice': '/settings/invoice-templates',
+  'credit-memo': '/settings/credit-memo-templates',
+  'debit-memo': '/settings/debit-memo-templates',
+};
+const TEMPLATE_TYPE_MARKER = '_zdfTemplateType';
 
 /**
  * Fields accepted by `PUT /settings/invoice-templates/{id}`, per the documented request body
@@ -44,6 +52,59 @@ type InvoiceTemplateMetadata = {
   templateFormat: string;
   [key: string]: unknown;
 };
+
+/**
+ * Strips the `_zdfTemplateType` marker from an object (shallow copy). Used before any
+ * base64 encode so the marker never reaches Zuora.
+ */
+function stripTemplateTypeMarker(obj: unknown): unknown {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
+  const copy = { ...obj } as Record<string, unknown>;
+  delete copy[TEMPLATE_TYPE_MARKER];
+  return copy;
+}
+
+/**
+ * Reads the template type from a parsed file. Returns the marker value if it is one of
+ * the three valid types, else 'invoice' (backward-compat default). Throws if the marker
+ * is present but invalid.
+ */
+function readTemplateTypeFromFile(parsed: unknown): TemplateType {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'invoice';
+  const obj = parsed as Record<string, unknown>;
+  if (!(TEMPLATE_TYPE_MARKER in obj)) return 'invoice';
+  const marker = obj[TEMPLATE_TYPE_MARKER];
+  if (TEMPLATE_TYPES.includes(marker as TemplateType)) {
+    return marker as TemplateType;
+  }
+  throw new Error(
+    `Invalid ${TEMPLATE_TYPE_MARKER}: "${String(marker)}". Must be one of: ${TEMPLATE_TYPES.join(', ')}.`
+  );
+}
+
+/**
+ * Auto-detects the template type by trying each endpoint in order. Returns the type of
+ * the first successful GET. Throws a combined not-found error if all three fail with
+ * 400/404, or rethrows immediately on any other error (auth/server/transport).
+ */
+async function detectTemplateTypeById(id: string): Promise<TemplateType> {
+  const encodedId = encodeURIComponent(id);
+  for (const type of TEMPLATE_TYPES) {
+    try {
+      await apiGet<InvoiceTemplateMetadata & ZuoraReadResponse>(`${TEMPLATE_ENDPOINTS[type]}/${encodedId}`);
+      return type;
+    } catch (err: unknown) {
+      const statusCode = (err && typeof err === 'object' && 'statusCode' in err) ? (err as { statusCode: unknown }).statusCode : undefined;
+      if (statusCode === 400 || statusCode === 404) {
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error(
+    `No billing template found for id "${id}" as an invoice, credit-memo, or debit-memo template.`
+  );
+}
 
 function getOrCreate(program: Command, name: string, description: string): Command {
   return program.commands.find((c) => c.name() === name) ?? program.command(name).description(description);
@@ -129,41 +190,80 @@ export function register(program: Command): void {
 
   pullCmd
     .command('billing-template <id>')
-    .description('Fetch an HTML invoice template from Zuora by internal ID and write its decoded design JSON')
+    .description('Fetch an HTML billing template from Zuora by internal ID and write its decoded design JSON')
     .action((id: string) =>
       runCommand(program, async () => {
-        const data = await apiGet<InvoiceTemplateMetadata & ZuoraReadResponse>(`${ENDPOINT}/${encodeURIComponent(id)}`);
+        const encodedId = encodeURIComponent(id);
+        let type: TemplateType | undefined;
+        let data: (InvoiceTemplateMetadata & ZuoraReadResponse) | undefined;
+
+        // Auto-detect the template type by trying each endpoint in order
+        for (const candidateType of TEMPLATE_TYPES) {
+          try {
+            data = await apiGet<InvoiceTemplateMetadata & ZuoraReadResponse>(`${TEMPLATE_ENDPOINTS[candidateType]}/${encodedId}`);
+            type = candidateType;
+            break;
+          } catch (err: unknown) {
+            const statusCode = (err && typeof err === 'object' && 'statusCode' in err) ? (err as { statusCode: unknown }).statusCode : undefined;
+            if (statusCode === 400 || statusCode === 404) {
+              continue;
+            }
+            throw err;
+          }
+        }
+
+        if (!data || !type) {
+          throw new Error(
+            `No billing template found for id "${id}" as an invoice, credit-memo, or debit-memo template.`
+          );
+        }
+
         assertReadSuccess(data, 'billing template fetch');
         const decodedJson = decodeAndValidateTemplateJson(id, data);
 
+        if (typeof decodedJson !== 'object' || Array.isArray(decodedJson) || decodedJson === null) {
+          throw new Error(`Billing template ${id} decoded content is not an object; cannot add marker.`);
+        }
+
+        const withMarker = { ...decodedJson, [TEMPLATE_TYPE_MARKER]: type };
         const rawName = typeof data.name === 'string' ? data.name : id;
         const fileId = `${sanitizeNameForFilename(rawName)}_${id}`;
-        writeResourceFile(RESOURCE, fileId, decodedJson);
-        output.success(`Billing template ${id} written to ${resolveFilePath(RESOURCE, fileId)}`);
+        writeResourceFile(RESOURCE, fileId, withMarker);
+        output.success(`Billing template ${id} (${type}) written to ${resolveFilePath(RESOURCE, fileId)}`);
       })()
     );
 
   listCmd
     .command('billing-templates')
-    .description('List invoice templates from Zuora (id, name, templateNumber, templateFormat)')
+    .description('List billing templates from Zuora (invoice, credit-memo, debit-memo)')
     .action(() =>
       runCommand(program, async () => {
-        const data = await apiGet<InvoiceTemplateMetadata[] | ZuoraReadResponse>(ENDPOINT);
-        if (!Array.isArray(data)) {
-          assertReadSuccess(data, 'billing template list fetch');
-          throw new Error('Unexpected response shape from billing template list fetch.');
+        let totalCount = 0;
+        for (const type of TEMPLATE_TYPES) {
+          try {
+            const data = await apiGet<InvoiceTemplateMetadata[] | ZuoraReadResponse>(TEMPLATE_ENDPOINTS[type]);
+            if (!Array.isArray(data)) {
+              assertReadSuccess(data, `${type} template list fetch`);
+              throw new Error(`Unexpected response shape from ${type} template list fetch.`);
+            }
+            for (const t of data) {
+              const pullable = t.templateFormat === 'HTML' ? '' : '  (not pullable — WORD format)';
+              const typePadded = type.padEnd(16);
+              output.info(`${typePadded} ${t.id}  ${t.name}  #${String(t.templateNumber)}  ${t.templateFormat}${pullable}`);
+            }
+            totalCount += data.length;
+          } catch (err: unknown) {
+            const message = (err && typeof err === 'object' && 'message' in err) ? String((err as { message: unknown }).message) : String(err);
+            output.warn(`Failed to fetch ${type} templates: ${message}`);
+          }
         }
-        for (const t of data) {
-          const pullable = t.templateFormat === 'HTML' ? '' : '  (not pullable — WORD format)';
-          output.info(`${t.id}  ${t.name}  #${String(t.templateNumber)}  ${t.templateFormat}${pullable}`);
-        }
-        output.success(`Fetched ${data.length} billing templates.`);
+        output.success(`Fetched ${totalCount} billing templates.`);
       })()
     );
 
   createCmd
     .command('billing-template <name>')
-    .description('Create an HTML invoice template in Zuora from a local design JSON file')
+    .description('Create an HTML billing template in Zuora from a local design JSON file')
     .option('-f, --file <path>', `path to JSON file (defaults to ${getOutputDir()}/billing-templates/<name>.json)`)
     .action((name: string, opts: { file?: string }) =>
       runCommand(program, async () => {
@@ -182,7 +282,9 @@ export function register(program: Command): void {
           );
         }
         const designJson = readJsonFile(filePath);
-        const encoded = Buffer.from(JSON.stringify(designJson), 'utf-8').toString('base64');
+        const type = readTemplateTypeFromFile(designJson);
+        const stripped = stripTemplateTypeMarker(designJson);
+        const encoded = Buffer.from(JSON.stringify(stripped), 'utf-8').toString('base64');
 
         const body: Record<string, unknown> = {
           name,
@@ -191,9 +293,10 @@ export function register(program: Command): void {
         };
         // Optional create fields (defaultTemplate, suppressZeroValueLine, templateFileName)
         // may be present in the design JSON itself if a prior pull/edit set them; carry them
-        // forward when present so create can round-trip a previously-pulled template.
-        if (designJson && typeof designJson === 'object') {
-          const parsedForOptions = designJson as Record<string, unknown>;
+        // forward when present so create can round-trip a previously-pulled template. Read from
+        // the STRIPPED object so the marker isn't treated as a field.
+        if (stripped && typeof stripped === 'object') {
+          const parsedForOptions = stripped as Record<string, unknown>;
           for (const field of CREATE_OPTIONAL_ALLOWLIST) {
             if (field in parsedForOptions) {
               body[field] = parsedForOptions[field];
@@ -201,7 +304,7 @@ export function register(program: Command): void {
           }
         }
 
-        const res = await apiPost<InvoiceTemplateMetadata & ZuoraReadResponse>(ENDPOINT, body);
+        const res = await apiPost<InvoiceTemplateMetadata & ZuoraReadResponse>(TEMPLATE_ENDPOINTS[type], body);
         assertReadSuccess(res, 'billing template create');
 
         const fileId = `${sanitizedName}_${res.id}`;
@@ -216,13 +319,15 @@ export function register(program: Command): void {
 
   pushCmd
     .command('billing-template <id>')
-    .description('Update an HTML invoice template in Zuora from a local design JSON file')
+    .description('Update an HTML billing template in Zuora from a local design JSON file')
     .option('-f, --file <path>', 'path to JSON file (defaults to the local <name>_<id>.json under billing-templates/)')
     .action((id: string, opts: { file?: string }) =>
       runCommand(program, async () => {
         const filePath = opts.file ?? findLocalFile(id);
         const parsed = readJsonFile(filePath);
-        const encoded = Buffer.from(JSON.stringify(parsed), 'utf-8').toString('base64');
+        const type = readTemplateTypeFromFile(parsed);
+        const stripped = stripTemplateTypeMarker(parsed);
+        const encoded = Buffer.from(JSON.stringify(stripped), 'utf-8').toString('base64');
         const encodedId = encodeURIComponent(id);
 
         // Fetch the template's current metadata first so we can (a) re-verify it's still an
@@ -231,7 +336,7 @@ export function register(program: Command): void {
         // request-body fields (see UPDATE_ALLOWLIST) — NOT "current minus a denylist" — because
         // the Settings API rejects any key it doesn't expect (confirmed live: 400
         // INVALID_USER_INPUT on `associatedToBillingAccount` and `templateFormat`).
-        const current = await apiGet<InvoiceTemplateMetadata & ZuoraReadResponse>(`${ENDPOINT}/${encodedId}`);
+        const current = await apiGet<InvoiceTemplateMetadata & ZuoraReadResponse>(`${TEMPLATE_ENDPOINTS[type]}/${encodedId}`);
         assertReadSuccess(current, 'billing template fetch (for update)');
         if (current.templateFormat !== 'HTML') {
           throw new Error(
@@ -260,7 +365,7 @@ export function register(program: Command): void {
         // `reasons`/`errors`" as success, and only fails on an explicit `success === false` or
         // a populated `reasons`/`errors` array. Using the strict assertSuccess here was the bug
         // — a genuinely successful update has no `success` key, so assertSuccess always threw.
-        const res = await apiPut<InvoiceTemplateMetadata & ZuoraReadResponse>(`${ENDPOINT}/${encodedId}`, body);
+        const res = await apiPut<InvoiceTemplateMetadata & ZuoraReadResponse>(`${TEMPLATE_ENDPOINTS[type]}/${encodedId}`, body);
         assertReadSuccess(res, 'billing template update');
         output.success(`Billing template ${id} updated.`);
       })()
@@ -268,25 +373,40 @@ export function register(program: Command): void {
 
   deleteCmd
     .command('billing-template <id>')
-    .description('Delete an HTML invoice template in Zuora and remove its local file')
+    .description('Delete an HTML billing template in Zuora and remove its local file')
     .action((id: string) =>
       runCommand(program, async () => {
         const encodedId = encodeURIComponent(id);
-        const res = await apiDelete<ZuoraReadResponse>(`${ENDPOINT}/${encodedId}`);
-        assertReadSuccess(res, 'billing template delete');
-
+        let type: TemplateType | undefined;
         let localFile: string | undefined;
+
+        // Try to find the local file first; errors here (no match, ambiguous match) are
+        // non-fatal — fall through to auto-detect below.
         try {
           localFile = findLocalFile(id);
         } catch (err) {
-          // A missing local file is fine — nothing to clean up locally, and the remote delete
-          // already succeeded above. An ambiguous match (multiple local files), however, is a
-          // real condition the user should know about, so surface it as a warning rather than
-          // silently discarding it the same way as "no match".
           if (err instanceof MultipleMatchesError) {
             output.warn(err.message);
           }
+          // else: no local file — localFile stays undefined, auto-detect below
         }
+
+        // If a local file was found, read the type marker from it. Errors here (invalid
+        // marker, JSON parse failure) are fatal — they indicate a corrupt local file that
+        // the user must fix before retrying.
+        if (localFile) {
+          const parsed = readJsonFile(localFile);
+          type = readTemplateTypeFromFile(parsed);
+        }
+
+        // If we couldn't determine the type from the local file, auto-detect it
+        if (!type) {
+          type = await detectTemplateTypeById(id);
+        }
+
+        const res = await apiDelete<ZuoraReadResponse>(`${TEMPLATE_ENDPOINTS[type]}/${encodedId}`);
+        assertReadSuccess(res, 'billing template delete');
+
         if (localFile) unlinkSync(localFile);
 
         output.success(`Billing template ${id} deleted.`);

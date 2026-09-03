@@ -64,7 +64,7 @@ beforeEach(() => {
 });
 
 describe('zdf pull billing-template', () => {
-  it('decodes base64 content and writes the decoded design JSON (not the metadata wrapper)', async () => {
+  it('decodes base64 content and writes the decoded design JSON with type marker', async () => {
     mockGet.mockResolvedValue({
       id: 'bt-1',
       name: 'Invoice Template',
@@ -73,7 +73,7 @@ describe('zdf pull billing-template', () => {
     });
     await makeProgram().parseAsync(['node', 'zdf', 'pull', 'billing-template', 'bt-1']);
     expect(mockGet).toHaveBeenCalledWith('/settings/invoice-templates/bt-1');
-    expect(mockWrite).toHaveBeenCalledWith('billing-template', 'Invoice-Template_bt-1', DESIGN_JSON);
+    expect(mockWrite).toHaveBeenCalledWith('billing-template', 'Invoice-Template_bt-1', { ...DESIGN_JSON, _zdfTemplateType: 'invoice' });
   });
 
   it('URL-encodes the id in the GET request path', async () => {
@@ -493,7 +493,7 @@ describe('billing-template round-trip', () => {
     });
     await makeProgram().parseAsync(['node', 'zdf', 'pull', 'billing-template', 'bt-1']);
     const [, , writtenJson] = mockWrite.mock.calls[0];
-    expect(writtenJson).toEqual(DESIGN_JSON);
+    expect(writtenJson).toEqual({ ...DESIGN_JSON, _zdfTemplateType: 'invoice' });
 
     // Update: re-encode the same (unchanged) content and confirm the base64 matches exactly
     vi.clearAllMocks();
@@ -506,5 +506,272 @@ describe('billing-template round-trip', () => {
     await makeProgram().parseAsync(['node', 'zdf', 'push', 'billing-template', 'bt-1']);
     const [, body] = mockPut.mock.calls[0];
     expect(body.base64EncodedTemplateFileContent).toBe(DESIGN_B64);
+  });
+});
+
+describe('billing-template type detection and marker', () => {
+  it('pull writes _zdfTemplateType: "invoice" when invoice endpoint succeeds first', async () => {
+    mockGet.mockResolvedValue({
+      id: 'bt-1',
+      name: 'Invoice Template',
+      templateFormat: 'HTML',
+      base64EncodedTemplateFileContent: DESIGN_B64,
+    });
+    await makeProgram().parseAsync(['node', 'zdf', 'pull', 'billing-template', 'bt-1']);
+    expect(mockGet).toHaveBeenCalledWith('/settings/invoice-templates/bt-1');
+    const [, , writtenJson] = mockWrite.mock.calls[0];
+    expect(writtenJson).toHaveProperty('_zdfTemplateType', 'invoice');
+    expect(writtenJson).toHaveProperty('design');
+  });
+
+  it('pull writes _zdfTemplateType: "credit-memo" when invoice fails with 400 and credit-memo succeeds', async () => {
+    mockGet
+      .mockRejectedValueOnce({ statusCode: 400, message: 'Not found' })
+      .mockResolvedValueOnce({
+        id: 'bt-2',
+        name: 'Credit Memo Template',
+        templateFormat: 'HTML',
+        base64EncodedTemplateFileContent: DESIGN_B64,
+      });
+    await makeProgram().parseAsync(['node', 'zdf', 'pull', 'billing-template', 'bt-2']);
+    expect(mockGet).toHaveBeenCalledWith('/settings/invoice-templates/bt-2');
+    expect(mockGet).toHaveBeenCalledWith('/settings/credit-memo-templates/bt-2');
+    const [, , writtenJson] = mockWrite.mock.calls[0];
+    expect(writtenJson).toHaveProperty('_zdfTemplateType', 'credit-memo');
+  });
+
+  it('pull writes _zdfTemplateType: "debit-memo" when invoice and credit-memo fail with 404 and debit-memo succeeds', async () => {
+    mockGet
+      .mockRejectedValueOnce({ statusCode: 404 })
+      .mockRejectedValueOnce({ statusCode: 404 })
+      .mockResolvedValueOnce({
+        id: 'bt-3',
+        name: 'Debit Memo Template',
+        templateFormat: 'HTML',
+        base64EncodedTemplateFileContent: DESIGN_B64,
+      });
+    await makeProgram().parseAsync(['node', 'zdf', 'pull', 'billing-template', 'bt-3']);
+    expect(mockGet).toHaveBeenCalledWith('/settings/invoice-templates/bt-3');
+    expect(mockGet).toHaveBeenCalledWith('/settings/credit-memo-templates/bt-3');
+    expect(mockGet).toHaveBeenCalledWith('/settings/debit-memo-templates/bt-3');
+    const [, , writtenJson] = mockWrite.mock.calls[0];
+    expect(writtenJson).toHaveProperty('_zdfTemplateType', 'debit-memo');
+  });
+
+  it('pull throws combined not-found error when all three endpoints return 404', async () => {
+    mockGet
+      .mockRejectedValueOnce({ statusCode: 404 })
+      .mockRejectedValueOnce({ statusCode: 404 })
+      .mockRejectedValueOnce({ statusCode: 404 });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'pull', 'billing-template', 'bt-missing'])
+    ).rejects.toThrow('exit');
+    expect(mockWrite).not.toHaveBeenCalled();
+    expect(output.error).toHaveBeenCalledWith(expect.stringContaining('No billing template found for id "bt-missing"'));
+    exitSpy.mockRestore();
+  });
+
+  it('pull rethrows auth/server errors (statusCode 401) immediately without trying remaining endpoints', async () => {
+    mockGet.mockRejectedValueOnce({ statusCode: 401, message: 'Unauthorized' });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'pull', 'billing-template', 'bt-1'])
+    ).rejects.toThrow('exit');
+    expect(mockGet).toHaveBeenCalledTimes(1);
+    expect(mockWrite).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+});
+
+describe('billing-template type-aware push', () => {
+  it('push with _zdfTemplateType: "credit-memo" uses credit-memo endpoints and strips marker from sent content', async () => {
+    const fileContent = { ...DESIGN_JSON, _zdfTemplateType: 'credit-memo' };
+    mockReaddirSync.mockReturnValue(['Credit_Memo_Template_bt-2.json']);
+    mockReadFileSync.mockReturnValue(JSON.stringify(fileContent));
+    mockGet.mockResolvedValue({
+      id: 'bt-2',
+      name: 'Credit Memo Template',
+      templateFormat: 'HTML',
+      base64EncodedTemplateFileContent: 'stale',
+    });
+    mockPut.mockResolvedValue({ id: 'bt-2' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'billing-template', 'bt-2']);
+
+    expect(mockGet).toHaveBeenCalledWith('/settings/credit-memo-templates/bt-2');
+    expect(mockPut).toHaveBeenCalledWith('/settings/credit-memo-templates/bt-2', expect.anything());
+    const [, body] = mockPut.mock.calls[0];
+    const decoded = JSON.parse(Buffer.from(body.base64EncodedTemplateFileContent, 'base64').toString('utf-8'));
+    expect(decoded).not.toHaveProperty('_zdfTemplateType');
+    expect(decoded).toHaveProperty('design');
+  });
+
+  it('push without _zdfTemplateType marker defaults to invoice endpoint (backward compat)', async () => {
+    mockReaddirSync.mockReturnValue(['Legacy_Template_bt-1.json']);
+    mockReadFileSync.mockReturnValue(JSON.stringify(DESIGN_JSON));
+    mockGet.mockResolvedValue({ id: 'bt-1', name: 'Legacy', templateFormat: 'HTML' });
+    mockPut.mockResolvedValue({ id: 'bt-1' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'push', 'billing-template', 'bt-1']);
+
+    expect(mockGet).toHaveBeenCalledWith('/settings/invoice-templates/bt-1');
+    expect(mockPut).toHaveBeenCalledWith('/settings/invoice-templates/bt-1', expect.anything());
+  });
+});
+
+describe('billing-template type-aware create', () => {
+  it('create with _zdfTemplateType: "debit-memo" POSTs to debit-memo endpoint and strips marker', async () => {
+    const fileContent = { ...DESIGN_JSON, _zdfTemplateType: 'debit-memo' };
+    mockReadFileSync.mockReturnValue(JSON.stringify(fileContent));
+    mockPost.mockResolvedValue({ id: 'bt-new', name: 'Debit Memo Template', templateFormat: 'HTML' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'billing-template', 'Debit Memo Template']);
+
+    expect(mockPost).toHaveBeenCalledWith('/settings/debit-memo-templates', expect.anything());
+    const [, body] = mockPost.mock.calls[0];
+    const decoded = JSON.parse(Buffer.from(body.base64EncodedTemplateFileContent, 'base64').toString('utf-8'));
+    expect(decoded).not.toHaveProperty('_zdfTemplateType');
+    expect(decoded).toHaveProperty('design');
+  });
+
+  it('create without _zdfTemplateType marker defaults to invoice endpoint', async () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify(DESIGN_JSON));
+    mockPost.mockResolvedValue({ id: 'bt-new', name: 'New Template', templateFormat: 'HTML' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'billing-template', 'New Template']);
+
+    expect(mockPost).toHaveBeenCalledWith('/settings/invoice-templates', expect.anything());
+  });
+
+  it('create does not carry _zdfTemplateType into optional-fields body even when present in design JSON', async () => {
+    const fileContent = {
+      ...DESIGN_JSON,
+      _zdfTemplateType: 'credit-memo',
+      defaultTemplate: true,
+      suppressZeroValueLine: false,
+    };
+    mockReadFileSync.mockReturnValue(JSON.stringify(fileContent));
+    mockPost.mockResolvedValue({ id: 'bt-new', name: 'Credit Memo Template', templateFormat: 'HTML' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'create', 'billing-template', 'Credit Memo Template']);
+
+    const [, body] = mockPost.mock.calls[0];
+    expect(body).not.toHaveProperty('_zdfTemplateType');
+    expect(body).toHaveProperty('defaultTemplate', true);
+    expect(body).toHaveProperty('suppressZeroValueLine', false);
+  });
+});
+
+describe('billing-template type-aware delete', () => {
+  it('delete with _zdfTemplateType: "credit-memo" in local file uses credit-memo endpoint', async () => {
+    const fileContent = { ...DESIGN_JSON, _zdfTemplateType: 'credit-memo' };
+    mockReaddirSync.mockReturnValue(['Credit_Memo_Template_bt-2.json']);
+    mockReadFileSync.mockReturnValue(JSON.stringify(fileContent));
+    mockDelete.mockResolvedValue({ id: 'bt-2' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'delete', 'billing-template', 'bt-2']);
+
+    expect(mockDelete).toHaveBeenCalledWith('/settings/credit-memo-templates/bt-2');
+  });
+
+  it('delete with no local file detects type via GET endpoints before deleting', async () => {
+    mockReaddirSync.mockReturnValue([]);
+    mockGet
+      .mockRejectedValueOnce({ statusCode: 404 })
+      .mockResolvedValueOnce({
+        id: 'bt-2',
+        name: 'Credit Memo Template',
+        templateFormat: 'HTML',
+        base64EncodedTemplateFileContent: DESIGN_B64,
+      });
+    mockDelete.mockResolvedValue({ id: 'bt-2' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'delete', 'billing-template', 'bt-2']);
+
+    expect(mockGet).toHaveBeenCalledWith('/settings/invoice-templates/bt-2');
+    expect(mockGet).toHaveBeenCalledWith('/settings/credit-memo-templates/bt-2');
+    expect(mockDelete).toHaveBeenCalledWith('/settings/credit-memo-templates/bt-2');
+  });
+
+  it('delete without marker in local file defaults to invoice endpoint', async () => {
+    mockReaddirSync.mockReturnValue(['Legacy_Template_bt-1.json']);
+    mockReadFileSync.mockReturnValue(JSON.stringify(DESIGN_JSON));
+    mockDelete.mockResolvedValue({ id: 'bt-1' });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'delete', 'billing-template', 'bt-1']);
+
+    expect(mockDelete).toHaveBeenCalledWith('/settings/invoice-templates/bt-1');
+  });
+});
+
+describe('billing-template type-aware list', () => {
+  it('list fetches all three endpoint families and prints each with type prefix', async () => {
+    mockGet
+      .mockResolvedValueOnce([
+        { id: 'bt-1', name: 'Invoice Template', templateNumber: 'TN-1', templateFormat: 'HTML' },
+        { id: 'bt-2', name: 'Invoice WORD', templateNumber: 'TN-2', templateFormat: 'WORD' },
+      ])
+      .mockResolvedValueOnce([
+        { id: 'cm-1', name: 'Credit Memo Template', templateNumber: 'TN-3', templateFormat: 'HTML' },
+      ])
+      .mockResolvedValueOnce([
+        { id: 'dm-1', name: 'Debit Memo Template', templateNumber: 'TN-4', templateFormat: 'HTML' },
+      ]);
+
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'billing-templates']);
+
+    expect(mockGet).toHaveBeenCalledWith('/settings/invoice-templates');
+    expect(mockGet).toHaveBeenCalledWith('/settings/credit-memo-templates');
+    expect(mockGet).toHaveBeenCalledWith('/settings/debit-memo-templates');
+    expect(output.info).toHaveBeenCalledWith('invoice          bt-1  Invoice Template  #TN-1  HTML');
+    expect(output.info).toHaveBeenCalledWith('invoice          bt-2  Invoice WORD  #TN-2  WORD  (not pullable — WORD format)');
+    expect(output.info).toHaveBeenCalledWith('credit-memo      cm-1  Credit Memo Template  #TN-3  HTML');
+    expect(output.info).toHaveBeenCalledWith('debit-memo       dm-1  Debit Memo Template  #TN-4  HTML');
+    expect(output.success).toHaveBeenCalledWith('Fetched 4 billing templates.');
+  });
+
+  it('list continues and warns when one family fetch fails', async () => {
+    mockGet
+      .mockResolvedValueOnce([{ id: 'bt-1', name: 'Invoice', templateNumber: 'TN-1', templateFormat: 'HTML' }])
+      .mockRejectedValueOnce(new Error('Network failure'))
+      .mockResolvedValueOnce([{ id: 'dm-1', name: 'Debit Memo', templateNumber: 'TN-2', templateFormat: 'HTML' }]);
+
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'billing-templates']);
+
+    expect(output.warn).toHaveBeenCalledWith('Failed to fetch credit-memo templates: Network failure');
+    expect(output.info).toHaveBeenCalledWith('invoice          bt-1  Invoice  #TN-1  HTML');
+    expect(output.info).toHaveBeenCalledWith('debit-memo       dm-1  Debit Memo  #TN-2  HTML');
+    expect(output.success).toHaveBeenCalledWith('Fetched 2 billing templates.');
+  });
+});
+
+describe('billing-template invalid marker', () => {
+  it('push throws a clear error when _zdfTemplateType is present but not a valid value', async () => {
+    const fileContent = { ...DESIGN_JSON, _zdfTemplateType: 'unknown-type' };
+    mockReaddirSync.mockReturnValue(['Bad_Template_bt-1.json']);
+    mockReadFileSync.mockReturnValue(JSON.stringify(fileContent));
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'push', 'billing-template', 'bt-1'])
+    ).rejects.toThrow('exit');
+    expect(mockGet).not.toHaveBeenCalled();
+    expect(output.error).toHaveBeenCalledWith(expect.stringContaining('Invalid _zdfTemplateType'));
+    exitSpy.mockRestore();
+  });
+
+  it('delete with invalid marker in local file throws clear error (does not auto-detect)', async () => {
+    const fileContent = { ...DESIGN_JSON, _zdfTemplateType: 'bogus' };
+    mockReaddirSync.mockReturnValue(['Bad_Template_bt-1.json']);
+    mockReadFileSync.mockReturnValue(JSON.stringify(fileContent));
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'delete', 'billing-template', 'bt-1'])
+    ).rejects.toThrow('exit');
+    expect(mockGet).not.toHaveBeenCalled();
+    expect(output.error).toHaveBeenCalledWith(expect.stringContaining('Invalid _zdfTemplateType'));
+    exitSpy.mockRestore();
   });
 });
