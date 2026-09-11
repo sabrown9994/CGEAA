@@ -3,8 +3,8 @@ import { spawnSync } from 'child_process';
 import { getProjectDir } from '../helpers/project-dir.js';
 import { output } from '../helpers/output.js';
 
-function runSuitecloud(args: string[]): void {
-  const result = spawnSync('suitecloud', args, { stdio: 'inherit' });
+function runSuitecloud(args: string[], options: { cwd?: string } = {}): void {
+  const result = spawnSync('suitecloud', args, { stdio: 'inherit', ...options });
   if (result.status !== 0) {
     throw new Error(`suitecloud exited with code ${result.status ?? 'unknown'}.`);
   }
@@ -22,10 +22,9 @@ export function registerPull(program: Command): void {
         runSuitecloud([
           'object:import',
           '--scriptid', scriptId,
-          '--projectdir', projectDir,
           '--type', 'ALL',
           '--destinationfolder', '/Objects',
-        ]);
+        ], { cwd: projectDir });
         output.success(`Object ${scriptId} imported.`);
       } catch (err) {
         output.error(err instanceof Error ? err.message : String(err));
@@ -42,8 +41,7 @@ export function registerPull(program: Command): void {
         runSuitecloud([
           'file:import',
           '--paths', filePath,
-          '--projectdir', projectDir,
-        ]);
+        ], { cwd: projectDir });
         output.success(`File ${filePath} imported.`);
       } catch (err) {
         output.error(err instanceof Error ? err.message : String(err));

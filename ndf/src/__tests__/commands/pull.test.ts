@@ -23,8 +23,8 @@ describe('cgeaa netsuite pull object', () => {
     expect(mockSpawnSync).toHaveBeenCalledWith(
       'suitecloud',
       ['object:import', '--scriptid', 'customscript_foo',
-       '--projectdir', '/proj', '--type', 'ALL', '--destinationfolder', '/Objects'],
-      { stdio: 'inherit' });
+       '--type', 'ALL', '--destinationfolder', '/Objects'],
+      { stdio: 'inherit', cwd: '/proj' });
   });
 
   it('exits 1 when suitecloud exits non-zero', async () => {
@@ -44,7 +44,7 @@ describe('cgeaa netsuite pull file', () => {
     await makeProgram().parseAsync(['node', 'ndf', 'pull', 'file', '/SuiteScripts/foo.js']);
     expect(mockSpawnSync).toHaveBeenCalledWith(
       'suitecloud',
-      ['file:import', '--paths', '/SuiteScripts/foo.js', '--projectdir', '/proj'],
-      { stdio: 'inherit' });
+      ['file:import', '--paths', '/SuiteScripts/foo.js'],
+      { stdio: 'inherit', cwd: '/proj' });
   });
 });
