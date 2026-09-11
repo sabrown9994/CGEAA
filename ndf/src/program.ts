@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { registerBuild } from './commands/build.js';
 import { registerEnvs } from './commands/envs.js';
+import { registerSwitch } from './commands/switch-env.js';
 
 export function buildProgram(): Command {
   const program = new Command();
@@ -10,5 +11,6 @@ export function buildProgram(): Command {
     .version('1.0.0');
   registerBuild(program);
   registerEnvs(program);
+  registerSwitch(program);
   return program;
 }
