@@ -2,7 +2,8 @@ import { Command } from 'commander';
 import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { getProjectDir, getProductionAuthId } from '../helpers/project-dir.js';
-import { checkProductionGuard } from '../helpers/production-guard.js';
+import { ProductionGuardError } from '../helpers/production-guard.js';
+import { getCurrentBranch } from '../helpers/git.js';
 import { output } from '../helpers/output.js';
 
 export function registerSwitch(program: Command): void {
@@ -12,7 +13,13 @@ export function registerSwitch(program: Command): void {
     .action(async (authId: string) => {
       try {
         const projectDir = getProjectDir();
-        checkProductionGuard(projectDir, getProductionAuthId());
+        const productionAuthId = getProductionAuthId();
+        if (authId === productionAuthId) {
+          const branch = getCurrentBranch(projectDir);
+          if (branch !== 'main') {
+            throw new ProductionGuardError(branch);
+          }
+        }
         const projectJsonPath = join(projectDir, 'project.json');
         const current = JSON.parse(readFileSync(projectJsonPath, 'utf-8')) as Record<string, unknown>;
         current['defaultAuthId'] = authId;
