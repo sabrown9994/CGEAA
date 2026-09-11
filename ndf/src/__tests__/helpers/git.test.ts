@@ -25,7 +25,7 @@ describe('getChangedFiles', () => {
     );
     const result = getChangedFiles('/proj', 'abc123');
     expect(mockExecSync).toHaveBeenCalledWith(
-      'git diff abc123..HEAD --name-only',
+      'git diff abc123..HEAD --name-only --relative',
       { cwd: '/proj' },
     );
     expect(result.scripts).toEqual(['src/FileCabinet/SuiteScripts/foo.js']);

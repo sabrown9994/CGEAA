@@ -15,9 +15,9 @@ export function registerDeploy(program: Command): void {
         const projectDir = getProjectDir();
         checkProductionGuard(projectDir, getProductionAuthId());
         await runBuild({ projectDir, dryRun: opts.dryRun ?? false });
-        const args = ['project:deploy', '--projectdir', projectDir];
+        const args = ['project:deploy'];
         if (opts.dryRun) args.push('--dryrun');
-        const result = spawnSync('suitecloud', args, { stdio: 'inherit' });
+        const result = spawnSync('suitecloud', args, { stdio: 'inherit', cwd: projectDir });
         if (result.status !== 0) {
           output.error(`suitecloud project:deploy exited with code ${result.status ?? 'unknown'}.`);
           process.exit(1);

@@ -16,7 +16,7 @@ export function getChangedFiles(projectDir: string, mergeBase: string): ChangedF
   if (!/^[0-9a-f]{4,64}$/i.test(mergeBase)) {
     throw new Error(`Invalid merge base SHA: ${mergeBase}`);
   }
-  const raw = execSync(`git diff ${mergeBase}..HEAD --name-only`, { cwd: projectDir })
+  const raw = execSync(`git diff ${mergeBase}..HEAD --name-only --relative`, { cwd: projectDir })
     .toString()
     .trim();
   const files = raw ? raw.split('\n').map((f) => f.trim()).filter(Boolean) : [];

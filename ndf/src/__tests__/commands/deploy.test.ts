@@ -35,14 +35,14 @@ describe('cgeaa netsuite deploy', () => {
     await makeProgram().parseAsync(['node', 'ndf', 'deploy']);
     expect(mockRunBuild).toHaveBeenCalledWith({ projectDir: '/proj', dryRun: false });
     expect(mockSpawnSync).toHaveBeenCalledWith(
-      'suitecloud', ['project:deploy', '--projectdir', '/proj'], { stdio: 'inherit' });
+      'suitecloud', ['project:deploy'], { stdio: 'inherit', cwd: '/proj' });
   });
 
   it('--dry-run passes dryRun:true to runBuild and --dryrun to suitecloud', async () => {
     await makeProgram().parseAsync(['node', 'ndf', 'deploy', '--dry-run']);
     expect(mockRunBuild).toHaveBeenCalledWith({ projectDir: '/proj', dryRun: true });
     expect(mockSpawnSync).toHaveBeenCalledWith(
-      'suitecloud', ['project:deploy', '--projectdir', '/proj', '--dryrun'], { stdio: 'inherit' });
+      'suitecloud', ['project:deploy', '--dryrun'], { stdio: 'inherit', cwd: '/proj' });
   });
 
   it('exits 1 when suitecloud exits non-zero', async () => {
