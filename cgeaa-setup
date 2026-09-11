@@ -249,7 +249,7 @@ install_ndf_globally() {
     local ndf_source="${SCRIPT_DIR}/ndf"
     [ -d "$ndf_source" ] || return 0  # NDF not present in this install
     if ! (cd "$ndf_source" && npm install --silent && npm run build --silent 2>/dev/null); then
-        log_warn "NDF build failed — 'cgeaa netsuite' will build on first use."
+        log_warning "NDF build failed — 'cgeaa netsuite' will build on first use."
         return 0
     fi
     log_success "NDF built successfully."
