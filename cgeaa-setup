@@ -252,7 +252,10 @@ install_ndf_globally() {
         log_warning "NDF build failed — 'cgeaa netsuite' will build on first use."
         return 0
     fi
-    log_success "NDF built successfully."
+    log_info "Installing NDF to /usr/local/share/cgeaa/ndf..."
+    sudo rm -rf /usr/local/share/cgeaa/ndf
+    sudo cp -r "$ndf_source" /usr/local/share/cgeaa/
+    log_success "NDF built and installed globally."
 }
 
 # --- Installation Function ---
