@@ -19,6 +19,8 @@ Referenced Packages
 bin/
 !zdf/bin/
 !zdf/bin/*.ts
+!ndf/bin/
+!ndf/bin/*.ts
 tmp/
 config/
 *.tmp
