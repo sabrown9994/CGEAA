@@ -1,8 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockLog = vi.spyOn(console, 'log').mockImplementation(() => {});
-const mockError = vi.spyOn(console, 'error').mockImplementation(() => {});
-const mockWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+const mockLog = vi.hoisted(() => vi.fn());
+const mockError = vi.hoisted(() => vi.fn());
+const mockWarn = vi.hoisted(() => vi.fn());
+
+vi.spyOn(console, 'log').mockImplementation(mockLog);
+vi.spyOn(console, 'error').mockImplementation(mockError);
+vi.spyOn(console, 'warn').mockImplementation(mockWarn);
 
 import { output } from '../../helpers/output.js';
 
