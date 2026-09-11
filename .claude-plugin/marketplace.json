@@ -7,7 +7,7 @@
     {
       "name": "cgeaa",
       "source": ".",
-      "description": "Teaches Claude to use the CGEAA CLI across every application it supports (Salesforce, Zuora; NetSuite planned) with the team's SDLC guardrails. Install once; new application skills arrive on update."
+      "description": "Teaches Claude to use the CGEAA CLI across every application it supports (Salesforce, Zuora) with the team's SDLC guardrails, plus Oracle's SuiteCloud development skills for NetSuite. Install once; new application skills arrive on update."
     }
   ]
 }
