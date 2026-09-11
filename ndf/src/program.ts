@@ -4,6 +4,7 @@ import { registerDeploy } from './commands/deploy.js';
 import { registerEnvs } from './commands/envs.js';
 import { registerSwitch } from './commands/switch-env.js';
 import { registerPull } from './commands/pull.js';
+import { registerSetup } from './commands/setup.js';
 
 export function buildProgram(): Command {
   const program = new Command();
@@ -16,5 +17,6 @@ export function buildProgram(): Command {
   registerEnvs(program);
   registerSwitch(program);
   registerPull(program);
+  registerSetup(program);
   return program;
 }
