@@ -22,7 +22,9 @@ export function registerDeploy(program: Command): void {
         }
         const args = ['project:deploy'];
         if (opts.dryRun) args.push('--dryrun');
-        const env = skipTests ? { ...process.env, NDF_SKIP_TESTS: 'true' } : process.env;
+        const env = skipTests
+          ? { ...process.env, NDF_SKIP_TESTS: 'true' }
+          : { ...process.env, NDF_SKIP_TESTS: undefined };
         const result = spawnSync('suitecloud', args, { stdio: 'inherit', cwd: projectDir, env });
         if (result.status !== 0) {
           output.error(`suitecloud project:deploy exited with code ${result.status ?? 'unknown'}.`);

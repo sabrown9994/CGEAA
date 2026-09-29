@@ -39,7 +39,7 @@ describe('cgeaa netsuite deploy', () => {
     expect(mockSpawnSync).toHaveBeenCalledWith(
       'suitecloud', ['project:deploy'], expect.objectContaining({ stdio: 'inherit', cwd: '/proj' }));
     const callOptions = mockSpawnSync.mock.calls[0][2];
-    expect(callOptions.env).toBe(process.env);
+    expect(callOptions.env.NDF_SKIP_TESTS).toBeUndefined();
   });
 
   it('--dry-run passes dryRun:true to runBuild and --dryrun to suitecloud', async () => {
