@@ -35,3 +35,7 @@ export function getProductionAuthId(): string {
   }
   return authId;
 }
+
+export function getRunTests(): boolean {
+  return readCgeaaConfig()['netsuite_run_tests'] !== 'false';
+}
