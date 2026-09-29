@@ -39,6 +39,7 @@ cgeaa netsuite setup
 |-----|---------|
 | `netsuite_project_dir` | Absolute path to your SDF project root (the folder containing `suitecloud.config.js`) |
 | `netsuite_production_auth_id` | Which suitecloud auth ID is **production** (drives the production guard) |
+| `netsuite_run_tests` | Optional. Set to `false` to skip the SuiteCloud Jest suite on deploy. Unset or any other value → tests run (default). See "Skipping the Jest suite" below. |
 
 The flow:
 1. Prompts for the project directory and validates that `suitecloud.config.js` exists there.
@@ -90,14 +91,43 @@ The core command. Generates feature-scoped deployment files:
 > **Commit the generated `deploy.xml` / `manifest.xml`** to your feature branch. The branch becomes
 > a complete, auditable deployment unit and the PR diff shows exactly what will deploy.
 
-### `cgeaa netsuite deploy [--dry-run]`
+### `cgeaa netsuite deploy [--dry-run] [--skip-tests]`
 1. Enforces the production guard on the **currently active** environment (blocks a real deploy when
    the active env is production and you are not on `main`).
 2. Runs `build` (respecting `--dry-run`).
 3. Runs `suitecloud project:deploy` (adds `--dryrun` when `--dry-run` is set), streaming output.
 
-The SuiteCloud `beforeExecuting` Jest hook configured in the project's `suitecloud.config.js` runs
-as part of the deploy — NDF does not bypass it.
+By default the SuiteCloud `beforeExecuting` Jest hook configured in the project's
+`suitecloud.config.js` runs as part of the deploy. To skip it, see below.
+
+### Skipping the Jest suite
+
+`suitecloud` has no CLI flag to bypass its config hook, so skipping the Jest suite is a
+**two-part** mechanism:
+
+1. **NDF** sets the environment variable `NDF_SKIP_TESTS=true` on the `suitecloud` subprocess when
+   tests are configured off — either persistently via `netsuite_run_tests=false` in `~/.cgeaa/config`,
+   or per-run via `cgeaa netsuite deploy --skip-tests`. When tests are on, NDF explicitly clears
+   `NDF_SKIP_TESTS` so a stray shell value can't silently skip them.
+2. **The project's `suitecloud.config.js`** must gate its `beforeExecuting` hook on that env var:
+   ```js
+   beforeExecuting: async args => {
+     if (process.env.NDF_SKIP_TESTS === 'true') {
+       console.log('NDF_SKIP_TESTS=true — skipping SuiteCloud Jest unit tests for this deploy.');
+       return args;
+     }
+     await SuiteCloudJestUnitTestRunner.run({});
+     return args;
+   }
+   ```
+   Without this hook edit, NDF's flag has no effect — the SDF project owns whether the hook honors
+   the env var.
+
+Precedence: `--skip-tests` (per-run) OR `netsuite_run_tests=false` (persistent) → skip. Default → run.
+
+> Use with care: skipping tests removes a deploy guardrail. It exists for cases where the suite is
+> red for reasons unrelated to your change (e.g. pre-existing failures on the branch) and you need
+> to deploy to a **lower** environment. Production deploys are still blocked off `main` regardless.
 
 ### `cgeaa netsuite pull object <scriptId>`
 `suitecloud object:import --scriptid <scriptId> --type ALL --destinationfolder /Objects`.

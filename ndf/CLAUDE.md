@@ -35,6 +35,7 @@ Two keys in `~/.cgeaa/config` (the shared CGEAA global config, `key=value` per l
 |-----|---------|
 | `netsuite_project_dir` | Absolute path to the SDF project root (contains `suitecloud.config.js`) |
 | `netsuite_production_auth_id` | The suitecloud auth ID that is production; never hardcoded |
+| `netsuite_run_tests` | Optional. `false` → deploy skips the SuiteCloud Jest hook (via `NDF_SKIP_TESTS`). `getRunTests()` returns `true` unless the value is literally `"false"`. |
 
 `getProjectDir()` throws `NdfConfigError` ("run `cgeaa netsuite setup`") if the key is missing or
 `suitecloud.config.js` isn't found at the path. `getProductionAuthId()` throws the same if its key
@@ -50,7 +51,7 @@ is missing. Every command catches errors → `output.error(msg)` + `process.exit
 | `src/commands/envs.ts` | `envs` — lists auth IDs, marks active (`*`) + production (`[PROD]`) |
 | `src/commands/switch-env.ts` | `switch <authId>` — writes `project.json` `defaultAuthId` |
 | `src/commands/build.ts` | `build [--dry-run]` — thin wrapper over `runBuild` |
-| `src/commands/deploy.ts` | `deploy [--dry-run]` — guard → `runBuild` → `suitecloud project:deploy` |
+| `src/commands/deploy.ts` | `deploy [--dry-run] [--skip-tests]` — guard → `runBuild` → `suitecloud project:deploy`. Sets `NDF_SKIP_TESTS=true` in the subprocess env when `--skip-tests` or `netsuite_run_tests=false`; explicitly clears it otherwise (no stray-env leak). The project's `suitecloud.config.js` hook must honor that env var to actually skip Jest. |
 | `src/commands/pull.ts` | `pull object <scriptId>` / `pull file <path>` |
 | `src/helpers/build-runner.ts` | `runBuild(opts)` — shared build logic used by `build` and `deploy` |
 | `src/helpers/git.ts` | `getMergeBase`, `getChangedFiles`, `getCurrentBranch` |

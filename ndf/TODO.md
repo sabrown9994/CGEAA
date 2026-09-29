@@ -86,10 +86,23 @@ environment — evidence for why the live stage is required:
 
 - **`config.test.ts` imports `beforeEach` but never uses it.** Lint nit.
 
-- **`deploy --skip-tests` was dropped.** `suitecloud` v4 has no flag to bypass the
-  `suitecloud.config.js` Jest hook, and we chose not to edit the SDF repo's config. The project's
-  own pre-existing failing unit tests (`cg_vendor_bill_approval_*`) will block a real deploy until
-  fixed in the NetSuite repo — that is a NetSuite-repo issue, not an NDF bug.
+- **`deploy --skip-tests` / `netsuite_run_tests` (ADDED 2026-09-29).** `suitecloud` v4 has no flag
+  to bypass the `suitecloud.config.js` Jest hook, so skipping is a two-part mechanism: NDF sets
+  `NDF_SKIP_TESTS=true` on the suitecloud subprocess (via `--skip-tests` or `netsuite_run_tests=false`),
+  and the project's `suitecloud.config.js` `beforeExecuting` hook must skip Jest when that env var is
+  set. **Verified live against intQA (2026-09-29, `--dryrun`):** with the toggle off, the hook runs
+  and the branch's 3 failing `cg_vendor_bill_approval_*` tests block the deploy (exit 1); with
+  `NDF_SKIP_TESTS=true`, the hook prints its skip message, Jest does not run, and the deploy proceeds
+  past the gate. NDF clears `NDF_SKIP_TESTS` on the run-tests path so a stray shell value can't
+  silently skip tests.
+  - The `suitecloud.config.js` env-gated hook lives on the FinTech repo's `cicd/ndf` branch.
+  - The `cg_vendor_bill_approval_*` test failures are a NetSuite-repo issue (branch script changes
+    vs. un-updated tests), not an NDF bug.
+
+- **No full NDF write-deploy e2e yet.** A build→deploy through NDF needs deployable script/object
+  changes on the branch. The toggle was proven via `suitecloud --dryrun`; a real write-deploy with
+  tests off still needs a branch that has feature content (e.g. the FINT-16714 changes) plus the
+  `cicd/ndf` config edit.
 
 - **No live production deploy has been (or should be) exercised.** The production path is guarded
   and only unit-tested; a real prod deploy happens from `main` after merge.
