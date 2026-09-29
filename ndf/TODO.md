@@ -99,13 +99,33 @@ environment — evidence for why the live stage is required:
   - The `cg_vendor_bill_approval_*` test failures are a NetSuite-repo issue (branch script changes
     vs. un-updated tests), not an NDF bug.
 
-- **No full NDF write-deploy e2e yet.** A build→deploy through NDF needs deployable script/object
-  changes on the branch. The toggle was proven via `suitecloud --dryrun`; a real write-deploy with
-  tests off still needs a branch that has feature content (e.g. the FINT-16714 changes) plus the
-  `cicd/ndf` config edit.
+- **Write-deploy + auto-build VERIFIED end-to-end (2026-09-29, intQA, tests-off).** On `cicd/ndf`
+  with the config hook edit:
+  - **File-only change** → `build` produced `deploy.xml` with `<files>` (no `<objects>`); deploy
+    SUCCESS (17/17 steps, `FILE_UPLOAD`).
+  - **Script + object change** → `build` produced `<files>` + `<objects>` and a `manifest.xml`
+    listing the object id; deploy SUCCESS with `CUSTOM_OBJECT_VALIDATION` → `CUSTOM_OBJECT_UPDATE`
+    (usereventscript + scriptdeployment) + both `FILE_UPLOAD`s.
+  - **Failure path** — an object referencing an un-imported custom record
+    (`[scriptid=customrecord_...]`) → SDF validation failed before deployment; NDF surfaced the
+    unresolved-dependency error and exited 1. NDF does **not** auto-recover (see future feature).
+  All test changes were reverted and intQA restored afterward.
 
 - **No live production deploy has been (or should be) exercised.** The production path is guarded
   and only unit-tested; a real prod deploy happens from `main` after merge.
+
+---
+
+## 💡 Future features (not needed yet)
+
+- **Auto-import missing objects + retry deploy.** When a deploy fails because a script/object
+  references a custom object that isn't imported into the project, NDF could parse the unresolved-
+  dependency error, run `suitecloud object:import` for the missing object(s), add them to the build
+  scope, and retry the deploy once. **Deliberately deferred** (decision 2026-09-29): auto-importing
+  objects without developer oversight is risky — it could silently pull in unintended objects and
+  widen the deploy scope. Revisit only if a concrete need arises, and if built, gate it behind an
+  explicit opt-in flag (e.g. `deploy --auto-import`) with a confirmation/preview of what would be
+  imported. Detection would rely on parsing SDF deploy error text, which is brittle and needs care.
 
 ---
 
