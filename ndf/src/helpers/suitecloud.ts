@@ -14,6 +14,7 @@ export function runSuitecloud(
     env: opts.env ?? process.env,
     encoding: 'utf-8',
   });
-  const output = `${res.stdout ?? ''}${res.stderr ?? ''}`;
+  const errorMsg = res.error ? `Error: ${res.error.message}\n` : '';
+  const output = `${res.stdout ?? ''}${res.stderr ?? ''}${errorMsg}`;
   return { status: res.status ?? 1, output };
 }
