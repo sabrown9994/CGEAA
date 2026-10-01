@@ -8,19 +8,23 @@ import { output } from './output.js';
 export interface BuildOptions {
   projectDir: string;
   dryRun: boolean;
+  extraObjectPaths?: string[];
 }
 
 export async function runBuild(opts: BuildOptions): Promise<void> {
   const { projectDir, dryRun } = opts;
   const mergeBase = getMergeBase(projectDir);
-  const { scripts, objects } = getChangedFiles(projectDir, mergeBase);
+  const changed = getChangedFiles(projectDir, mergeBase);
 
-  if (scripts.length === 0 && objects.length === 0) {
+  const extra = opts.extraObjectPaths ?? [];
+  const objects = [...changed.objects, ...extra.filter((p) => !changed.objects.includes(p))];
+
+  if (changed.scripts.length === 0 && objects.length === 0) {
     output.warn('No scripts or objects changed vs main — nothing to build.');
     process.exit(0);
   }
 
-  const deployXml = generateDeployXml(scripts, objects);
+  const deployXml = generateDeployXml(changed.scripts, objects);
   const objectIds = objects.map(objectIdFromPath);
   const manifestXml = generateManifestXml(join(projectDir, 'src', 'manifest.xml'), objectIds);
 

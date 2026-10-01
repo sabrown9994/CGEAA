@@ -45,3 +45,31 @@ describe('runBuild adddependencies', () => {
     await expect(runBuild({ projectDir: '/proj', dryRun: false })).rejects.toThrow(/adddependencies/);
   });
 });
+
+describe('runBuild extraObjectPaths', () => {
+  it('includes extraObjectPaths in the deploy.xml object list (deduped)', async () => {
+    mockGetChangedFiles.mockReturnValue({
+      scripts: [],
+      objects: ['src/Objects/customscript_a.xml'],
+    });
+    await runBuild({
+      projectDir: '/proj',
+      dryRun: false,
+      extraObjectPaths: ['src/Objects/customrecord_x.xml', 'src/Objects/customscript_a.xml'],
+    });
+    // generateDeployXml receives the union, deduped, preserving diff objects first
+    expect(mockGenerateDeployXml).toHaveBeenCalledWith(
+      [],
+      ['src/Objects/customscript_a.xml', 'src/Objects/customrecord_x.xml'],
+    );
+  });
+
+  it('builds when only extraObjectPaths are present (no diff changes)', async () => {
+    mockGetChangedFiles.mockReturnValue({ scripts: [], objects: [] });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    // should NOT exit 0 "nothing to build" because an extra object is present
+    await runBuild({ projectDir: '/proj', dryRun: false, extraObjectPaths: ['src/Objects/customrecord_x.xml'] });
+    expect(exitSpy).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+});
