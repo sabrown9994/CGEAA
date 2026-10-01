@@ -42,7 +42,7 @@ running it on merge into an environment branch.
 ```
 cgeaa netsuite build  [--dry-run]
 cgeaa netsuite deploy --target <authId> [--source <authId>] [--auto-import] [--dry-run]
-                      [--skip-tests] [--max-import-rounds <n>] [--max-imports <n>]
+                      [--skip-tests] [--max-import-rounds <n>]
 ```
 
 - **`build`** (offline prep): generate `deploy.xml` from the git diff, then run
@@ -93,8 +93,8 @@ deploy(--target T, --source S?, --auto-import?, --dry-run?, --skip-tests?):
       missing = parseMissingObjectRefs(result.output)   # script IDs SDF names as missing
       if missing is empty:
         FAIL — surface the error unchanged (not a resolvable missing-object dependency)
-      if round > MAX_ROUNDS or (imported.length + missing.length) > MAX_IMPORTS:
-        FAIL — cap tripped; surface what was attempted + remaining missing
+      if round > MAX_ROUNDS:
+        FAIL — cap tripped; surface what was imported so far + remaining missing
       # resolve the named-missing objects
       if --dry-run:
         report "would import: <missing>" and STOP the loop (no import, no retry) — preview only
@@ -136,9 +136,10 @@ deploy(--target T, --source S?, --auto-import?, --dry-run?, --skip-tests?):
 ## Guardrails (the "don't go rampant" controls)
 
 1. **Named-only:** import exactly the script IDs parsed from SDF errors — never inferred extras.
-2. **Caps:** `MAX_ROUNDS` (default 5) and `MAX_IMPORTS` (default 25) total objects. Hitting either
+2. **Cap:** `MAX_ROUNDS` (default 10) — the maximum number of import+retry iterations. Hitting it
    fails with a clear message listing what was imported and what's still missing. Overridable via
-   flags (`--max-import-rounds`, `--max-imports`) for unusual cases.
+   `--max-import-rounds` for unusual cases. (Each round imports only the objects SDF names that
+   round, so rounds bound total imports; there is no separate object-count cap.)
 3. **Gating (local vs CI):**
    - Interactive TTY: print the exact list of objects about to be imported from `--source` and
      require confirmation before importing. Decline → fail without importing.
