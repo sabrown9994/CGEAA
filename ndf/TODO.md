@@ -68,10 +68,7 @@ environment — evidence for why the live stage is required:
 
 ## 🔧 Open items / known limitations
 
-- **manifest `<objects>` is feature-scoped, not a full scan.** `generateManifestXml` lists only the
-  objects changed on the branch (per the design decision). If SDF dependency resolution rejects a
-  deploy because a referenced object isn't in the manifest, switch to scanning all of
-  `src/Objects/` (a `--full-manifest` flag was noted as the escape hatch). `helpers/xml.ts`.
+- **[RETIRED 2026-10-01] manifest `<objects>` feature-scoped resolution.** Previously, `generateManifestXml` listed only the objects changed on the branch. This is now owned by `suitecloud project:adddependencies`, which computes and replaces the manifest `<objects>` section with the dependency set for the current scope. Feature-scoped manifest generation is no longer a concern.
 
 - **manifest `projectname`/`frameworkversion` are hardcoded** to `NetSuite` / `1.0`
   (`helpers/xml.ts`). If a project uses different values, `build` will overwrite them. Should read
@@ -116,16 +113,14 @@ environment — evidence for why the live stage is required:
 
 ---
 
-## 💡 Future features (not needed yet)
+## ✅ Shipped features (2026-10-01)
 
-- **Auto-import missing objects + retry deploy.** When a deploy fails because a script/object
-  references a custom object that isn't imported into the project, NDF could parse the unresolved-
-  dependency error, run `suitecloud object:import` for the missing object(s), add them to the build
-  scope, and retry the deploy once. **Deliberately deferred** (decision 2026-09-29): auto-importing
-  objects without developer oversight is risky — it could silently pull in unintended objects and
-  widen the deploy scope. Revisit only if a concrete need arises, and if built, gate it behind an
-  explicit opt-in flag (e.g. `deploy --auto-import`) with a confirmation/preview of what would be
-  imported. Detection would rely on parsing SDF deploy error text, which is brittle and needs care.
+- **Auto-import missing objects + retry deploy** (`deploy --target <authId> --source <authId> [--auto-import]`).
+  When a deploy fails because a script/object references a custom object that isn't imported into the project, NDF parses the unresolved-dependency error, extracts named object IDs, runs `suitecloud object:import` for only those objects from `--source`, adds them to the build scope, and retries the deploy. **Gated design**: interactive (TTY) → confirm before importing; non-interactive (CI) → requires `--auto-import`, else fails with the named list. Capped at `MAX_ROUNDS=10` (default) to prevent infinite loops. Imported XML is left in the working tree for developer review. Account orchestration via `defaultAuthId` swap ensures imports come from `--source` and deploys go to `--target`. Verified live against intQA 2026-10-01.
+
+---
+
+## 💡 Future features (not needed yet)
 
 ---
 

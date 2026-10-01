@@ -51,7 +51,7 @@ is missing. Every command catches errors → `output.error(msg)` + `process.exit
 | `src/commands/envs.ts` | `envs` — lists auth IDs, marks active (`*`) + production (`[PROD]`) |
 | `src/commands/switch-env.ts` | `switch <authId>` — writes `project.json` `defaultAuthId` |
 | `src/commands/build.ts` | `build [--dry-run]` — thin wrapper over `runBuild` |
-| `src/commands/deploy.ts` | `deploy [--dry-run] [--skip-tests]` — guard → `runBuild` → `suitecloud project:deploy`. Sets `NDF_SKIP_TESTS=true` in the subprocess env when `--skip-tests` or `netsuite_run_tests=false`; explicitly clears it otherwise (no stray-env leak). The project's `suitecloud.config.js` hook must honor that env var to actually skip Jest. |
+| `src/commands/deploy.ts` | `deploy --target <authId> [--source <authId>] [--auto-import] [--dry-run] [--skip-tests] [--max-import-rounds <n>]` — dependency resolution orchestration. Swap `defaultAuthId` to `--source` for `object:import` and `--target` for `adddependencies`/`validate`/`deploy`, restore in `finally`. Resolve loop: build (adddependencies REPLACES manifest), deploy, on missing-object error parse SDF output, import named-only objects from `--source` (gated: confirm locally, `--auto-import` in CI), rebuild, retry — capped at `MAX_ROUNDS` (default 10). Production guard on `--target`. Sets `NDF_SKIP_TESTS=true` via `--skip-tests` or `netsuite_run_tests=false`. |
 | `src/commands/pull.ts` | `pull object <scriptId>` / `pull file <path>` |
 | `src/helpers/build-runner.ts` | `runBuild(opts)` — shared build logic used by `build` and `deploy` |
 | `src/helpers/git.ts` | `getMergeBase`, `getChangedFiles`, `getCurrentBranch` |
@@ -71,6 +71,28 @@ is missing. Every command catches errors → `output.error(msg)` + `process.exit
 An earlier version wrongly used the current-auth guard for `switch`, which blocked switching *away*
 from prod and allowed switching *to* prod from a feature branch. Live intQA caught it (see TODO.md).
 Keep these two semantics distinct.
+
+## Dependency resolution (deploy with --source and --auto-import)
+
+**Account model (`defaultAuthId` swap):**
+`deploy` swaps `project.json` `defaultAuthId` to enable different auth contexts per SDF command, since `suitecloud` has no per-command account flag:
+1. Before any SDF call, save the current `defaultAuthId`.
+2. Set `defaultAuthId` to `--source` (if provided) for `object:import` calls — NDF must import from the source environment.
+3. Set `defaultAuthId` to `--target` for `project:adddependencies`, `project:validate`, and `project:deploy` — these target the deployment environment.
+4. In a `finally` block, restore the original `defaultAuthId` even on failure, so the user's shell state is never corrupted.
+
+**Manifest dependency replacement:**
+`project:adddependencies` **replaces** the entire `<objects>` section of `manifest.xml` with the dependency set it computes for the current project scope. This is not additive — the committed/base manifest is recomputed. After a successful build, a shrinking `<objects>` list is expected and means SDF no longer detects those objects as project dependencies.
+
+**Named-only import:**
+When SDF surfaces a deploy failure due to missing custom objects, NDF parses the error output to extract object IDs (e.g., `customscript_1234`). Only those named objects are imported from `--source` via `suitecloud object:import`. This minimizes unintended scope creep.
+
+**Gating (confirm local / `--auto-import` in CI):**
+- **Interactive (TTY):** prompt the user to confirm before importing, listing the objects by name.
+- **Non-interactive (CI):** require the `--auto-import` flag. Without it, fail and output the named list to stderr so the CI log shows what was needed.
+
+**Resolution cap:**
+`MAX_ROUNDS` (default 10) prevents infinite loops if an import introduces another missing dependency. Each round: build (adddependencies) → deploy → parse errors → import → rebuild → retry. The cap is generous enough for typical multi-level dependencies but prevents runaway loops on misconfiguration.
 
 ## build — the critical path
 

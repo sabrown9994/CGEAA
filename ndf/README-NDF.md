@@ -91,11 +91,50 @@ The core command. Generates feature-scoped deployment files:
 > **Commit the generated `deploy.xml` / `manifest.xml`** to your feature branch. The branch becomes
 > a complete, auditable deployment unit and the PR diff shows exactly what will deploy.
 
-### `cgeaa netsuite deploy [--dry-run] [--skip-tests]`
-1. Enforces the production guard on the **currently active** environment (blocks a real deploy when
-   the active env is production and you are not on `main`).
-2. Runs `build` (respecting `--dry-run`).
-3. Runs `suitecloud project:deploy` (adds `--dryrun` when `--dry-run` is set), streaming output.
+### `cgeaa netsuite deploy --target <authId> [--source <authId>] [--auto-import] [--dry-run] [--skip-tests] [--max-import-rounds <n>]`
+
+Resolves missing object dependencies during deploy and optionally auto-imports them from a source environment.
+
+**Surface:**
+- `--target <authId>` (required): the environment to deploy to. Must be a configured auth ID.
+- `--source <authId>`: the environment to import missing objects from. Required if deploy fails with unresolved dependencies and you want to resolve them. If provided, enables the auto-import resolve loop.
+- `--auto-import`: confirms and auto-imports missing objects without interactive prompt (for CI/GitHub Actions). Without this flag in non-interactive contexts, deploy fails with the list of missing objects.
+- `--dry-run`: runs `project:validate` (no deploy, no import).
+- `--skip-tests`: skip the SuiteCloud Jest hook (requires project's `suitecloud.config.js` to gate the hook on `NDF_SKIP_TESTS` env var).
+- `--max-import-rounds <n>`: cap on dependency resolution retries (default 10). Each round: build → parse missing objects → import only named objects from `--source` → rebuild → retry deploy.
+
+**Account model:**
+NDF manages the `project.json` `defaultAuthId` to orchestrate `suitecloud` commands that have no per-command account flag:
+1. Sets `defaultAuthId` to `--source` (if provided) for `object:import`.
+2. Sets `defaultAuthId` to `--target` for `adddependencies`, `validate`, and `deploy`.
+3. Restores the original `defaultAuthId` on success or failure (via `finally` block).
+
+**Production guard:**
+The production guard applies to `--target`. Deploy is blocked if `--target` is the production auth ID and you are not on `main`. Error message: `Cannot deploy to production outside of main. Current branch: <branch>. Merge your changes to main first.`
+
+**Dependency resolution loop:**
+1. `build` runs `suitecloud project:adddependencies` to populate the manifest; this **replaces** the entire `<objects>` section with the dependency set SDF computes (not additive).
+2. Deploy to `--target`; on a missing-object dependency error, parse the SDF-named object IDs (e.g. `customscript_1234`).
+3. If objects are found and `--source` is configured:
+   - Interactive (TTY): prompt for confirmation before importing.
+   - Non-interactive (CI): require `--auto-import`, else fail with the named list.
+4. Import only the named objects from `--source` via `suitecloud object:import`.
+5. Rebuild (run adddependencies again).
+6. Retry the deploy; if it still fails with a different missing object, loop (capped at `--max-import-rounds`, default 10).
+
+**Imported objects:**
+The imported object XML files are left in the working tree (under `src/Objects/`) for the developer to review and commit. NDF never auto-commits. Deploy output writes `deploy.xml` and `manifest.xml`; commit them on the feature branch so CI deploys the exact scope.
+
+**Gating:**
+Named-only import: if SDF names a missing object ID during resolution, only that object is imported (not a broader set). This minimizes scope creep.
+
+**GitHub Actions example:**
+```yaml
+- name: Deploy feature to UAT (auto-resolve deps)
+  run: ./cgeaa netsuite deploy --target CG-UAT --source CG-intQA --auto-import
+```
+
+This example deploys to CG-UAT, auto-resolves any missing dependencies by importing from CG-intQA, and commits the generated XML to the feature branch before pushing.
 
 By default the SuiteCloud `beforeExecuting` Jest hook configured in the project's
 `suitecloud.config.js` runs as part of the deploy. To skip it, see below.
@@ -135,6 +174,10 @@ Imports a custom object (and, in an ACP, its referenced SuiteScript files) into 
 
 ### `cgeaa netsuite pull file <path>`
 `suitecloud file:import --paths <path>`. Imports a File Cabinet file into the project.
+
+### Troubleshooting
+
+**Object-only changes referencing unreachable dependencies:** If a changed object (e.g., a custom script) references a script or file not included in the deploy scope, SDF will flag it as an unresolved dependency. Include the referenced script in the same change, or ensure it already exists in the target environment. If the reference is from an imported object in the source environment, you may need to import the referenced script as well.
 
 ## Feature-branch workflow
 
