@@ -65,8 +65,7 @@ is missing. Every command catches errors → `output.error(msg)` + `process.exit
 
 - **`switch`** guards the **target** `authId` (the command argument): block if `authId ===
   productionAuthId` and branch ≠ `main`. This is inline in `switch-env.ts` — NOT `checkProductionGuard`.
-- **`deploy`** guards the **currently active** auth ID (from `project.json`): `checkProductionGuard`
-  reads `getActiveAuthId(projectDir)` and blocks if it equals production and branch ≠ `main`.
+- **`deploy`** guards the **target** `authId` (the command argument) inline (`commands/deploy.ts:39`): block if `opts.target === productionAuthId` and branch ≠ `main`. Does not import or use `checkProductionGuard`/active env — the guard runs before any defaultAuthId swap.
 
 An earlier version wrongly used the current-auth guard for `switch`, which blocked switching *away*
 from prod and allowed switching *to* prod from a feature branch. Live intQA caught it (see TODO.md).
@@ -118,7 +117,8 @@ When SDF surfaces a deploy failure due to missing custom objects, NDF parses the
    - regenerates `<objects>` from `changedObjectIds` only (feature-scoped, per the design decision;
      may switch to a full `src/Objects/` scan later if SDF dependency resolution needs it)
    - `projectname`/`frameworkversion` are currently hardcoded to `NetSuite`/`1.0` (see TODO.md)
-6. `--dry-run` prints both to stdout and returns without writing.
+6. Runs `suitecloud project:adddependencies` (after writing the XML files): computes and **replaces** the entire `<objects>` section in `manifest.xml` with the full dependency set for the current project scope (not just the changed objects). This recomputation is necessary for deploy to resolve all dependencies. Throws on non-zero exit.
+7. `--dry-run` prints both XML files to stdout and returns without writing or running adddependencies.
 
 ## SDF project assumptions
 

@@ -84,9 +84,10 @@ The core command. Generates feature-scoped deployment files:
    - `<files>` lists only changed scripts; omitted entirely when none changed
    - `<objects>` lists only changed object XML; omitted entirely when none changed
 5. Writes `src/manifest.xml`, preserving the existing `<features>` and `<files>` (bundle
-   dependency) sections **verbatim**, and replacing `<objects>` with only this feature's object IDs.
+   dependency) sections **verbatim**, and initially setting `<objects>` with only this feature's object IDs.
+6. Runs `suitecloud project:adddependencies`, which **replaces** the entire `<objects>` section in `manifest.xml` with the full computed dependency set for the current project scope. This recomputation is necessary for deploy to resolve all dependencies — the initial feature-scoped `<objects>` list is superseded by SDF's analysis.
 
-`--dry-run` prints both generated files to stdout and writes nothing.
+`--dry-run` prints both generated files to stdout and writes nothing (does not run adddependencies).
 
 > **Commit the generated `deploy.xml` / `manifest.xml`** to your feature branch. The branch becomes
 > a complete, auditable deployment unit and the PR diff shows exactly what will deploy.
