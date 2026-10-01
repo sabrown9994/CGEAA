@@ -2,6 +2,7 @@ import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { getMergeBase, getChangedFiles } from './git.js';
 import { generateDeployXml, generateManifestXml, objectIdFromPath } from './xml.js';
+import { runSuitecloud } from './suitecloud.js';
 import { output } from './output.js';
 
 export interface BuildOptions {
@@ -33,5 +34,11 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
 
   writeFileSync(join(projectDir, 'src', 'deploy.xml'), deployXml, 'utf-8');
   writeFileSync(join(projectDir, 'src', 'manifest.xml'), manifestXml, 'utf-8');
+
+  const dep = runSuitecloud(['project:adddependencies'], { cwd: projectDir });
+  if (dep.status !== 0) {
+    throw new Error(`project:adddependencies failed:\n${dep.output}`);
+  }
+
   output.success('deploy.xml and manifest.xml updated — review and commit them to your feature branch.');
 }
