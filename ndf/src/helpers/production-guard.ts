@@ -16,8 +16,3 @@ export function getActiveAuthId(projectDir: string): string {
   return (JSON.parse(raw) as { defaultAuthId?: string }).defaultAuthId ?? '';
 }
 
-export function checkProductionGuard(projectDir: string, productionAuthId: string): void {
-  if (getActiveAuthId(projectDir) !== productionAuthId) return;
-  const branch = getCurrentBranch(projectDir);
-  if (branch !== 'main') throw new ProductionGuardError(branch);
-}

@@ -49,7 +49,7 @@ environment — evidence for why the live stage is required:
 1. **Inverted `switch` production guard** (`commands/switch-env.ts`). The guard checked the
    *current* active auth ID instead of the *target* being switched to — it blocked switching *away*
    from production and allowed switching *to* production from a feature branch. Fixed to guard the
-   target `authId` inline; `deploy` keeps the current-auth `checkProductionGuard`.
+   target `authId` inline; `deploy` also guards the `--target` argument inline.
 
 2. **Mono-repo path prefix** (`helpers/git.ts`). `git diff --name-only` run in a subdirectory of a
    mono-repo returns repo-root-relative paths (`NetSuite/src/...`), so the `src/...` filters matched
