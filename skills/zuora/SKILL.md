@@ -1,13 +1,18 @@
 ---
 name: zuora
 description: >-
-  Use when a task involves Zuora billing objects — accounts, subscriptions, invoices,
-  credit/debit memos, bill runs, products & rate plans/charges, workflows, or invoice
-  (billing) templates — via the CGEAA `cgeaa zuora ...` CLI (the bundled Zuora Development
-  Framework, "ZDF"). Covers three use cases: (1) editing Zuora config (workflows, billing
-  templates) locally; (2) promoting test data across tenants (pull from one, push into a
-  lower environment); (3) creating product catalog objects from a ticket. Trigger on
-  mentions of Zuora, ZDF, `cgeaa zuora`, billing objects, or moving/creating them between tenants.
+  Use for ANY Zuora billing / subscription development work in this repo — accounts,
+  subscriptions, invoices, credit & debit memos, bill runs, products & rate plans/charges,
+  Zuora workflows (e.g. Delinquency, change-order), orders, data queries, and HTML billing
+  templates (invoice, credit-memo, AND debit-memo templates) — via the CGEAA `cgeaa zuora ...`
+  CLI (the bundled Zuora Development Framework, "ZDF"). Covers three use cases: (1) editing Zuora
+  config (workflows, HTML billing/invoice/credit-memo templates) locally; (2) promoting test data
+  across tenants (pull from one, push/upsert into a lower environment); (3) creating product
+  catalog objects from a ticket. Trigger on: Zuora, ZDF, `cgeaa zuora`, Zuora Billing / Revenue /
+  RevPro, billing, invoice or credit-memo HTML templates, credit/debit memo, subscription, rate
+  plan, product catalog, bill run, payment gateway / AutoPay, Zuora workflow, or moving/creating
+  any of these between Zuora tenants (IntQA / StagingUAT / Production). (For NetSuite-side work —
+  SuiteScript, SDF, custom objects — use the `netsuite` skill instead.)
 ---
 
 # Using ZDF (`cgeaa zuora`)
@@ -38,9 +43,13 @@ Pull to local JSON, edit (by hand or with the user), push back to the **same** t
 ```
 cgeaa zuora pull workflow <id>            # full definition via export
 cgeaa zuora push workflow <id>            # re-imports edited logic as a new active version
-cgeaa zuora pull billing-template <id>    # decodes the HTML design JSON
-cgeaa zuora push billing-template <id>
+cgeaa zuora pull billing-template <id>    # auto-detects invoice / credit-memo / debit-memo template; decodes HTML design JSON
+cgeaa zuora push billing-template <id>    # routes by the local `_zdfTemplateType` marker
 ```
+
+`billing-template` handles all three HTML template families (invoice, credit-memo, debit-memo):
+`pull` auto-detects the type and records it in a local-only `_zdfTemplateType` marker;
+`push`/`create`/`delete` use that marker to hit the right Settings API endpoint.
 
 ## Use case 2 — Test-data promotion across tenants
 
