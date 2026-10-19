@@ -235,10 +235,15 @@ API so the local file is the FULL, recreatable definition, not just metadata:
 
 ### Settings API (billing-template)
 
-`/settings/invoice-templates` (NOT `/v1/`-prefixed). Responses have no `{success}` envelope.
-HTML templates only — `pull billing-template` base64-decodes `base64EncodedTemplateFileContent`
-to the design JSON and writes it as `<sanitizedName>_<id>.json`. The push allowlist is
-explicit because the Settings API rejects any unexpected key.
+**Three template types:** invoice, credit-memo, debit-memo — each accessed via its own endpoint
+(`/settings/{invoice|credit-memo|debit-memo}-templates`, NOT `/v1/`-prefixed). Responses have no
+`{success}` envelope. HTML templates only — `pull billing-template` base64-decodes
+`base64EncodedTemplateFileContent` to the design JSON and writes it as `<sanitizedName>_<id>.json`
+with a local-only `_zdfTemplateType` marker (one of `"invoice"`, `"credit-memo"`, `"debit-memo"`).
+The marker is **always stripped** before any body is sent to Zuora. Pull auto-detects the type by
+trying each endpoint in order (invoice → credit-memo → debit-memo); push/create/delete read the
+marker to route to the correct endpoint. The push allowlist is explicit because the Settings API
+rejects any unexpected key.
 
 ### orders list — account filtering
 

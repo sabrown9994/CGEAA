@@ -205,7 +205,7 @@ cgeaa netsuite deploy
 ## Production safety
 
 - You **cannot** `switch` to the production auth ID unless you are on `main`.
-- You **cannot** `deploy` while the active environment is production and you are not on `main`.
+- You **cannot** `deploy` with `--target` set to the production auth ID unless you are on `main`.
 - The guard error is: `Cannot deploy/switch to production outside of main. Current branch: <branch>.
   Merge your changes to main first.`
 

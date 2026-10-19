@@ -68,7 +68,7 @@ is missing. Every command catches errors → `output.error(msg)` + `process.exit
 - **`deploy`** guards the **target** `authId` (the command argument) inline (`commands/deploy.ts:39`): block if `opts.target === productionAuthId` and branch ≠ `main`. Does not import or use `checkProductionGuard`/active env — the guard runs before any defaultAuthId swap.
 
 An earlier version wrongly used the current-auth guard for `switch`, which blocked switching *away*
-from prod and allowed switching *to* prod from a feature branch. Live intQA caught it (see TODO.md).
+from prod and allowed switching *to* prod from a feature branch (caught during live intQA testing).
 Keep these two semantics distinct.
 
 ## Dependency resolution (deploy with --source and --auto-import)
