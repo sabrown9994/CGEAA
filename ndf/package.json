@@ -1,0 +1,27 @@
+{
+  "name": "ndf",
+  "version": "1.0.0",
+  "description": "NetSuite Development Framework CLI",
+  "type": "commonjs",
+  "bin": { "ndf": "./dist/ndf.js" },
+  "main": "./dist/ndf.js",
+  "scripts": {
+    "build": "tsup bin/ndf.ts --format cjs --out-dir dist",
+    "dev": "tsx bin/ndf.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": { "node": ">=18.0.0" },
+  "files": ["dist"],
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.4.0"
+  }
+}

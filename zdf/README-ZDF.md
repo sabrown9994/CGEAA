@@ -586,21 +586,30 @@ just metadata.
 
 ### billing-template
 
-HTML invoice templates only, accessed via the Zuora **Settings API** (`/settings/...`, not `/v1/`-prefixed).
+HTML billing templates (invoice, credit-memo, debit-memo), accessed via the Zuora **Settings API** (`/settings/...`, not `/v1/`-prefixed).
+
+**Template types:** ZDF supports three template types — **invoice**, **credit-memo**, and **debit-memo** — each accessed via its own Settings API endpoint:
+- Invoice templates: `/settings/invoice-templates`
+- Credit-memo templates: `/settings/credit-memo-templates`
+- Debit-memo templates: `/settings/debit-memo-templates`
+
+A local-only `_zdfTemplateType` marker (one of `"invoice"`, `"credit-memo"`, `"debit-memo"`) is written into each pulled file and read on push/create/delete to route the request to the correct endpoint. The marker is **always stripped** before any body is sent to Zuora.
 
 | Operation | Endpoint | Notes |
 |-----------|----------|-------|
-| pull | `GET /settings/invoice-templates/{id}` | Base64-decodes `base64EncodedTemplateFileContent` to JSON and writes it as `<name>_<id>.json`; rejects non-HTML (WORD) templates |
-| push | `PUT /settings/invoice-templates/{id}` | Re-encodes the local JSON to base64 and sends an allowlisted body |
-| create | `POST /settings/invoice-templates` | Base64-encodes the local design JSON, HTML-only; renames the local file to `<name>_<id>.json` |
-| delete | `DELETE /settings/invoice-templates/{id}` | Removes the remote template and its local file |
-| list | `GET /settings/invoice-templates` (`cgeaa zuora list billing-templates`) | Metadata only (id, name, templateNumber, templateFormat) |
+| pull | `GET /settings/{type}-templates/{id}` where `{type}` is auto-detected | Auto-detects the template type by trying each of the three endpoints in order (invoice → credit-memo → debit-memo); base64-decodes `base64EncodedTemplateFileContent` to JSON and writes it as `<name>_<id>.json` with a `_zdfTemplateType` marker; rejects non-HTML (WORD) templates |
+| push | `PUT /settings/{type}-templates/{id}` where `{type}` is read from the file's `_zdfTemplateType` | Re-encodes the local JSON to base64 and sends an allowlisted body to the endpoint matching the file's template type |
+| create | `POST /settings/{type}-templates` where `{type}` is read from the file's `_zdfTemplateType` | Base64-encodes the local design JSON, HTML-only; renames the local file to `<name>_<id>.json` |
+| delete | `DELETE /settings/{type}-templates/{id}` where `{type}` is read from the file's `_zdfTemplateType` | Removes the remote template and its local file; auto-detects the type if not in the file |
+| list | `GET /settings/{invoice,credit-memo,debit-memo}-templates` (`cgeaa zuora list billing-templates`) | Fetches all three template types and prints metadata (id, name, templateNumber, templateFormat, type) |
 
 **Limitations:**
 - **HTML templates only.** WORD-format templates are not supported — their content is a binary `.doc`, not JSON, so `pull billing-template` rejects them. `create billing-template` always sends `templateFormat: 'HTML'`.
+- **Type marker:** The `_zdfTemplateType` field is required for push/create/delete (auto-written by pull). If missing on create, it defaults to `'invoice'` (backward-compat). If present but invalid (not one of the three valid types), the command throws before any network call.
+- **Pull auto-detection:** When you `pull billing-template <id>`, ZDF tries each of the three endpoints (invoice → credit-memo → debit-memo) and uses the first one that succeeds. If all three return 400/404, the command throws a combined not-found error.
 - `push billing-template` sends an allowlisted body (`name`, `defaultTemplate`, `suppressZeroValueLine`, `templateFileName`, `base64EncodedTemplateFileContent`), plus any `__c` custom fields. It is deliberately an allowlist rather than "current minus a denylist" — the Settings API rejects unexpected keys.
 - The Settings API response for both pull and push has no `success` envelope at all on success — only an explicit `success: false` or a populated `reasons`/`errors` array is treated as a failure.
-- **Live-verified full cycle on intQA (2026-08-07)**: create / confirm / push / delete / confirm-deletion all PASS.
+- **Live-verified (invoice templates, 2026-08-07)**: create / confirm / push / delete / confirm-deletion all PASS. Credit-memo and debit-memo template support is unit + real-filesystem tested (same endpoints/body contract as invoice, different path only).
 
 ---
 

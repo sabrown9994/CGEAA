@@ -245,6 +245,19 @@ install_zdf_globally() {
     log_success "ZDF installed globally."
 }
 
+install_ndf_globally() {
+    local ndf_source="${SCRIPT_DIR}/ndf"
+    [ -d "$ndf_source" ] || return 0  # NDF not present in this install
+    if ! (cd "$ndf_source" && npm install --silent && npm run build --silent 2>/dev/null); then
+        log_warning "NDF build failed — 'cgeaa netsuite' will build on first use."
+        return 0
+    fi
+    log_info "Installing NDF to /usr/local/share/cgeaa/ndf..."
+    sudo rm -rf /usr/local/share/cgeaa/ndf
+    sudo cp -r "$ndf_source" /usr/local/share/cgeaa/
+    log_success "NDF built and installed globally."
+}
+
 # --- Installation Function ---
 perform_global_install() {
     log_step "Performing Global Installation"
@@ -259,6 +272,9 @@ perform_global_install() {
 
     # 2b. Build and copy the Zuora Development Framework (soft dependency)
     install_zdf_globally
+
+    # 2c. Build NetSuite Development Framework (soft dependency)
+    install_ndf_globally
 
     # 3. Create a temporary modified cgeaa script
     log_info "Configuring cgeaa script for global use..."
@@ -494,3 +510,22 @@ if command_exists node && [ -f "/usr/local/share/cgeaa/zdf/dist/zdf.js" ]; then
         echo "  Then:      cgeaa zuora auth use <name>"
     fi
 fi
+
+setup_netsuite_optional() {
+    echo
+    echo -e "${YELLOW}--- NetSuite Setup (optional) ---${NC}"
+    read -p "Do you use NetSuite? Set up 'cgeaa netsuite' now? (y/n) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Skipping. Run 'cgeaa netsuite setup' any time to configure."
+        return
+    fi
+    local ndf_bin="${SCRIPT_DIR}/ndf/dist/ndf.js"
+    if [ -f "$ndf_bin" ]; then
+        node "$ndf_bin" setup
+    else
+        echo "NDF not built yet. Run 'cgeaa netsuite setup' after setup completes."
+    fi
+}
+
+setup_netsuite_optional

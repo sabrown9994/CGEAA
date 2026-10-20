@@ -25,6 +25,7 @@ source "${CGEAA_LIB_DIR}/manifest.sh"
 source "${CGEAA_LIB_DIR}/logs.sh"
 source "${CGEAA_LIB_DIR}/diff.sh"
 source "${CGEAA_LIB_DIR}/zuora.sh"
+source "${CGEAA_LIB_DIR}/netsuite.sh"
 
 # Version information
 CGEAA_VERSION="1.0.0"
@@ -197,6 +198,11 @@ parse_args() {
         return
     fi
 
+    if [ "$COMMAND" = "netsuite" ]; then
+        NETSUITE_ARGS=("$@")
+        return
+    fi
+
     # Capture sub-command for commands that require one
     if [ "$COMMAND" = "logs" ] && [ $# -gt 0 ] && [[ "$1" != -* ]]; then
         LOGS_SUBCOMMAND="$1"
@@ -323,7 +329,7 @@ detect_target_org() {
 # Validate command
 validate_command() {
     case "$COMMAND" in
-        validate|deploy|test|manifest|logs|diff|open|rollback|update|zuora)
+        validate|deploy|test|manifest|logs|diff|open|rollback|update|zuora|netsuite)
             ;;
         orgs)
             list_orgs
@@ -361,6 +367,11 @@ main() {
     # zuora commands go straight to zdf — no SF org detection or deployment-dir needed
     if [ "$COMMAND" = "zuora" ]; then
         execute_zuora
+        exit $?
+    fi
+
+    if [ "$COMMAND" = "netsuite" ]; then
+        execute_netsuite
         exit $?
     fi
 
