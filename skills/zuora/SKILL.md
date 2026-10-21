@@ -51,6 +51,15 @@ cgeaa zuora push billing-template <id>    # routes by the local `_zdfTemplateTyp
 `pull` auto-detects the type and records it in a local-only `_zdfTemplateType` marker;
 `push`/`create`/`delete` use that marker to hit the right Settings API endpoint.
 
+> **Config editing is SAME-TENANT only.** Pulling a workflow or billing-template from one tenant
+> and pushing it to another is **not** in ZDF's scope. **Promoting config between environments
+> (IntQA → StagingUAT → Production) is done with Zuora's native Deployment Manager, outside ZDF**
+> — Deployment Manager promotes at the component-type level (whole `workflows`, whole
+> `productCatalog`, etc.), which is the supported path; see `zdf/docs/promotion-deployment-manager.md`.
+> ZDF's cross-tenant `push`/upsert (use case 2 below) applies only to **test/financial data** into
+> **lower** environments, never to config promotion. (Object-level cross-tenant sync for
+> workflow/billing-template is only a roadmap idea — see `zdf/TODO.md` — not a current capability.)
+
 ## Use case 2 — Test-data promotion across tenants
 
 Copy data from a source tenant into a lower one. `push` is an **upsert**: it finds the record in the
