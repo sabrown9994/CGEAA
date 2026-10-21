@@ -87,7 +87,40 @@ traversal), so direct OLI pull is not regularly exercised live — covered by un
   `comment`/`reasonCode`/`effectiveDate` in `toMemoCreateBody` are additive; a rejected field
   would be a one-line trim).
 
-### Roadmap (no active work items at this time)
-None. The framework is feature-complete for its three use cases (config editing, test-data
-pull/push into lower envs, targeted automation). New capabilities should be assessed against
-those use cases and the "Scope & promotion" contract in `CLAUDE.md`.
+### Roadmap
+
+- **Cross-tenant sync/upsert for `workflow` and `billing-template` via the `_zdf` id-map.**
+  Extend the cross-tenant push (today scoped to account/product/invoice/credit-memo/debit-memo) to
+  the two config resources, so a *single* workflow or HTML template can be promoted object-by-object
+  between tenants (e.g. IntQA → StagingUAT) rather than only edited in place in one tenant.
+
+  **Why it was deliberately left out (design decision 2026-08-19 — see
+  `docs/promotion-deployment-manager.md` and CLAUDE.md "Scope & promotion"):** config *promotion*
+  was assigned to Zuora's native **Deployment Manager**, and ZDF's `_zdf` cross-tenant upsert was
+  limited to use-case-2 financial/test data. The `CROSS_TENANT` registry omits `workflow` and
+  `billing-template` for this reason. (The earlier `sync-diff` ZDF-as-pipeline engine was removed.)
+
+  **Why it's still worth doing — the gap Deployment Manager cannot fill:** the DM API is
+  **component-type / all-or-nothing** (`workflows: true` deploys *all* workflows; no object-level
+  selection), so it cannot promote one workflow or one template. ZDF already has full `workflow`
+  CRUD (export/import) and three-type `billing-template` support (`_zdfTemplateType` marker), so
+  object-level cross-tenant promotion is a surgical complement to DM's coarse promotion — not a
+  replacement. (The promotion doc's own open follow-up also notes it's unconfirmed whether DM
+  cleanly promotes billing/invoice *templates* at all.)
+
+  **Design considerations before building:**
+  - `workflow` and `billing-template` are NOT ZOQL-queryable billing objects (Workflows API /
+    Settings API), so `upsert.ts` `searchByKey` (ZOQL natural-key search) does **not** apply.
+    First-time cross-tenant matching (no `_zdf` entry yet) needs a **list-in-target + name match**
+    (`list billing-templates`; a workflow listing) — and **workflow names are not guaranteed
+    unique** (`resource-registry.ts`), so the id-map is reliable for a known mapping but first-time
+    workflow matching is ambiguous and may need an explicit target id / confirmation.
+  - Per-tenant internal ids aren't stable cross-environment (`docs/promotion-deployment-manager.md`);
+    reuse the existing accumulating `_zdf` map model.
+  - Local-only state is already stripped before send (workflow posts its `/export` body;
+    billing-template strips `_zdf`/`_zdfTemplateType`), so the marker discipline is in place.
+  - Decide create-into-empty vs update-only per resource (workflow create = new definition via
+    `POST /workflows/import`; billing-template create = `POST /settings/{type}-templates`).
+
+  Assess against the "Scope & promotion" contract in `CLAUDE.md` before implementing — this is
+  additive object-level promotion that sits alongside Deployment Manager, not a new CI/CD pipeline.
