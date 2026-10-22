@@ -27,6 +27,47 @@ CGEAA (CarGurus Enterprise Applications Automation) is a powerful command-line t
 - **Dry Run Mode**: Preview operations without executing them
 - **Multiple Test Levels**: Support for all Salesforce test execution levels
 
+## Using CGEAA with Claude (plugin + CLI)
+
+CGEAA has **two parts**, and both must be installed for the Claude experience to work:
+
+1. **The Claude Code plugin** — the *skills* that teach Claude when and how to drive CGEAA
+   (`salesforce`, `zuora`, `netsuite`, plus Oracle's bundled SuiteCloud `netsuite-*` skills).
+   Installed from the marketplace, inside Claude.
+2. **The `cgeaa` CLI** — the actual binary plus the `zdf` (Zuora) and `ndf` (NetSuite) frameworks.
+   Installed per-machine by `./cgeaa-setup` (see Installation below).
+
+The skills only *tell Claude how to use the CLI* — they do nothing until the CLI is also installed.
+So each teammate installs **both**.
+
+### Install the plugin (skills)
+
+Inside Claude Code:
+
+```
+/plugin marketplace add sabrown9994/CGEAA
+/plugin install cgeaa@CGEAA
+```
+
+(You need read access to the CGEAA repo.) Once installed, the skills are available in **any** repo
+you work in — including the FinSys/FinTech NetSuite + Zuora repo — and Claude will reach for the
+right one automatically based on the work (NetSuite/SuiteScript/SDF → `netsuite`; Zuora/billing →
+`zuora`; Salesforce → `salesforce`).
+
+### Keep it updated — two separate channels
+
+- **Skills (plugin):** update from the marketplace via `/plugin` when a new version is published.
+- **CLI (binary + frameworks):** run `cgeaa update` (git pull + rebuild). This does **not** update
+  the plugin, and updating the plugin does not update the CLI — run both.
+
+### External prerequisites per machine
+
+- **Node.js ≥ 18** (`cgeaa-setup` offers to install it).
+- **`sf` / `sfdx` CLI** — for Salesforce work.
+- **Oracle `suitecloud` CLI** on `$PATH` — required for NetSuite (NDF) work.
+
+After the plugin is installed, continue with the CLI setup below.
+
 ## Quick Start
 
 ### 1. Clone the Coverage Mappings Repository
