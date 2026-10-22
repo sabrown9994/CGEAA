@@ -14,8 +14,9 @@ description: >-
   one for the CLI workflow. Trigger on: NetSuite, SuiteScript, SuiteCloud, SDF, `cgeaa
   netsuite`, NDF, suitecloud, custom object/record/script, usereventscript/suitelet/
   mapreduce/restlet, workflow (SuiteFlow), vendor bill approval, journal entry, Zip/Brex
-  bill-pay, deploy/import NetSuite objects, or moving NetSuite customizations between
-  IntQA / StagingUAT / Production.
+  bill-pay, deploy/import NetSuite objects, moving NetSuite customizations between
+  IntQA / StagingUAT / Production, or any work in the FinSys / FinTech repo's `NetSuite/`
+  SDF project folder (`src/FileCabinet/SuiteScripts`, `src/Objects`).
 ---
 
 # Using NDF (`cgeaa netsuite`)

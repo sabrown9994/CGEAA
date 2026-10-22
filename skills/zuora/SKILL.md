@@ -11,8 +11,9 @@ description: >-
   catalog objects from a ticket. Trigger on: Zuora, ZDF, `cgeaa zuora`, Zuora Billing / Revenue /
   RevPro, billing, invoice or credit-memo HTML templates, credit/debit memo, subscription, rate
   plan, product catalog, bill run, payment gateway / AutoPay, Zuora workflow, or moving/creating
-  any of these between Zuora tenants (IntQA / StagingUAT / Production). (For NetSuite-side work —
-  SuiteScript, SDF, custom objects — use the `netsuite` skill instead.)
+  any of these between Zuora tenants (IntQA / StagingUAT / Production), or any work in the
+  FinSys / FinTech repo's `Zuora/` folder. (For NetSuite-side work — SuiteScript, SDF, custom
+  objects — use the `netsuite` skill instead.)
 ---
 
 # Using ZDF (`cgeaa zuora`)
