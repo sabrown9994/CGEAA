@@ -49,8 +49,36 @@ after the feature branch merges.
 ## Roadmap
 
 - **GitHub Actions workflow**: Wire an actual CI pipeline that runs `cgeaa netsuite deploy` on
-  merges to FinSys environment branches. Currently only a README snippet exists (lines 133-138); no
-  committed `.github/workflows/*.yml` file.
+  merges to FinSys environment branches. Currently only a README snippet exists; no committed
+  `.github/workflows/*.yml` file. **Blocked on the configurable-base item below** — do not wire CI
+  until `--base` exists, or the pipeline will over-deploy. (Deferred by decision 2026-10-22: build
+  the CI pipeline only after the feature is proven safe in day-to-day use by the team.)
+
+- **Configurable diff base (`--base <ref>`) — prerequisite for CI.** Today `getMergeBase`
+  (`helpers/git.ts`) hardcodes `git merge-base main HEAD` and diffs from whatever branch is checked
+  out. This correctly isolates a feature's scripts/objects **only when run from that feature's own
+  branch** (forked from `main`). It is **wrong for a CI job that fires on a push/merge to a
+  long-lived env branch** (e.g. `qa`): with `HEAD = qa`, the scope becomes `merge-base(main, qa)..qa`
+  = *everything accumulated in `qa` since it diverged from `main`* (all merged features), not the
+  one feature that just landed. Over-deploys.
+  - **Fix:** add `--base <ref>` to `build`/`deploy` (default `main`, so local behavior is unchanged),
+    threaded into `getMergeBase(projectDir, base)`.
+  - **Why one flag covers both:** merge-base of an ancestor and a descendant is the ancestor, so in
+    CI passing `--base ${{ github.event.before }}` (the env branch's tip BEFORE the merge) makes the
+    diff exactly `before..after` = only the just-merged feature's files; locally `--base main` keeps
+    the fork-point behavior.
+  - **Edge cases for the eventual Action to handle:** brand-new branch (`github.event.before` is
+    all-zeros), squash/force-push, and first-deploy — fall back to the PR base SHA from the event
+    payload. Stays mono-repo-safe (the existing `--relative` filter already scopes the diff to
+    `NetSuite/src`).
+  - Implement via the NDF dev flow (implementer → standard → adversarial → intQA), then the Action
+    can pass `--base`.
+
+- **Guard against building from a shared branch.** Complementary safety: NDF could warn (or require
+  a confirm) when `build`/`deploy` runs with `HEAD` on a known shared/integration branch
+  (`main`/`qa`/`uat`) rather than a feature branch, since that's the scenario where the diff scope is
+  likely unintended. Document the standing rule in the meantime: **run `build`/`deploy` from your
+  feature branch, not from a shared env branch.**
 
 ---
 
