@@ -129,13 +129,16 @@ The imported object XML files are left in the working tree (under `src/Objects/`
 **Gating:**
 Named-only import: if SDF names a missing object ID during resolution, only that object is imported (not a broader set). This minimizes scope creep.
 
-**GitHub Actions example:**
+**GitHub Actions example (illustrative — not yet wired):**
 ```yaml
 - name: Deploy feature to UAT (auto-resolve deps)
   run: ./cgeaa netsuite deploy --target CG-UAT --source CG-intQA --auto-import
 ```
 
-This example deploys to CG-UAT, auto-resolves any missing dependencies by importing from CG-intQA, and commits the generated XML to the feature branch before pushing.
+> **NDF is not currently invoked by any CI/CD pipeline.** This snippet shows how an Action *would*
+> call NDF; no committed workflow runs it today. See [TODO.md](TODO.md) "CI/CD Roadmap" (and its
+> `--base` prerequisite) for the plan to wire this up and retire the existing scripts-only
+> `file:upload` workflow.
 
 By default the SuiteCloud `beforeExecuting` Jest hook configured in the project's
 `suitecloud.config.js` runs as part of the deploy. To skip it, see below.
@@ -211,6 +214,18 @@ cgeaa netsuite deploy
 
 Production deploys are intended to happen from `main` after a reviewed merge — not from a feature
 branch.
+
+**There is no CI/CD path to production, and no opt-in flag.** NDF is not invoked by any GitHub
+Action, so **merging to `main` does not deploy anything through NDF**. Production is reached only by
+running the deploy manually from the `main` branch:
+
+```bash
+cgeaa netsuite deploy --target CG-Production   # must be on the `main` branch
+```
+
+The `main`-branch check is currently the *only* gate — once you are on `main` this succeeds with no
+further confirmation. A required `--allow-production` opt-in flag, and an NDF-owned CI/CD pipeline,
+are both planned — see [TODO.md](TODO.md) ("User Roll-out" and "CI/CD Roadmap").
 
 ## How it fits into CGEAA
 

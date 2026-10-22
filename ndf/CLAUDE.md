@@ -71,6 +71,20 @@ An earlier version wrongly used the current-auth guard for `switch`, which block
 from prod and allowed switching *to* prod from a feature branch (caught during live intQA testing).
 Keep these two semantics distinct.
 
+**The branch guard is the ONLY production gate — there is no opt-in flag.** Once the SDF project is
+on `main`, `deploy --target <prod>` succeeds with no further confirmation. Deploying to production
+is therefore a deliberate, *manual* act (`cgeaa netsuite deploy --target CG-Production` from `main`).
+A required `--allow-production` opt-in flag is a planned safety item — see TODO.md "User Roll-out".
+
+## NDF is not wired into CI/CD (current reality)
+
+No GitHub Action invokes NDF. Nothing in NDF runs on a push or merge, so **merging to `main` does not
+trigger an NDF deploy** — production is reached only by the manual command above, from `main`.
+(A separate, pre-existing FinSys workflow, `.github/workflows/netsuite-deploy-scripts.yml`, *does*
+auto-deploy on push to `qa`/`staging`/`main`, but it is not NDF — it `file:upload`s changed
+`SuiteScripts/**` only, no Objects/manifest/SDF deploy. Retiring it in favor of an NDF-owned pipeline
+is on the CI/CD Roadmap in TODO.md.)
+
 ## Dependency resolution (deploy with --source and --auto-import)
 
 **Account model (`defaultAuthId` swap):**
