@@ -92,13 +92,15 @@ The core command. Generates feature-scoped deployment files:
 > **Commit the generated `deploy.xml` / `manifest.xml`** to your feature branch. The branch becomes
 > a complete, auditable deployment unit and the PR diff shows exactly what will deploy.
 
-### `cgeaa netsuite deploy --target <authId> [--source <authId>] [--auto-import] [--dry-run] [--skip-tests] [--max-import-rounds <n>]`
+### `cgeaa netsuite deploy --target <authId> [--source <authId>] [--base <ref>] [--allow-production] [--auto-import] [--dry-run] [--skip-tests] [--max-import-rounds <n>]`
 
 Resolves missing object dependencies during deploy and optionally auto-imports them from a source environment.
 
 **Surface:**
 - `--target <authId>` (required): the environment to deploy to. Must be a configured auth ID.
 - `--source <authId>`: the environment to import missing objects from. Required if deploy fails with unresolved dependencies and you want to resolve them. If provided, enables the auto-import resolve loop.
+- `--base <ref>` (default `main`): the git ref to diff against when computing the feature-scoped build (threaded into `getMergeBase`). Leave it at `main` on a feature branch. Set it to deploy a **just-merged feature from `main`**: `--base <pre-merge-SHA>` makes the diff `before..main` = exactly that feature (the same value CI will pass as `${{ github.event.before }}`). `base` is validated against shell- and git-option injection.
+- `--allow-production`: **required** opt-in to deploy to the production auth ID. On its own it is not enough — you must also be on `main`. Mirrors ZDF's `--allow-prod-financial`.
 - `--auto-import`: confirms and auto-imports missing objects without interactive prompt (for CI/GitHub Actions). Without this flag in non-interactive contexts, deploy fails with the list of missing objects.
 - `--dry-run`: runs `project:validate` (no deploy, no import).
 - `--skip-tests`: skip the SuiteCloud Jest hook (requires project's `suitecloud.config.js` to gate the hook on `NDF_SKIP_TESTS` env var).
@@ -111,7 +113,7 @@ NDF manages the `project.json` `defaultAuthId` to orchestrate `suitecloud` comma
 3. Restores the original `defaultAuthId` on success or failure (via `finally` block).
 
 **Production guard:**
-The production guard applies to `--target`. Deploy is blocked if `--target` is the production auth ID and you are not on `main`. Error message: `Cannot deploy to production outside of main. Current branch: <branch>. Merge your changes to main first.`
+The production guard applies to `--target`, and runs before any `defaultAuthId` swap or network call. Deploying to the production auth ID requires **both**: (1) you are on `main` — otherwise `ProductionGuardError` (`Cannot deploy/switch to production outside of main...`); and (2) you passed `--allow-production` — otherwise `Refusing to deploy to production "<target>" without --allow-production. Re-run with --allow-production to confirm this intentional production deploy.`
 
 **Dependency resolution loop:**
 1. `build` runs `suitecloud project:adddependencies` to populate the manifest; this **replaces** the entire `<objects>` section with the dependency set SDF computes (not additive).
@@ -202,35 +204,34 @@ git add src/deploy.xml src/manifest.xml && git commit -m "build: feature deploy 
 # 5. Deploy to the lower environment
 cgeaa netsuite deploy
 
-# 6. Promote to production by merging to main (NOT by switching + deploying from the branch)
+# 6. Promote to production by merging to main, then deploy from main (see "Production safety")
 ```
 
 ## Production safety
 
 - You **cannot** `switch` to the production auth ID unless you are on `main`.
-- You **cannot** `deploy` with `--target` set to the production auth ID unless you are on `main`.
-- The guard error is: `Cannot deploy/switch to production outside of main. Current branch: <branch>.
-  Merge your changes to main first.`
+- You **cannot** `deploy` with `--target` set to the production auth ID unless you are on `main` **and** you pass `--allow-production`. The guard runs before any auth swap or network call. Errors: off `main` → `Cannot deploy/switch to production outside of main...`; on `main` without the flag → `Refusing to deploy to production "<target>" without --allow-production...`.
 
-Production deploys are intended to happen from `main` after a reviewed merge — not from a feature
-branch.
+Production deploys happen from `main` after a reviewed merge — never from a feature branch.
 
-> **There is currently no working path to deploy to production through NDF.** NDF is not invoked by
-> any GitHub Action (merging to `main` deploys nothing), *and* the manual command below is a no-op
-> today:
->
-> ```bash
-> cgeaa netsuite deploy --target CG-Production   # from `main` — currently a NO-OP
-> ```
->
-> `build` computes its changeset as `git diff $(git merge-base main HEAD)..HEAD`, which is non-empty
-> only when `HEAD` is *ahead* of `main` (i.e. on a feature branch — and a feature branch is blocked
-> by the production guard for a prod target). Standing on `main` after a merge, `HEAD` *is* `main`,
-> so the diff is empty and `build` exits `0` ("nothing changed vs main") before any `suitecloud`
-> deploy. Making production reachable requires the **`--base <ref>`** work — deploy a just-merged
-> feature from `main` with `--base <pre-merge-SHA>` so the diff is `before..main`. A required
-> `--allow-production` opt-in flag is the paired safety item. Both are tracked in
-> [TODO.md](TODO.md) under "User Roll-out", ahead of the "CI/CD Roadmap".
+**Deploying a merged feature to production** (manual, deliberate):
+
+```bash
+# on main, after the feature PR has merged:
+git checkout main && git pull
+cgeaa netsuite deploy --target CG-Production --base <pre-merge-SHA> --allow-production
+```
+
+Why `--base`: `build` computes its changeset as `git diff $(git merge-base <base> HEAD)..HEAD`, with
+`base` defaulting to `main`. Standing on `main`, the default base makes `HEAD == main`, so the diff
+is empty and deploy is a deliberate no-op. Passing `--base <pre-merge-SHA>` (the commit `main`
+pointed at *before* the merge) makes the diff `before..main` = exactly the merged feature. This is
+the same value CI will pass as `${{ github.event.before }}`.
+
+> **NDF is not wired into CI/CD**, so merging to `main` does not auto-deploy — the command above is
+> the only production path, and it is intentionally manual. A production deploy also needs a valid
+> `CG-Production` auth token; if `suitecloud` falls back to browser re-authentication, refresh it
+> first with `suitecloud account:setup`. See [TODO.md](TODO.md) "User Roll-out" / "CI/CD Roadmap".
 
 ## How it fits into CGEAA
 

@@ -51,7 +51,7 @@ is missing. Every command catches errors → `output.error(msg)` + `process.exit
 | `src/commands/envs.ts` | `envs` — lists auth IDs, marks active (`*`) + production (`[PROD]`) |
 | `src/commands/switch-env.ts` | `switch <authId>` — writes `project.json` `defaultAuthId` |
 | `src/commands/build.ts` | `build [--dry-run]` — thin wrapper over `runBuild` |
-| `src/commands/deploy.ts` | `deploy --target <authId> [--source <authId>] [--auto-import] [--dry-run] [--skip-tests] [--max-import-rounds <n>]` — dependency resolution orchestration. Swap `defaultAuthId` to `--source` for `object:import` and `--target` for `adddependencies`/`validate`/`deploy`, restore in `finally`. Resolve loop: build (adddependencies REPLACES manifest), deploy, on missing-object error parse SDF output, import named-only objects from `--source` (gated: confirm locally, `--auto-import` in CI), rebuild, retry — capped at `MAX_ROUNDS` (default 10). Production guard on `--target`. Sets `NDF_SKIP_TESTS=true` via `--skip-tests` or `netsuite_run_tests=false`. |
+| `src/commands/deploy.ts` | `deploy --target <authId> [--source <authId>] [--base <ref>] [--allow-production] [--auto-import] [--dry-run] [--skip-tests] [--max-import-rounds <n>]` — dependency resolution orchestration. `--base` (default `main`) is threaded into `runBuild`→`getMergeBase`. Swap `defaultAuthId` to `--source` for `object:import` and `--target` for `adddependencies`/`validate`/`deploy`, restore in `finally`. Resolve loop: build (adddependencies REPLACES manifest), deploy, on missing-object error parse SDF output, import named-only objects from `--source` (gated: confirm locally, `--auto-import` in CI), rebuild, retry — capped at `MAX_ROUNDS` (default 10). Production guard on `--target`: prod requires `main` AND `--allow-production`. Sets `NDF_SKIP_TESTS=true` via `--skip-tests` or `netsuite_run_tests=false`. |
 | `src/commands/pull.ts` | `pull object <scriptId>` / `pull file <path>` |
 | `src/helpers/build-runner.ts` | `runBuild(opts)` — shared build logic used by `build` and `deploy` |
 | `src/helpers/git.ts` | `getMergeBase`, `getChangedFiles`, `getCurrentBranch` |
@@ -65,27 +65,29 @@ is missing. Every command catches errors → `output.error(msg)` + `process.exit
 
 - **`switch`** guards the **target** `authId` (the command argument): block if `authId ===
   productionAuthId` and branch ≠ `main`. This is inline in `switch-env.ts` — NOT `checkProductionGuard`.
-- **`deploy`** guards the **target** `authId` (the command argument) inline (`commands/deploy.ts:39`): block if `opts.target === productionAuthId` and branch ≠ `main`. Does not import or use `checkProductionGuard`/active env — the guard runs before any defaultAuthId swap.
+- **`deploy`** guards the **target** `authId` (the command argument) inline (`commands/deploy.ts`): if `opts.target === productionAuthId`, block when branch ≠ `main` (`ProductionGuardError`), then block when `--allow-production` was not passed. Does not import or use `checkProductionGuard`/active env — the guard runs before any defaultAuthId swap or network call.
 
 An earlier version wrongly used the current-auth guard for `switch`, which blocked switching *away*
 from prod and allowed switching *to* prod from a feature branch (caught during live intQA testing).
 Keep these two semantics distinct.
 
-**There is currently NO working path to deploy to production — the branch guard is not the limiter;
-the diff base is.** `build` diffs `merge-base(main, HEAD)..HEAD` (`git.ts:12,19`). That is non-empty
-only when `HEAD` is *ahead* of `main`, i.e. on a feature branch — and a feature branch is blocked by
-the production guard for a prod `--target`. From `main` the guard passes, but `HEAD` *is* `main`, so
-the diff is empty and `build` hits `process.exit(0)` ("nothing changed vs main", `build-runner.ts:22-25`)
-before any `suitecloud` deploy — a silent no-op (true for ff, merge-commit, and squash merges). So
-`cgeaa netsuite deploy --target CG-Production` from `main` deploys **nothing** today. Making prod
-deploy functional requires the `--base <ref>` work (pass `--base <pre-merge-SHA>` from `main`); a
-required `--allow-production` opt-in flag is the paired safety item. Both are TODO.md "User Roll-out".
+**Deploying to production requires `main` AND `--allow-production` AND a non-empty diff.** The diff
+base matters: `build` diffs `merge-base(base, HEAD)..HEAD` with `base` defaulting to `main`
+(`git.ts`, now parameterised by `--base`). From `main` with the default base, `HEAD` *is* `main` so
+the diff is empty and `build` exits `0` ("nothing changed vs main") before any `suitecloud` deploy —
+still a deliberate no-op. To actually deploy a just-merged feature from `main`, pass the pre-merge
+SHA:
+```
+cgeaa netsuite deploy --target CG-Production --base <pre-merge-SHA> --allow-production
+```
+so the diff is `before..main` = exactly that feature. (This shipped in the User Roll-out batch; a
+prod deploy also needs valid `CG-Production` auth — the local token was found expired on 2026-10-23,
+see TODO.md.)
 
 ## NDF is not wired into CI/CD (current reality)
 
 No GitHub Action invokes NDF. Nothing in NDF runs on a push or merge, so **merging to `main` does not
-trigger an NDF deploy** — and, per the note above, a manual deploy from `main` is a no-op until
-`--base` lands. There is no functioning production-deploy path at present.
+trigger an NDF deploy** — production is reached only by the deliberate manual command above.
 (A separate, pre-existing FinSys workflow, `.github/workflows/netsuite-deploy-scripts.yml`, *does*
 auto-deploy on push to `qa`/`staging`/`main`, but it is not NDF — it `file:upload`s changed
 `SuiteScripts/**` only, no Objects/manifest/SDF deploy. Retiring it in favor of an NDF-owned pipeline

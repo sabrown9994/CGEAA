@@ -22,57 +22,41 @@ only and revert.
 
 ## User Roll-out
 
-Work that must land (or be consciously accepted) before the team uses NDF day-to-day for manual,
-feature-branch deploys. These are **not** CI items — they are about NDF being safe and complete
-enough for a human to drive. Do these before the CI/CD Roadmap below.
+Most of this section **shipped** on `feature/netsuite-integration` (NDF dev flow: per-task
+implementer → standard + adversarial review → final whole-branch review; 82 tests pass). Production
+is now reachable through a deliberate, manual path. The one remaining item is a supervised first
+production deploy, which is blocked on valid production auth (see below).
 
-- **Configurable diff base (`--base <ref>`) — prerequisite for *any* production deploy, and for CI.**
-  `getMergeBase` (`helpers/git.ts:12`) hardcodes `git merge-base main HEAD`, and `build` diffs
-  `merge-base..HEAD`. That only yields a non-empty changeset when `HEAD` is *ahead* of `main` — i.e.
-  on a feature branch. Two consequences make production **currently unreachable** through NDF:
-  - From a **feature branch**, `deploy --target <prod>` is blocked by the production guard.
-  - From **`main`** (after the merge), `HEAD` *is* `main`, so `merge-base(main, HEAD)..HEAD` is empty;
-    `build` prints "nothing changed vs main" and `process.exit(0)` (`build-runner.ts:22-25`) before
-    any `suitecloud` deploy — a silent no-op. (True for fast-forward, merge-commit, and squash merges
-    alike: the merge-base of `main` with itself is always itself.)
+**Shipped:**
 
-  So there is no working path to deploy a merged feature to production today. **Fix:** add
-  `--base <ref>` to `build`/`deploy` (default `main`, so feature-branch behavior is unchanged),
-  threaded into `getMergeBase(projectDir, base)`. To deploy a just-merged feature from `main`, pass
-  `--base <pre-merge-SHA>` so the diff is `before..main` = exactly that feature. This is the same
-  mechanism CI needs (`${{ github.event.before }}`), so it unblocks both manual prod deploys and the
-  CI pipeline. It is also **wrong for a CI job firing on a long-lived env branch** without it: with
-  `HEAD = qa`, scope becomes `merge-base(main, qa)..qa` = every feature accumulated in `qa`.
-  - **Edge cases:** brand-new branch (`github.event.before` all-zeros), squash/force-push, and
-    first-deploy — fall back to the PR base SHA. Mono-repo-safe (the `--relative` filter already
-    scopes the diff to `NetSuite/src`). The existing `netsuite-deploy-scripts.yml` already uses
-    `github.event.before` with a `HEAD~1` fallback — a working reference.
-  - Implement via the NDF dev flow (implementer → standard → adversarial → intQA).
+- **`--base <ref>` on `build`/`deploy`** (default `main`). This makes production reachable:
+  `getMergeBase(projectDir, base)` lets you deploy a just-merged feature from `main` with
+  `cgeaa netsuite deploy --target CG-Production --base <pre-merge-SHA> --allow-production` — the diff
+  becomes `before..main` = exactly that feature. (Default `main` keeps feature-branch behavior
+  identical; from `main` with no `--base`, the diff is still empty and deploy is a no-op, by design.)
+  `base` is validated against shell- **and** git-option injection (leading-dash rejected — caught by
+  adversarial review). Same mechanism CI will use (`${{ github.event.before }}`).
 
-- **Explicit opt-in flag to deploy to production.** Even once `--base` makes prod deploys functional,
-  the branch guard (`commands/deploy.ts:39`) is the *only* gate: from `main`, a prod deploy would
-  proceed with no deliberate acknowledgement. Add a required opt-in flag (e.g. `--allow-production` /
-  `--confirm-prod`, mirroring ZDF's `--allow-prod-financial`) that must be passed to deploy to the
-  production auth ID, on top of the `main`-branch guard. Pair this with the `--base` work so the
-  first functional prod deploy already requires the deliberate flag. Implement via the NDF dev flow.
+- **`--allow-production` opt-in flag on `deploy`.** Deploying to the production auth ID now requires
+  BOTH the `main`-branch guard AND `--allow-production`, enforced before any `defaultAuthId` swap or
+  network call. Mirrors ZDF's `--allow-prod-financial`.
 
-- **First live production deploy not yet verified.** The production path is guarded (inline checks in
-  `switch` and `deploy` that block non-`main` branches) and unit-tested, but has never run against
-  the real production environment — and, per the `--base` item above, cannot succeed at all until
-  that lands. The first production deploy should be a supervised run from `main` once it is functional.
+- **manifest `projectname`/`frameworkversion`** are now read from the existing manifest (fallback
+  `NetSuite` / `1.0`, including empty/malformed tags). **`sdfPath()`** throws on a non-`src/` path
+  instead of emitting it verbatim. (`helpers/xml.ts`.)
 
-- **manifest `projectname`/`frameworkversion` are hardcoded** to `NetSuite` / `1.0`
-  (`helpers/xml.ts`). If a project uses different values, `build` will overwrite them. Should read
-  them from the existing manifest. Low priority — matches the current `FinTech/NetSuite` project.
+- **`writeCgeaaConfigKey`** preserves blank lines and comments in `~/.cgeaa/config`; removed the
+  unused `beforeEach` test import. (`helpers/config.ts`, `__tests__/helpers/config.test.ts`.)
 
-- **`sdfPath()` passthrough** (`helpers/xml.ts`). A path not starting with `src/` is emitted
-  verbatim (no `~/` prefix). Not reachable today because `getChangedFiles` only ever yields `src/…`
-  paths, but a defensive throw would harden it.
+**Remaining:**
 
-- **`writeCgeaaConfigKey` strips blank lines** from `~/.cgeaa/config` on every write
-  (`helpers/config.ts`). Comments survive; only blank separators are lost. Cosmetic.
-
-- **`config.test.ts` imports `beforeEach` but never uses it.** Lint nit.
+- **First live production deploy not yet verified — blocked on valid production auth.** A read-only
+  connectivity check (`suitecloud object:list --type role` against `CG-Production`) on 2026-10-23
+  found the local `CG-Production` auth token is **expired**: suitecloud fell back to browser-based
+  re-authentication, which timed out. No writes occurred. Before any production deploy: (1) refresh
+  the token with `suitecloud account:setup` for `CG-Production` (interactive, browser), then (2) do a
+  **supervised** first deploy from `main` with `--base <pre-merge-SHA> --allow-production`. Until the
+  token is refreshed, production is unreachable for an operational reason (auth), not a code one.
 
 ---
 
@@ -91,10 +75,10 @@ production opt-in. On `main` it uploads straight to the production account.)
   manifest/dependency resolution, and the production opt-in — not the scripts-only `file:upload`
   path. As part of this, **remove `.github/workflows/netsuite-deploy-scripts.yml`** (the hand-rolled
   file-upload deploy) so there is a single, NDF-owned deploy path and the two cannot double-deploy
-  the same script files. **Blocked on the `--base` item (now in User Roll-out above)** — do not wire
-  CI until `--base` exists, or the pipeline will over-deploy. (Deferred by decision 2026-10-22: build
-  the CI pipeline only after NDF is proven safe in day-to-day manual use by the team — see User
-  Roll-out.)
+  the same script files. The `--base` prerequisite is now **shipped** (see User Roll-out), so CI is
+  unblocked technically — the Action passes `--base ${{ github.event.before }}` and
+  `--auto-import`/`--allow-production` as appropriate. (Still deferred by decision 2026-10-22: build
+  the CI pipeline only after NDF is proven safe in day-to-day manual use by the team.)
 
 - **Guard against building from a shared branch.** Complementary safety: NDF could warn (or require
   a confirm) when `build`/`deploy` runs with `HEAD` on a known shared/integration branch
