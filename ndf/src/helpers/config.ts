@@ -25,7 +25,7 @@ export function writeCgeaaConfigKey(key: string, value: string): void {
   if (existsSync(CONFIG_PATH)) {
     content = readFileSync(CONFIG_PATH, 'utf-8');
   }
-  const lines = content.split('\n').filter(Boolean);
+  const lines = content.length ? content.replace(/\n$/, '').split('\n') : [];
   const idx = lines.findIndex((l) => l.startsWith(`${key}=`));
   if (idx >= 0) {
     lines[idx] = `${key}=${value}`;

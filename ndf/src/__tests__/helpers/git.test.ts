@@ -6,13 +6,32 @@ vi.mock('child_process', () => ({ execSync: mockExecSync }));
 import { getMergeBase, getChangedFiles, getCurrentBranch } from '../../helpers/git.js';
 
 describe('getMergeBase', () => {
-  it('returns trimmed SHA from git merge-base', () => {
+  it('returns trimmed SHA from git merge-base with default base', () => {
     mockExecSync.mockReturnValue(Buffer.from('abc123\n'));
     const result = getMergeBase('/proj');
     expect(mockExecSync).toHaveBeenCalledWith('git merge-base main HEAD', {
       cwd: '/proj',
     });
     expect(result).toBe('abc123');
+  });
+
+  it('accepts custom base ref', () => {
+    mockExecSync.mockReturnValue(Buffer.from('def456\n'));
+    const result = getMergeBase('/proj', 'abc123');
+    expect(mockExecSync).toHaveBeenCalledWith('git merge-base abc123 HEAD', {
+      cwd: '/proj',
+    });
+    expect(result).toBe('def456');
+  });
+
+  it('throws on invalid base ref (command injection protection)', () => {
+    expect(() => getMergeBase('/proj', 'x; rm -rf /')).toThrow('Invalid base ref: x; rm -rf /');
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it('throws on git option injection (leading dash)', () => {
+    expect(() => getMergeBase('/proj', '--help')).toThrow('Invalid base ref: --help');
+    expect(mockExecSync).not.toHaveBeenCalled();
   });
 });
 

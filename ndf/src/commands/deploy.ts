@@ -24,9 +24,11 @@ export function registerDeploy(program: Command): void {
     .option('--dry-run', 'validate against the target and preview; never deploys or imports')
     .option('--skip-tests', 'skip SuiteCloud Jest tests for this deploy')
     .option('--max-import-rounds <n>', 'max import+retry iterations', '10')
+    .option('--base <ref>', 'git ref to diff against (default: main)', 'main')
+    .option('--allow-production', 'required opt-in confirmation to deploy to the production auth ID')
     .action(async (opts: {
       target: string; source?: string; autoImport?: boolean; dryRun?: boolean;
-      skipTests?: boolean; maxImportRounds: string;
+      skipTests?: boolean; maxImportRounds: string; base?: string; allowProduction?: boolean;
     }) => {
       const projectDir = getProjectDir();
       let failed = false;
@@ -36,8 +38,17 @@ export function registerDeploy(program: Command): void {
         if (opts.source) validateAuthId(projectDir, opts.source);
 
         // Production guard on the TARGET (before any swap/network).
-        if (opts.target === getProductionAuthId() && getCurrentBranch(projectDir) !== 'main') {
-          throw new ProductionGuardError(getCurrentBranch(projectDir));
+        if (opts.target === getProductionAuthId()) {
+          const branch = getCurrentBranch(projectDir);
+          if (branch !== 'main') {
+            throw new ProductionGuardError(branch);
+          }
+          if (!opts.allowProduction) {
+            throw new Error(
+              `Refusing to deploy to production "${opts.target}" without --allow-production. ` +
+              `Re-run with --allow-production to confirm this intentional production deploy.`,
+            );
+          }
         }
 
         const maxRounds = Math.max(1, parseInt(opts.maxImportRounds, 10) || 10);
@@ -52,7 +63,7 @@ export function registerDeploy(program: Command): void {
         let source = opts.source;
 
         for (let round = 1; ; round++) {
-          await runBuild({ projectDir, dryRun: false, extraObjectPaths: importedObjectPaths });
+          await runBuild({ projectDir, dryRun: false, base: opts.base, extraObjectPaths: importedObjectPaths });
 
           setDefaultAuthId(projectDir, opts.target);
           const cmd = opts.dryRun ? ['project:validate'] : ['project:deploy'];

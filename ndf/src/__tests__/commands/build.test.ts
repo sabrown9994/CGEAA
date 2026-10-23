@@ -23,12 +23,17 @@ beforeEach(() => {
 describe('cgeaa netsuite build', () => {
   it('calls runBuild with dryRun:false by default', async () => {
     await makeProgram().parseAsync(['node', 'ndf', 'build']);
-    expect(mockRunBuild).toHaveBeenCalledWith({ projectDir: PROJECT_DIR, dryRun: false });
+    expect(mockRunBuild).toHaveBeenCalledWith({ projectDir: PROJECT_DIR, dryRun: false, base: 'main' });
   });
 
   it('calls runBuild with dryRun:true when --dry-run is passed', async () => {
     await makeProgram().parseAsync(['node', 'ndf', 'build', '--dry-run']);
-    expect(mockRunBuild).toHaveBeenCalledWith({ projectDir: PROJECT_DIR, dryRun: true });
+    expect(mockRunBuild).toHaveBeenCalledWith({ projectDir: PROJECT_DIR, dryRun: true, base: 'main' });
+  });
+
+  it('passes --base option to runBuild', async () => {
+    await makeProgram().parseAsync(['node', 'ndf', 'build', '--base', 'someSha']);
+    expect(mockRunBuild).toHaveBeenCalledWith({ projectDir: PROJECT_DIR, dryRun: false, base: 'someSha' });
   });
 
   it('exits 1 and prints error when runBuild throws', async () => {

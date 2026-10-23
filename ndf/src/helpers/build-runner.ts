@@ -9,18 +9,19 @@ export interface BuildOptions {
   projectDir: string;
   dryRun: boolean;
   extraObjectPaths?: string[];
+  base?: string;
 }
 
 export async function runBuild(opts: BuildOptions): Promise<void> {
   const { projectDir, dryRun } = opts;
-  const mergeBase = getMergeBase(projectDir);
+  const mergeBase = getMergeBase(projectDir, opts.base ?? 'main');
   const changed = getChangedFiles(projectDir, mergeBase);
 
   const extra = opts.extraObjectPaths ?? [];
   const objects = [...changed.objects, ...extra.filter((p) => !changed.objects.includes(p))];
 
   if (changed.scripts.length === 0 && objects.length === 0) {
-    output.warn('No scripts or objects changed vs main — nothing to build.');
+    output.warn(`No scripts or objects changed vs ${opts.base ?? 'main'} — nothing to build.`);
     process.exit(0);
   }
 

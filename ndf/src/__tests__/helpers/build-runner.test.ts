@@ -73,3 +73,15 @@ describe('runBuild extraObjectPaths', () => {
     exitSpy.mockRestore();
   });
 });
+
+describe('runBuild base option', () => {
+  it('forwards default base to getMergeBase', async () => {
+    await runBuild({ projectDir: '/proj', dryRun: false });
+    expect(mockGetMergeBase).toHaveBeenCalledWith('/proj', 'main');
+  });
+
+  it('forwards custom base to getMergeBase', async () => {
+    await runBuild({ projectDir: '/proj', dryRun: false, base: 'abc123' });
+    expect(mockGetMergeBase).toHaveBeenCalledWith('/proj', 'abc123');
+  });
+});
