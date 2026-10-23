@@ -26,20 +26,40 @@ Work that must land (or be consciously accepted) before the team uses NDF day-to
 feature-branch deploys. These are **not** CI items — they are about NDF being safe and complete
 enough for a human to drive. Do these before the CI/CD Roadmap below.
 
-- **Explicit opt-in flag to deploy to production.** Today the only thing between a user and a
-  production deploy is the branch guard: `deploy --target <prod>` is allowed as soon as the SDF
-  project is on `main` (`commands/deploy.ts:39`) — with no further confirmation. Because NDF is
-  **not** wired into CI/CD (see CI/CD Roadmap), a manual `cgeaa netsuite deploy --target
-  CG-Production` from `main` is currently the *only* way to reach production, and it succeeds with no
-  deliberate acknowledgement. Add a required opt-in flag (e.g. `--allow-production` / `--confirm-prod`,
-  mirroring ZDF's `--allow-prod-financial`) that must be passed to deploy to the production auth ID,
-  on top of the existing `main`-branch guard. Until it exists, prod deploys are documented as
-  "manual, from `main`, no extra flag" (README / CLAUDE / How-To-Use). Implement via the NDF dev flow.
+- **Configurable diff base (`--base <ref>`) — prerequisite for *any* production deploy, and for CI.**
+  `getMergeBase` (`helpers/git.ts:12`) hardcodes `git merge-base main HEAD`, and `build` diffs
+  `merge-base..HEAD`. That only yields a non-empty changeset when `HEAD` is *ahead* of `main` — i.e.
+  on a feature branch. Two consequences make production **currently unreachable** through NDF:
+  - From a **feature branch**, `deploy --target <prod>` is blocked by the production guard.
+  - From **`main`** (after the merge), `HEAD` *is* `main`, so `merge-base(main, HEAD)..HEAD` is empty;
+    `build` prints "nothing changed vs main" and `process.exit(0)` (`build-runner.ts:22-25`) before
+    any `suitecloud` deploy — a silent no-op. (True for fast-forward, merge-commit, and squash merges
+    alike: the merge-base of `main` with itself is always itself.)
+
+  So there is no working path to deploy a merged feature to production today. **Fix:** add
+  `--base <ref>` to `build`/`deploy` (default `main`, so feature-branch behavior is unchanged),
+  threaded into `getMergeBase(projectDir, base)`. To deploy a just-merged feature from `main`, pass
+  `--base <pre-merge-SHA>` so the diff is `before..main` = exactly that feature. This is the same
+  mechanism CI needs (`${{ github.event.before }}`), so it unblocks both manual prod deploys and the
+  CI pipeline. It is also **wrong for a CI job firing on a long-lived env branch** without it: with
+  `HEAD = qa`, scope becomes `merge-base(main, qa)..qa` = every feature accumulated in `qa`.
+  - **Edge cases:** brand-new branch (`github.event.before` all-zeros), squash/force-push, and
+    first-deploy — fall back to the PR base SHA. Mono-repo-safe (the `--relative` filter already
+    scopes the diff to `NetSuite/src`). The existing `netsuite-deploy-scripts.yml` already uses
+    `github.event.before` with a `HEAD~1` fallback — a working reference.
+  - Implement via the NDF dev flow (implementer → standard → adversarial → intQA).
+
+- **Explicit opt-in flag to deploy to production.** Even once `--base` makes prod deploys functional,
+  the branch guard (`commands/deploy.ts:39`) is the *only* gate: from `main`, a prod deploy would
+  proceed with no deliberate acknowledgement. Add a required opt-in flag (e.g. `--allow-production` /
+  `--confirm-prod`, mirroring ZDF's `--allow-prod-financial`) that must be passed to deploy to the
+  production auth ID, on top of the `main`-branch guard. Pair this with the `--base` work so the
+  first functional prod deploy already requires the deliberate flag. Implement via the NDF dev flow.
 
 - **First live production deploy not yet verified.** The production path is guarded (inline checks in
   `switch` and `deploy` that block non-`main` branches) and unit-tested, but has never run against
-  the real production environment. The first production deploy should be a supervised run from `main`
-  after the feature branch merges.
+  the real production environment — and, per the `--base` item above, cannot succeed at all until
+  that lands. The first production deploy should be a supervised run from `main` once it is functional.
 
 - **manifest `projectname`/`frameworkversion` are hardcoded** to `NetSuite` / `1.0`
   (`helpers/xml.ts`). If a project uses different values, `build` will overwrite them. Should read
@@ -71,30 +91,10 @@ production opt-in. On `main` it uploads straight to the production account.)
   manifest/dependency resolution, and the production opt-in — not the scripts-only `file:upload`
   path. As part of this, **remove `.github/workflows/netsuite-deploy-scripts.yml`** (the hand-rolled
   file-upload deploy) so there is a single, NDF-owned deploy path and the two cannot double-deploy
-  the same script files. **Blocked on the configurable-base item below** — do not wire CI until
-  `--base` exists, or the pipeline will over-deploy. (Deferred by decision 2026-10-22: build the CI
-  pipeline only after NDF is proven safe in day-to-day manual use by the team — see User Roll-out.)
-
-- **Configurable diff base (`--base <ref>`) — prerequisite for CI.** Today `getMergeBase`
-  (`helpers/git.ts`) hardcodes `git merge-base main HEAD` and diffs from whatever branch is checked
-  out. This correctly isolates a feature's scripts/objects **only when run from that feature's own
-  branch** (forked from `main`). It is **wrong for a CI job that fires on a push/merge to a
-  long-lived env branch** (e.g. `qa`): with `HEAD = qa`, the scope becomes `merge-base(main, qa)..qa`
-  = *everything accumulated in `qa` since it diverged from `main`* (all merged features), not the
-  one feature that just landed. Over-deploys.
-  - **Fix:** add `--base <ref>` to `build`/`deploy` (default `main`, so local behavior is unchanged),
-    threaded into `getMergeBase(projectDir, base)`.
-  - **Why one flag covers both:** merge-base of an ancestor and a descendant is the ancestor, so in
-    CI passing `--base ${{ github.event.before }}` (the env branch's tip BEFORE the merge) makes the
-    diff exactly `before..after` = only the just-merged feature's files; locally `--base main` keeps
-    the fork-point behavior. (The existing `netsuite-deploy-scripts.yml` already uses
-    `github.event.before` with a `HEAD~1` fallback — a working reference for this.)
-  - **Edge cases for the eventual Action to handle:** brand-new branch (`github.event.before` is
-    all-zeros), squash/force-push, and first-deploy — fall back to the PR base SHA from the event
-    payload. Stays mono-repo-safe (the existing `--relative` filter already scopes the diff to
-    `NetSuite/src`).
-  - Implement via the NDF dev flow (implementer → standard → adversarial → intQA), then the Action
-    can pass `--base`.
+  the same script files. **Blocked on the `--base` item (now in User Roll-out above)** — do not wire
+  CI until `--base` exists, or the pipeline will over-deploy. (Deferred by decision 2026-10-22: build
+  the CI pipeline only after NDF is proven safe in day-to-day manual use by the team — see User
+  Roll-out.)
 
 - **Guard against building from a shared branch.** Complementary safety: NDF could warn (or require
   a confirm) when `build`/`deploy` runs with `HEAD` on a known shared/integration branch

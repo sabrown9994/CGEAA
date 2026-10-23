@@ -215,17 +215,22 @@ cgeaa netsuite deploy
 Production deploys are intended to happen from `main` after a reviewed merge — not from a feature
 branch.
 
-**There is no CI/CD path to production, and no opt-in flag.** NDF is not invoked by any GitHub
-Action, so **merging to `main` does not deploy anything through NDF**. Production is reached only by
-running the deploy manually from the `main` branch:
-
-```bash
-cgeaa netsuite deploy --target CG-Production   # must be on the `main` branch
-```
-
-The `main`-branch check is currently the *only* gate — once you are on `main` this succeeds with no
-further confirmation. A required `--allow-production` opt-in flag, and an NDF-owned CI/CD pipeline,
-are both planned — see [TODO.md](TODO.md) ("User Roll-out" and "CI/CD Roadmap").
+> **There is currently no working path to deploy to production through NDF.** NDF is not invoked by
+> any GitHub Action (merging to `main` deploys nothing), *and* the manual command below is a no-op
+> today:
+>
+> ```bash
+> cgeaa netsuite deploy --target CG-Production   # from `main` — currently a NO-OP
+> ```
+>
+> `build` computes its changeset as `git diff $(git merge-base main HEAD)..HEAD`, which is non-empty
+> only when `HEAD` is *ahead* of `main` (i.e. on a feature branch — and a feature branch is blocked
+> by the production guard for a prod target). Standing on `main` after a merge, `HEAD` *is* `main`,
+> so the diff is empty and `build` exits `0` ("nothing changed vs main") before any `suitecloud`
+> deploy. Making production reachable requires the **`--base <ref>`** work — deploy a just-merged
+> feature from `main` with `--base <pre-merge-SHA>` so the diff is `before..main`. A required
+> `--allow-production` opt-in flag is the paired safety item. Both are tracked in
+> [TODO.md](TODO.md) under "User Roll-out", ahead of the "CI/CD Roadmap".
 
 ## How it fits into CGEAA
 

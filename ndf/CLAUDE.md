@@ -71,15 +71,21 @@ An earlier version wrongly used the current-auth guard for `switch`, which block
 from prod and allowed switching *to* prod from a feature branch (caught during live intQA testing).
 Keep these two semantics distinct.
 
-**The branch guard is the ONLY production gate — there is no opt-in flag.** Once the SDF project is
-on `main`, `deploy --target <prod>` succeeds with no further confirmation. Deploying to production
-is therefore a deliberate, *manual* act (`cgeaa netsuite deploy --target CG-Production` from `main`).
-A required `--allow-production` opt-in flag is a planned safety item — see TODO.md "User Roll-out".
+**There is currently NO working path to deploy to production — the branch guard is not the limiter;
+the diff base is.** `build` diffs `merge-base(main, HEAD)..HEAD` (`git.ts:12,19`). That is non-empty
+only when `HEAD` is *ahead* of `main`, i.e. on a feature branch — and a feature branch is blocked by
+the production guard for a prod `--target`. From `main` the guard passes, but `HEAD` *is* `main`, so
+the diff is empty and `build` hits `process.exit(0)` ("nothing changed vs main", `build-runner.ts:22-25`)
+before any `suitecloud` deploy — a silent no-op (true for ff, merge-commit, and squash merges). So
+`cgeaa netsuite deploy --target CG-Production` from `main` deploys **nothing** today. Making prod
+deploy functional requires the `--base <ref>` work (pass `--base <pre-merge-SHA>` from `main`); a
+required `--allow-production` opt-in flag is the paired safety item. Both are TODO.md "User Roll-out".
 
 ## NDF is not wired into CI/CD (current reality)
 
 No GitHub Action invokes NDF. Nothing in NDF runs on a push or merge, so **merging to `main` does not
-trigger an NDF deploy** — production is reached only by the manual command above, from `main`.
+trigger an NDF deploy** — and, per the note above, a manual deploy from `main` is a no-op until
+`--base` lands. There is no functioning production-deploy path at present.
 (A separate, pre-existing FinSys workflow, `.github/workflows/netsuite-deploy-scripts.yml`, *does*
 auto-deploy on push to `qa`/`staging`/`main`, but it is not NDF — it `file:upload`s changed
 `SuiteScripts/**` only, no Objects/manifest/SDF deploy. Retiring it in favor of an NDF-owned pipeline
