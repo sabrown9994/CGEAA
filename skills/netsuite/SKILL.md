@@ -47,7 +47,7 @@ project path.
 cgeaa netsuite envs                         # list environments; marks active (*) and production [PROD]
 cgeaa netsuite switch <authId>              # set the active environment (project.json defaultAuthId)
 cgeaa netsuite build [--dry-run]            # generate deploy.xml + manifest.xml from the git diff vs main
-cgeaa netsuite deploy --target <authId> [--source <authId>] [--auto-import] [--dry-run] [--skip-tests]
+cgeaa netsuite deploy --target <authId> [--source <authId>] [--base <ref>] [--allow-production] [--auto-import] [--dry-run] [--skip-tests]
 cgeaa netsuite pull object <scriptId>       # import a custom object from NetSuite into src/Objects/
 cgeaa netsuite pull file <path>             # import a File Cabinet file
 ```
@@ -63,12 +63,16 @@ cgeaa netsuite pull file <path>             # import a File Cabinet file
    objects NDF imports **only** the SDF-named ones from `--source` (gated — it confirms
    interactively, or needs `--auto-import` in CI) and retries, capped at 10 rounds. Imported object
    XML is left in your working tree to review/commit.
-4. Promote to production by **merging to `main`**, not by deploying from a feature branch.
+4. Promote to production by **merging to `main`**, then deploying from `main` (not from a feature
+   branch). From `main` the diff vs `main` is empty, so scope the merged feature explicitly and
+   opt in: `cgeaa netsuite deploy --target CG-Production --base <pre-merge-SHA> --allow-production`.
 
 ## Safety
 
 - **Production guard:** `deploy --target <prod>` and `switch <prod>` are blocked unless the SDF
-  project's git branch is `main`. Production deploys happen from `main` after a reviewed merge.
+  project's git branch is `main`; `deploy` to prod *additionally* requires the explicit
+  `--allow-production` opt-in. The guard runs before any auth swap. Production deploys happen from
+  `main` after a reviewed merge, with `--base <pre-merge-SHA>` to scope the merged feature.
 - `--skip-tests` skips the SuiteCloud Jest hook (requires the project's `suitecloud.config.js` to gate
   on `NDF_SKIP_TESTS`); otherwise the hook runs on every deploy.
 - Always confirm the target with `cgeaa netsuite envs` before deploying.

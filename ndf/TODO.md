@@ -80,6 +80,17 @@ production opt-in. On `main` it uploads straight to the production account.)
   `--auto-import`/`--allow-production` as appropriate. (Still deferred by decision 2026-10-22: build
   the CI pipeline only after NDF is proven safe in day-to-day manual use by the team.)
 
+- **Test the NDF CI workflow end-to-end (user roll-out validation).** The NDF-driven deploy workflow
+  exists in FinSys at `.github/workflows/netsuite-deploy-ndf.yml` on branch `cicd/netsuite` (committed,
+  not yet pushed/activated — the user pushes when ready to test). Validate before any real cutover:
+  (1) add the `CGEAA_REPO_TOKEN` secret (read access to `sabrown9994/CGEAA`); (2) push `cicd/netsuite`
+  and fork a `cicd/netsuite-test/**` branch; (3) merge a trivial script+object change and confirm the
+  run builds cgeaa, auths to `CG-intQA`, and `cgeaa netsuite deploy` scopes to exactly that change
+  (inspect generated `deploy.xml`), runs Jest, and deploys to the sandbox; (4) negative test — a
+  change referencing a missing object must fail loudly; (5) cut over qa → staging → main, deactivating
+  the legacy `netsuite-deploy-scripts.yml` per env. Repin the workflow's CGEAA `ref` to a release tag
+  before the `main` cutover.
+
 - **Guard against building from a shared branch.** Complementary safety: NDF could warn (or require
   a confirm) when `build`/`deploy` runs with `HEAD` on a known shared/integration branch
   (`main`/`qa`/`uat`) rather than a feature branch, since that's the scenario where the diff scope is
