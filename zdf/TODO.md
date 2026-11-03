@@ -89,6 +89,21 @@ traversal), so direct OLI pull is not regularly exercised live — covered by un
 
 ### Roadmap
 
+- **Default output location: prefer an existing `Zuora/zdf-output` in the FinSys/FinTech repo.**
+  Today `getOutputDir()` (`src/helpers/file-io.ts`) resolves the output directory in this order:
+  `ZDF_OUTPUT_DIR` env var → `zuora_output_dir` in `~/.cgeaa/config` / `.cgeaa/config` →
+  `./zdf-output` relative to the current working directory. Add a smarter default **below** those two
+  explicit overrides (both still win): if the repo already has a `Zuora/zdf-output` folder, send
+  **all** output there; only create a brand-new `zdf-output` (in the cwd) when no `Zuora/zdf-output`
+  exists. Goal: stop scattering a fresh `zdf-output` wherever the command happened to be run when the
+  canonical `Zuora/zdf-output` under the repo's `Zuora/` directory already exists.
+  - **Design considerations:** locate the repo's `Zuora/` folder (walk up from cwd for a `Zuora/`
+    dir, or a repo-root marker) rather than assuming cwd; if `Zuora/` exists but `Zuora/zdf-output`
+    does not, that's the one place it's allowed to be auto-created; if no `Zuora/` folder is found,
+    fall back to today's `./zdf-output`; `ZDF_OUTPUT_DIR` and `zuora_output_dir` remain explicit
+    overrides that take precedence. Ship via the ZDF dev flow with unit tests pinning the full
+    resolution order.
+
 - **Cross-tenant sync/upsert for `workflow` and `billing-template` via the `_zdf` id-map.**
   Extend the cross-tenant push (today scoped to account/product/invoice/credit-memo/debit-memo) to
   the two config resources, so a *single* workflow or HTML template can be promoted object-by-object
