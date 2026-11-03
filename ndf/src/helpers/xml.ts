@@ -7,6 +7,9 @@ export function objectIdFromPath(objectPath: string): string {
 
 function sdfPath(srcRelativePath: string): string {
   // src/FileCabinet/SuiteScripts/foo.js → ~/FileCabinet/SuiteScripts/foo.js
+  if (!srcRelativePath.startsWith('src/')) {
+    throw new Error(`Cannot convert non-src path to SDF path: ${srcRelativePath}`);
+  }
   return srcRelativePath.replace(/^src\//, '~/');
 }
 
@@ -46,8 +49,21 @@ function extractBlock(xml: string, tag: string): string {
   return xml.slice(start, end + close.length);
 }
 
+function extractInner(xml: string, tag: string, fallback: string): string {
+  const open = `<${tag}>`;
+  const close = `</${tag}>`;
+  const start = xml.indexOf(open);
+  const end = xml.indexOf(close);
+  if (start === -1 || end === -1 || end <= start) return fallback;
+  const inner = xml.slice(start + open.length, end).trim();
+  return inner === '' ? fallback : inner;
+}
+
 export function generateManifestXml(existingManifestPath: string, changedObjectIds: string[]): string {
   const existing = readFileSync(existingManifestPath, 'utf-8');
+
+  const projectName = extractInner(existing, 'projectname', 'NetSuite');
+  const frameworkVersion = extractInner(existing, 'frameworkversion', '1.0');
 
   const featuresBlock = extractBlock(existing, 'features');
   const filesBlock = extractBlock(existing, 'files');
@@ -58,8 +74,8 @@ export function generateManifestXml(existingManifestPath: string, changedObjectI
     : '<objects></objects>';
 
   return `<manifest projecttype="ACCOUNTCUSTOMIZATION">
-  <projectname>NetSuite</projectname>
-  <frameworkversion>1.0</frameworkversion>
+  <projectname>${projectName}</projectname>
+  <frameworkversion>${frameworkVersion}</frameworkversion>
   <dependencies>
     ${featuresBlock}
     ${objectsBlock}

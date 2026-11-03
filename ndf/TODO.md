@@ -20,59 +20,76 @@ only and revert.
 
 ---
 
-## Remaining open items (deferred minors)
+## User Roll-out
 
-- **manifest `projectname`/`frameworkversion` are hardcoded** to `NetSuite` / `1.0`
-  (`helpers/xml.ts`). If a project uses different values, `build` will overwrite them. Should read
-  them from the existing manifest. Low priority — matches the current `FinTech/NetSuite` project.
+Most of this section **shipped** on `feature/netsuite-integration` (NDF dev flow: per-task
+implementer → standard + adversarial review → final whole-branch review; 82 tests pass). Production
+is now reachable through a deliberate, manual path. The one remaining item is a supervised first
+production deploy, which is blocked on valid production auth (see below).
 
-- **`sdfPath()` passthrough** (`helpers/xml.ts`). A path not starting with `src/` is emitted
-  verbatim (no `~/` prefix). Not reachable today because `getChangedFiles` only ever yields `src/…`
-  paths, but a defensive throw would harden it.
+**Shipped:**
 
-- **`writeCgeaaConfigKey` strips blank lines** from `~/.cgeaa/config` on every write
-  (`helpers/config.ts`). Comments survive; only blank separators are lost. Cosmetic.
+- **`--base <ref>` on `build`/`deploy`** (default `main`). This makes production reachable:
+  `getMergeBase(projectDir, base)` lets you deploy a just-merged feature from `main` with
+  `cgeaa netsuite deploy --target CG-Production --base <pre-merge-SHA> --allow-production` — the diff
+  becomes `before..main` = exactly that feature. (Default `main` keeps feature-branch behavior
+  identical; from `main` with no `--base`, the diff is still empty and deploy is a no-op, by design.)
+  `base` is validated against shell- **and** git-option injection (leading-dash rejected — caught by
+  adversarial review). Same mechanism CI will use (`${{ github.event.before }}`).
 
-- **`config.test.ts` imports `beforeEach` but never uses it.** Lint nit.
+- **`--allow-production` opt-in flag on `deploy`.** Deploying to the production auth ID now requires
+  BOTH the `main`-branch guard AND `--allow-production`, enforced before any `defaultAuthId` swap or
+  network call. Mirrors ZDF's `--allow-prod-financial`.
+
+- **manifest `projectname`/`frameworkversion`** are now read from the existing manifest (fallback
+  `NetSuite` / `1.0`, including empty/malformed tags). **`sdfPath()`** throws on a non-`src/` path
+  instead of emitting it verbatim. (`helpers/xml.ts`.)
+
+- **`writeCgeaaConfigKey`** preserves blank lines and comments in `~/.cgeaa/config`; removed the
+  unused `beforeEach` test import. (`helpers/config.ts`, `__tests__/helpers/config.test.ts`.)
+
+**Remaining:**
+
+- **First live production deploy not yet verified — blocked on valid production auth.** A read-only
+  connectivity check (`suitecloud object:list --type role` against `CG-Production`) on 2026-10-23
+  found the local `CG-Production` auth token is **expired**: suitecloud fell back to browser-based
+  re-authentication, which timed out. No writes occurred. Before any production deploy: (1) refresh
+  the token with `suitecloud account:setup` for `CG-Production` (interactive, browser), then (2) do a
+  **supervised** first deploy from `main` with `--base <pre-merge-SHA> --allow-production`. Until the
+  token is refreshed, production is unreachable for an operational reason (auth), not a code one.
 
 ---
 
-## Validation milestone
+## CI/CD Roadmap
 
-**No live production deploy has been exercised yet.** The production path is guarded (inline checks
-in `switch` and `deploy` commands that block non-`main` branches) and unit-tested, but has not been
-verified against the real production environment. First production deploy will happen from `main`
-after the feature branch merges.
+NDF will eventually **own** the NetSuite CI/CD deploy path, but it cannot today — it is not invoked
+by any GitHub Action, so nothing in NDF runs on a push or merge. (Note: a *separate*, pre-existing
+FinSys workflow, `.github/workflows/netsuite-deploy-scripts.yml`, does auto-deploy on push to
+`qa`/`staging`/`main` — but it is **not** NDF: it runs `suitecloud file:upload` of changed
+`SuiteScripts/**` files only, with no Objects, no manifest, no SDF `project:deploy`, and no
+production opt-in. On `main` it uploads straight to the production account.)
 
----
+- **GitHub Action that uses NDF for script *and* object deployment; retire the existing file-upload
+  workflow.** Build a CI pipeline that runs `cgeaa netsuite deploy` on merges to FinSys environment
+  branches, so deploys go through NDF's feature-scoped build (scripts **and** `src/Objects/**`),
+  manifest/dependency resolution, and the production opt-in — not the scripts-only `file:upload`
+  path. As part of this, **remove `.github/workflows/netsuite-deploy-scripts.yml`** (the hand-rolled
+  file-upload deploy) so there is a single, NDF-owned deploy path and the two cannot double-deploy
+  the same script files. The `--base` prerequisite is now **shipped** (see User Roll-out), so CI is
+  unblocked technically — the Action passes `--base ${{ github.event.before }}` and
+  `--auto-import`/`--allow-production` as appropriate. (Still deferred by decision 2026-10-22: build
+  the CI pipeline only after NDF is proven safe in day-to-day manual use by the team.)
 
-## Roadmap
-
-- **GitHub Actions workflow**: Wire an actual CI pipeline that runs `cgeaa netsuite deploy` on
-  merges to FinSys environment branches. Currently only a README snippet exists; no committed
-  `.github/workflows/*.yml` file. **Blocked on the configurable-base item below** — do not wire CI
-  until `--base` exists, or the pipeline will over-deploy. (Deferred by decision 2026-10-22: build
-  the CI pipeline only after the feature is proven safe in day-to-day use by the team.)
-
-- **Configurable diff base (`--base <ref>`) — prerequisite for CI.** Today `getMergeBase`
-  (`helpers/git.ts`) hardcodes `git merge-base main HEAD` and diffs from whatever branch is checked
-  out. This correctly isolates a feature's scripts/objects **only when run from that feature's own
-  branch** (forked from `main`). It is **wrong for a CI job that fires on a push/merge to a
-  long-lived env branch** (e.g. `qa`): with `HEAD = qa`, the scope becomes `merge-base(main, qa)..qa`
-  = *everything accumulated in `qa` since it diverged from `main`* (all merged features), not the
-  one feature that just landed. Over-deploys.
-  - **Fix:** add `--base <ref>` to `build`/`deploy` (default `main`, so local behavior is unchanged),
-    threaded into `getMergeBase(projectDir, base)`.
-  - **Why one flag covers both:** merge-base of an ancestor and a descendant is the ancestor, so in
-    CI passing `--base ${{ github.event.before }}` (the env branch's tip BEFORE the merge) makes the
-    diff exactly `before..after` = only the just-merged feature's files; locally `--base main` keeps
-    the fork-point behavior.
-  - **Edge cases for the eventual Action to handle:** brand-new branch (`github.event.before` is
-    all-zeros), squash/force-push, and first-deploy — fall back to the PR base SHA from the event
-    payload. Stays mono-repo-safe (the existing `--relative` filter already scopes the diff to
-    `NetSuite/src`).
-  - Implement via the NDF dev flow (implementer → standard → adversarial → intQA), then the Action
-    can pass `--base`.
+- **Test the NDF CI workflow end-to-end (user roll-out validation).** The NDF-driven deploy workflow
+  exists in FinSys at `.github/workflows/netsuite-deploy-ndf.yml` on branch `cicd/netsuite` (committed,
+  not yet pushed/activated — the user pushes when ready to test). Validate before any real cutover:
+  (1) add the `CGEAA_REPO_TOKEN` secret (read access to `sabrown9994/CGEAA`); (2) push `cicd/netsuite`
+  and fork a `cicd/netsuite-test/**` branch; (3) merge a trivial script+object change and confirm the
+  run builds cgeaa, auths to `CG-intQA`, and `cgeaa netsuite deploy` scopes to exactly that change
+  (inspect generated `deploy.xml`), runs Jest, and deploys to the sandbox; (4) negative test — a
+  change referencing a missing object must fail loudly; (5) cut over qa → staging → main, deactivating
+  the legacy `netsuite-deploy-scripts.yml` per env. Repin the workflow's CGEAA `ref` to a release tag
+  before the `main` cutover.
 
 - **Guard against building from a shared branch.** Complementary safety: NDF could warn (or require
   a confirm) when `build`/`deploy` runs with `HEAD` on a known shared/integration branch

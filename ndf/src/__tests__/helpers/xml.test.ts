@@ -93,4 +93,66 @@ describe('generateManifestXml', () => {
     expect(xml).toContain('</objects>');
     expect(xml).not.toContain('<object>');
   });
+
+  it('uses projectname and frameworkversion from existing manifest', () => {
+    const customManifest = `<manifest projecttype="ACCOUNTCUSTOMIZATION">
+  <projectname>FinTech</projectname>
+  <frameworkversion>2.1</frameworkversion>
+  <dependencies>
+    <features>
+      <feature required="true">SERVERSIDESCRIPTING</feature>
+    </features>
+    <objects></objects>
+    <files></files>
+  </dependencies>
+</manifest>`;
+    mockReadFileSync.mockReturnValue(customManifest);
+    const xml = generateManifestXml('/proj/src/manifest.xml', ['customscript_new']);
+    expect(xml).toContain('<projectname>FinTech</projectname>');
+    expect(xml).toContain('<frameworkversion>2.1</frameworkversion>');
+    expect(xml).not.toContain('<projectname>NetSuite</projectname>');
+    expect(xml).not.toContain('<frameworkversion>1.0</frameworkversion>');
+  });
+
+  it('falls back to NetSuite/1.0 when projectname/frameworkversion tags are missing', () => {
+    const minimalManifest = `<manifest projecttype="ACCOUNTCUSTOMIZATION">
+  <dependencies>
+    <features></features>
+    <objects></objects>
+    <files></files>
+  </dependencies>
+</manifest>`;
+    mockReadFileSync.mockReturnValue(minimalManifest);
+    const xml = generateManifestXml('/proj/src/manifest.xml', []);
+    expect(xml).toContain('<projectname>NetSuite</projectname>');
+    expect(xml).toContain('<frameworkversion>1.0</frameworkversion>');
+  });
+
+  it('falls back to NetSuite/1.0 when projectname/frameworkversion tags are empty', () => {
+    const emptyTagsManifest = `<manifest projecttype="ACCOUNTCUSTOMIZATION">
+  <projectname></projectname>
+  <frameworkversion></frameworkversion>
+  <dependencies>
+    <features></features>
+    <objects></objects>
+    <files></files>
+  </dependencies>
+</manifest>`;
+    mockReadFileSync.mockReturnValue(emptyTagsManifest);
+    const xml = generateManifestXml('/proj/src/manifest.xml', []);
+    expect(xml).toContain('<projectname>NetSuite</projectname>');
+    expect(xml).toContain('<frameworkversion>1.0</frameworkversion>');
+  });
+});
+
+describe('sdfPath defensive throw', () => {
+  it('throws when path does not start with src/', () => {
+    expect(() => generateDeployXml(['bad/path.js'], [])).toThrow('Cannot convert non-src path to SDF path: bad/path.js');
+  });
+
+  it('still converts valid src/ paths correctly', () => {
+    const xml = generateDeployXml(['src/FileCabinet/SuiteScripts/foo.js'], []);
+    expect(xml).toContain('~/FileCabinet/SuiteScripts/foo.js');
+    expect(xml).not.toContain('src/FileCabinet');
+  });
 });

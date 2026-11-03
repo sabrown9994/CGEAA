@@ -1,10 +1,25 @@
 # CGEAA - CarGurus Enterprise Applications Automation
 
-A comprehensive shell script suite for automating Salesforce deployment and validation operations.
+A single `cgeaa` CLI for three enterprise-application domains: **Salesforce** deploy/validate/test,
+**Zuora** billing-object sync (ZDF), and **NetSuite** feature-scoped SDF deploys (NDF).
 
 ## Overview
 
-CGEAA (CarGurus Enterprise Applications Automation) is a powerful command-line tool designed to streamline Salesforce development workflows by automating validation, deployment, testing, and org management processes. Built with a modular architecture, it provides robust error handling, comprehensive logging, and flexible configuration options.
+CGEAA (CarGurus Enterprise Applications Automation) is a command-line tool that streamlines
+enterprise-application development workflows behind one dispatcher:
+
+- **Salesforce** (`cgeaa <cmd>`) — validation, deployment, testing, diff, logs, and org management
+  (this is the bulk of this README).
+- **Zuora** (`cgeaa zuora ...`) — the bundled **Zuora Development Framework (ZDF)**: pull Zuora
+  objects to local JSON, edit them, push them back; cross-tenant test-data sync; product-catalog
+  automation. See **[`zdf/README-ZDF.md`](zdf/README-ZDF.md)** and the getting-started section below.
+- **NetSuite** (`cgeaa netsuite ...`) — the bundled **NetSuite Development Framework (NDF)**:
+  feature-scoped SDF deploys of SuiteScripts **and** objects, auto-generating `deploy.xml` /
+  `manifest.xml` from the git diff, orchestrating Oracle's `suitecloud` CLI. See
+  **[`ndf/README-NDF.md`](ndf/README-NDF.md)** and the getting-started section below.
+
+Built with a modular architecture, it provides robust error handling, comprehensive logging, and
+flexible configuration options.
 
 ## Features
 
@@ -237,6 +252,64 @@ command from**. To keep Zuora output in a fixed location regardless of your curr
 set `zuora_output_dir` in `~/.cgeaa/config` (or `.cgeaa/config`), or export `ZDF_OUTPUT_DIR`
 (the env var takes precedence). **That's all you need to get running — everything else (commands,
 resources, options, examples) lives in [`zdf/README-ZDF.md`](zdf/README-ZDF.md).**
+
+---
+
+## NetSuite (NDF) — Install & Getting Started
+
+CGEAA bundles the **NetSuite Development Framework (NDF)** — a developer CLI that deploys a feature
+branch's SuiteScripts **and** SDF objects to a target NetSuite environment, auto-generating
+`deploy.xml` / `manifest.xml` from your git diff and resolving object dependencies. It does **not**
+talk to NetSuite over HTTP — it orchestrates Oracle's `suitecloud` CLI. Every command runs through
+`cgeaa netsuite <args>`, which passes its arguments to the bundled `ndf` binary.
+
+> **This section covers only install and first-run setup.** For the full reference — every command,
+> flag, the dependency-resolution loop, the account model, and production safety — see
+> **[`ndf/README-NDF.md`](ndf/README-NDF.md)**.
+
+### Prerequisites
+
+- **Node.js ≥ 18** — `cgeaa-setup` offers to install it.
+- **Oracle `suitecloud` CLI** on `$PATH` (`@oracle/suitecloud-cli`) plus its JDK requirement.
+- A **SuiteCloud SDF project** on disk (the FinSys/FinTech repo's `NetSuite/` folder: `src/`,
+  `project.json`, `suitecloud.config.js`) and **authenticated environments**
+  (`suitecloud account:setup` / `account:manageauth`), e.g. `CG-intQA`, `CG-UAT`, `CG-Production`.
+
+### 1. Install (build NDF)
+
+`cgeaa-setup` builds NDF automatically when Node.js is present (`cd ndf && npm install && npm run
+build` → `ndf/dist/ndf.js`). From a clone without the global installer:
+
+```bash
+cd ndf && npm install && npm run build && cd ..
+cgeaa netsuite --help     # confirm the dispatch works
+```
+
+### 2. One-time setup
+
+```bash
+cgeaa netsuite setup      # interactive: SDF project root + which auth ID is production
+```
+
+This writes `netsuite_project_dir` and `netsuite_production_auth_id` to `~/.cgeaa/config`. NDF fails
+fast asking you to run setup if either is missing.
+
+### 3. Verify & deploy a feature
+
+```bash
+cgeaa netsuite envs                         # list environments; marks active (*) and production [PROD]
+cgeaa netsuite build --dry-run              # preview the feature-scoped deploy.xml / manifest.xml
+cgeaa netsuite deploy --target CG-intQA     # build + deploy the feature's scripts & objects to a sandbox
+```
+
+Production is reachable only from the `main` branch, and only with an explicit opt-in:
+
+```bash
+cgeaa netsuite deploy --target CG-Production --base <pre-merge-SHA> --allow-production
+```
+
+(`--base` scopes the diff to the just-merged feature; from `main` without it the diff is empty.)
+**Everything else lives in [`ndf/README-NDF.md`](ndf/README-NDF.md).**
 
 ---
 
@@ -760,6 +833,8 @@ The `update` command pulls the latest changes from the CGEAA source repository a
 | Module | Description |
 |--------|-------------|
 | `utils.sh` | Common utility functions, logging, manifest generation, git helpers |
+| `zuora.sh` | Zuora dispatch — passes `cgeaa zuora ...` args to the bundled `zdf` binary (builds from `zdf/` if absent) |
+| `netsuite.sh` | NetSuite dispatch — passes `cgeaa netsuite ...` args to the bundled `ndf` binary (builds from `ndf/` if absent) |
 | `config.sh` | Configuration loading, validation, and display |
 | `validate.sh` | Validation-only deployments |
 | `deploy.sh` | Full deployments with optional git tagging |

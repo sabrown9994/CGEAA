@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { join } from 'path';
 import { homedir } from 'os';
 
@@ -71,5 +71,41 @@ describe('writeCgeaaConfigKey', () => {
     const written = (mockWriteFileSync.mock.calls[0] as unknown[])[1] as string;
     expect(written).toContain('newkey=val');
     expect(written).toContain('other=x');
+  });
+
+  it('preserves blank lines and comments when appending new key', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue('# comment\n\nnetsuite_project_dir=/x\n\nother_key=val\n');
+    writeCgeaaConfigKey('new_key', '123');
+    const written = (mockWriteFileSync.mock.calls[0] as unknown[])[1] as string;
+    expect(written).toContain('# comment');
+    expect(written).toContain('new_key=123');
+    expect(written).toContain('netsuite_project_dir=/x');
+    expect(written).toContain('other_key=val');
+    // Verify blank lines are preserved by checking the structure
+    const lines = written.split('\n');
+    expect(lines[0]).toBe('# comment');
+    expect(lines[1]).toBe(''); // blank line
+    expect(lines[2]).toBe('netsuite_project_dir=/x');
+    expect(lines[3]).toBe(''); // blank line
+    expect(lines[4]).toBe('other_key=val');
+    expect(lines[5]).toBe('new_key=123');
+  });
+
+  it('preserves blank lines and comments when updating existing key', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue('# comment\n\nmykey=old\n\nother=x\n');
+    writeCgeaaConfigKey('mykey', 'new');
+    const written = (mockWriteFileSync.mock.calls[0] as unknown[])[1] as string;
+    expect(written).toContain('# comment');
+    expect(written).toContain('mykey=new');
+    expect(written).toContain('other=x');
+    // Verify blank lines are preserved and key is updated in place
+    const lines = written.split('\n');
+    expect(lines[0]).toBe('# comment');
+    expect(lines[1]).toBe(''); // blank line
+    expect(lines[2]).toBe('mykey=new'); // updated in place
+    expect(lines[3]).toBe(''); // blank line
+    expect(lines[4]).toBe('other=x');
   });
 });

@@ -53,12 +53,43 @@ describe('deploy happy path', () => {
     expect(mockRunSuitecloud).toHaveBeenCalledWith(['project:deploy'], expect.objectContaining({ cwd: '/proj' }));
     expect(mockSetDefaultAuthId).toHaveBeenLastCalledWith('/proj', 'CG-intQA'); // restored
   });
+
+  it('passes --base option to runBuild', async () => {
+    await makeProgram().parseAsync(['node', 'ndf', 'deploy', '--target', 'CG-UAT', '--base', 'someSha']);
+    expect(mockRunBuild).toHaveBeenCalledWith(expect.objectContaining({ base: 'someSha' }));
+  });
 });
 
 describe('production guard on --target', () => {
   it('blocks deploying to production off main (exit 1), no swap', async () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
     await expect(makeProgram().parseAsync(['node', 'ndf', 'deploy', '--target', 'CG-Production']))
+      .rejects.toThrow('exit');
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(mockRunSuitecloud).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it('blocks prod deploy on main without --allow-production', async () => {
+    mockGetCurrentBranch.mockReturnValue('main');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(makeProgram().parseAsync(['node', 'ndf', 'deploy', '--target', 'CG-Production']))
+      .rejects.toThrow('exit');
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(mockRunSuitecloud).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it('allows prod deploy on main with --allow-production', async () => {
+    mockGetCurrentBranch.mockReturnValue('main');
+    await makeProgram().parseAsync(['node', 'ndf', 'deploy', '--target', 'CG-Production', '--allow-production']);
+    expect(mockRunSuitecloud).toHaveBeenCalledWith(['project:deploy'], expect.objectContaining({ cwd: '/proj' }));
+  });
+
+  it('blocks prod deploy off main even with --allow-production (branch guard takes precedence)', async () => {
+    mockGetCurrentBranch.mockReturnValue('feature/x');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(makeProgram().parseAsync(['node', 'ndf', 'deploy', '--target', 'CG-Production', '--allow-production']))
       .rejects.toThrow('exit');
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(mockRunSuitecloud).not.toHaveBeenCalled();

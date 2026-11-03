@@ -8,8 +8,11 @@ export interface ChangedFiles {
 
 const EXCLUDED_FILENAMES = new Set(['.attributes', '.eslintrc.json']);
 
-export function getMergeBase(projectDir: string): string {
-  return execSync('git merge-base main HEAD', { cwd: projectDir }).toString().trim();
+export function getMergeBase(projectDir: string, base = 'main'): string {
+  if (!/^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/.test(base)) {
+    throw new Error(`Invalid base ref: ${base}`);
+  }
+  return execSync(`git merge-base ${base} HEAD`, { cwd: projectDir }).toString().trim();
 }
 
 export function getChangedFiles(projectDir: string, mergeBase: string): ChangedFiles {
