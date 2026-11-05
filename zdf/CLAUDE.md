@@ -21,7 +21,7 @@ open work items.
 | `src/helpers/dependency-graph.ts` | `resolveAndSync(resource, id, action, visited?)` — fetch + traverse; returns `boolean` (true = top-level resource was fetched). Also exports cap constants and setters. |
 | `src/helpers/updatable-fields.ts` | `filterUpdatableFields(resource, data)` — strip read-only fields before PUT |
 | `src/helpers/file-io.ts` | `writeResourceFile`, `readResourceFile`, `renameResourceFile`, `deleteResourceFile`, `resolveFilePath`, `getOutputDir` |
-| `src/api/client.ts` | `apiGet`, `apiPost`, `apiPut`, `apiDelete`, `apiQuery` (ZOQL via `POST /v1/action/query`); cap constants `APIQUERY_MAX_ROWS` |
+| `src/api/client.ts` | `apiGet`, `apiPost`, `apiPut`, `apiDelete`, `apiQuery` (ZOQL via `POST /v1/action/query`); cap constants `APIQUERY_MAX_ROWS`. `extractZuoraErrors`/`handleAxiosError` surface the API error body **by default** (not just under `--debug`): error entries' text is read from `message ?? title ?? detail` (the Workflows API uses `title`), and when the message would be a bare `HTTP {status}` it appends a 500-char raw-body snippet so no error body is ever fully swallowed |
 | `src/auth/config.ts` | `getActiveEnv()` — reads `~/.zdf/config.json` or CI env vars (see below) |
 | `src/auth/token.ts` | `ensureToken(env, force?)` — fetches/caches OAuth token; `force=true` bypasses expiry |
 | `src/helpers/command-runner.ts` | `runCommand(program, fn)` — wraps every action; thrown `Error` → `output.error` + `process.exit(1)` |
@@ -212,6 +212,20 @@ delete would always be rejected — the command was removed instead of left as a
 Base path `/workflows` (not `/v1/api/workflows`). Workflows are handled via the **export/import**
 API so the local file is the FULL, recreatable definition, not just metadata:
 
+- **ID resolution (`resolveWorkflow` in `commands/workflows.ts`)** — pull/push/delete accept a
+  workflow **definition ID** or a **version ID**. Try definition interp first: `GET
+  /workflows/{X}/export` (200 ⇒ X is a definition; `activeVersionId` is read straight from the
+  export body's `workflow.id` — no separate `/versions` call). On a definition-not-found 404, try
+  version interp: `GET /workflows/{X}` → `{definitionId, version, status}`; `status` compared
+  case-insensitively — Active ⇒ target the active version, Inactive ⇒ target that older version
+  (exported via `GET /workflows/{defId}/export?version=<number>`). Neither ⇒ throw `No workflow or
+  version found for ID <X> in tenant <name>.` Collision precedence: definition interpretation wins.
+  `list workflows` uses `GET /workflows/{defId}/versions` (`data:[{id,definitionId,version,status}]`).
+- **File naming / round-trip** — `pull` writes `<sanitizedName>_<definitionId>.json` and logs the
+  resolution. `push`/`delete` resolve a version ID to its definition, then locate the local file by
+  definition ID via `findLocalFile` (accepts `<defId>.json` from `create` AND `<name>_<defId>.json`
+  from `pull`) — do NOT revert to `readResourceFile(RESOURCE, id)`, which only finds `<id>.json` and
+  breaks the pull→push round-trip (`workflow` has no natural-key id-scan fallback).
 - **pull** → `GET /workflows/{id}/export` → writes `{ workflow_definition, workflow, tasks,
   linkages }`. (NOT `GET /workflows/{id}`, which returns only metadata + active_version.)
 - **create** → `POST /workflows/import` with the export JSON body → creates a **NEW** workflow
@@ -320,7 +334,7 @@ Use `--no-dependency` to skip all traversal. Essential for large accounts.
 | credit-memo | ✓ | ✓ | ✓ (`--invoice <id>` required; `skuName` per item) | ✓ (Draft→cancel→delete; Cancelled direct; Posted rejected) | |
 | debit-memo | ✓ | ✓ | ✓ (`--invoice <id>` required; `skuName` per item) | ✓ (Draft→cancel→delete; Cancelled direct; Posted rejected) | |
 | bill-run | ✓ | re-fetch (no PUT) | ✓ (⚠ executes real billing) | — (removed; API-created runs reach Completed, undeletable) | |
-| workflow | ✓ | ✓ | ✓ | ✓ | |
+| workflow | ✓ | ✓ | ✓ | ✓ | ✓ (`GET /workflows`, paginated, read-only) |
 | billing-template | ✓ (HTML only) | ✓ | ✓ | ✓ | ✓ |
 | data-query | ✓ | | ✓ (submits job) | ✓ (cancels job) | |
 

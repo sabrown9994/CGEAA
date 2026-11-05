@@ -320,6 +320,7 @@ Fetch all records of a type and write them to local storage.
 ```
 cgeaa zuora list orders
 cgeaa zuora list billing-templates
+cgeaa zuora list workflows
 ```
 
 ### template
@@ -569,18 +570,39 @@ just metadata.
 
 | Operation | Endpoint | Notes |
 |-----------|----------|-------|
+| list | `GET /workflows` (`cgeaa zuora list workflows`) | Read-only; lists all workflows (id, name, status, active version). Paginated by page number (`?page=&page_length=50`); caps at 5000 workflows / 200 pages with a warning |
 | pull | `GET /workflows/{id}/export` | Writes the full **active-version** definition (settings + tasks + linkages), the same shape `create`/`push` consume |
 | create | `POST /workflows/import` | Imports the local export file as a **new** workflow (new definition id); JSON body |
 | push | `POST /workflows/{id}/versions/import?version=<next>&activate=true` | Imports the edited definition as a **new active version** of the existing workflow — applies **logic** (tasks/linkages) and version settings |
 | delete | `DELETE /workflows/{id}` | Returns `{success, id}` |
 
+**ID resolution — pull/push/delete accept a definition ID *or* a version ID:**
+`pull`, `push`, and `delete` resolve either a workflow **definition ID** or a **version ID** (the
+IDs the Workflow UI URL and an export's `workflow.id` expose diverge from the definition ID once a
+workflow is re-versioned). Resolution always targets the **active version** unless the supplied ID is
+an **older, non-active** version — then that exact version is used:
+- Definition ID → the workflow's active version (collision precedence: definition interpretation wins).
+- Active version ID → the active version (same result).
+- Older (non-active) version ID → that specific older version (`pull` exports it via
+  `GET /workflows/{definitionId}/export?version=<number>`).
+- An ID that is neither → fails with `No workflow or version found for ID <X> in tenant <name>.`
+
+Resolution uses `GET /workflows/{id}/export` (definition → active; the export body's `workflow.id`
+is the active version ID), `GET /workflows/{versionId}` (version → `{definitionId, version,
+status}`), and `GET /workflows/{definitionId}/export?version=<number>` (specific version). `pull`
+logs the resolution (`definitionId`, `activeVersionId`, tenant, interpretation) and names the file
+`<sanitizedName>_<definitionId>.json`; `push`/`delete` locate that file by definition ID (accepting
+both `<defId>.json` and `<name>_<defId>.json`) and always operate on the **definition** (a version ID
+is resolved to its owning definition first).
+
 **Limitations & behavior:**
 - The endpoint base is `/workflows` (not `/v1/api/workflows` or a `/v1/`-prefixed path).
-- **`pull` fetches the full export** (`/export`) of the active version, not `GET /workflows/{id}` (which returns only metadata). This makes `pull` → edit → `push` (or `create`) a full-fidelity round-trip.
+- **`pull` fetches the full export** (`/export`), not `GET /workflows/{id}` (which returns only metadata). This makes `pull` → edit → `push` (or `create`) a full-fidelity round-trip.
 - **`create` imports a NEW workflow** — `POST /workflows/import` mints a new definition id. Use it to copy/restore a workflow into a tenant. An import payload must contain at least one task **and** at least one linkage. The response is the created workflow object directly (no `{success}` envelope).
 - **`push` edits the workflow in place by creating a new active version** — it imports the edited `/export` file via `POST /workflows/{id}/versions/import?version=<next>&activate=true`, which **does** apply task/linkage (logic) changes as well as version settings. This is Zuora's supported mechanism for changing an existing workflow's logic. Each push creates a new version (Zuora keeps version history); the version number is auto-incremented above the latest (override with `--version <n>`). Pass `--no-activate` to import the version without making it active.
 - Workflow export/import responses have no `{success}` envelope (handled via `assertReadSuccess`); DELETE returns `{success, id}`.
 - **Live-verified end-to-end on intQA (2026-08-21)**: authored from scratch → `create` → `pull` → **`push` that ADDS a task to the active version** (re-pull confirmed the new task graph is live, version bumped 1.0→2.0) → `delete` → confirm-gone, all PASS.
+- **ID resolution live-verified on intQA (2026-11-03)**: for definition `610197` (active version `2083376`, v6.0) — `pull` by definition ID, by active-version ID, and by older-version ID `2083374` (→ exact v5.1) all resolved correctly; a bogus ID produced the tenant-named not-found error.
 
 ---
 

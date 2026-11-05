@@ -42,6 +42,7 @@ Every command is `cgeaa zuora <args>`.
 Pull to local JSON, edit (by hand or with the user), push back to the **same** tenant.
 
 ```
+cgeaa zuora list workflows                # list all workflows (id, name, status, active version)
 cgeaa zuora pull workflow <id>            # full definition via export
 cgeaa zuora push workflow <id>            # re-imports edited logic as a new active version
 cgeaa zuora pull billing-template <id>    # auto-detects invoice / credit-memo / debit-memo template; decodes HTML design JSON
