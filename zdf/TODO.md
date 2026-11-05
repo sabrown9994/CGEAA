@@ -127,7 +127,7 @@ traversal), so direct OLI pull is not regularly exercised live — covered by un
   - `workflow` and `billing-template` are NOT ZOQL-queryable billing objects (Workflows API /
     Settings API), so `upsert.ts` `searchByKey` (ZOQL natural-key search) does **not** apply.
     First-time cross-tenant matching (no `_zdf` entry yet) needs a **list-in-target + name match**
-    (`list billing-templates`; a workflow listing) — and **workflow names are not guaranteed
+    (`list billing-templates`; `cgeaa zuora list workflows` — **now implemented**) — and **workflow names are not guaranteed
     unique** (`resource-registry.ts`), so the id-map is reliable for a known mapping but first-time
     workflow matching is ambiguous and may need an explicit target id / confirmation.
   - Per-tenant internal ids aren't stable cross-environment (`docs/promotion-deployment-manager.md`);

@@ -62,6 +62,20 @@ vi.mock('../../helpers/file-io.js', () => ({
   deleteResourceFile: vi.fn(),
 }));
 
+// FIX 1: Mock fs for findLocalFile
+const mockReadFileSync = vi.hoisted(() => vi.fn());
+const mockReaddirSync = vi.hoisted(() => vi.fn());
+const mockExistsSync = vi.hoisted(() => vi.fn());
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>();
+  return {
+    ...actual,
+    readFileSync: mockReadFileSync,
+    readdirSync: mockReaddirSync,
+    existsSync: mockExistsSync,
+  };
+});
+
 // inquirer only reached on the interactive-confirm path (not exercised here since
 // every allowed case passes --yes) — stub it so an accidental prompt can't hang.
 const mockPrompt = vi.hoisted(() => vi.fn().mockResolvedValue({ confirmed: true }));
@@ -103,6 +117,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockGetActiveEnv.mockReturnValue({ isProduction: true, name: 'prod', type: 'CI', baseUrl: 'http://127.0.0.1:9', clientId: 'x', clientSecret: 'y' });
   resetInvokedCommand();
+  // FIX 1: Reset fs mocks
+  mockExistsSync.mockReturnValue(true);
 });
 
 afterAll(() => {
@@ -134,6 +150,17 @@ describe('production write policy — end-to-end through buildProgram()', () => 
   });
 
   it('ALLOWS a config write (push workflow) on prod with --yes: gets past policy to the API', async () => {
+    // FIX 1: Setup fs mocks for findLocalFile
+    mockExistsSync.mockReturnValue(true);
+    mockReaddirSync.mockReturnValue(['W1.json']);
+    mockReadFileSync.mockReturnValue(JSON.stringify({ workflow_definition: { name: 'W1' }, workflow: { id: 999 }, tasks: [], linkages: [] }));
+
+    // FIX 2: Resolver reads active version ID directly from export body (no separate /versions call)
+    mockApiGet
+      .mockResolvedValueOnce({ workflow_definition: { name: 'W1' }, workflow: { id: 999, name: 'W1' }, tasks: [], linkages: [] })  // resolveWorkflow: /workflows/W1/export
+      .mockResolvedValueOnce({ data: [{ version: '1.0' }] });  // nextWorkflowVersion: /workflows/W1/versions
+    mockApiPost.mockResolvedValue({ id: 999 });
+
     const code = await run(['--yes', 'push', 'workflow', 'W1']);
     expect(code).toBe(0);
     // push workflow imports a new active version (POST /workflows/{id}/versions/import?...)

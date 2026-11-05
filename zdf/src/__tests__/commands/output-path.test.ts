@@ -45,13 +45,17 @@ afterEach(() => {
 describe('success message paths honor ZDF_OUTPUT_DIR', () => {
   it('prints the overridden output dir, not the hardcoded zdf-output/ default', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    mockGet.mockResolvedValue({ id: 123, name: 'My Workflow' });
+    // FIX 2: Resolver reads active version ID directly from export body (no separate /versions call)
+    mockGet
+      .mockResolvedValueOnce({ workflow_definition: { name: 'My Workflow' }, workflow: { id: 456, name: 'My Workflow' }, tasks: [], linkages: [] })  // resolveWorkflow: /workflows/123/export
+      .mockResolvedValueOnce({ workflow_definition: { name: 'My Workflow' }, workflow: { id: 456, name: 'My Workflow' }, tasks: [], linkages: [] });  // pull: /workflows/123/export
 
     await makeProgram().parseAsync(['node', 'zdf', 'pull', 'workflow', '123']);
 
     const printed = logSpy.mock.calls.map((args) => String(args[0])).join('\n');
-    expect(printed).toContain(join(testOutputDir, 'workflows', '123.json'));
-    expect(printed).not.toContain('zdf-output/workflows/123.json');
+    // Filename is now sanitized name + definition ID
+    expect(printed).toContain(join(testOutputDir, 'workflows', 'My_Workflow_123.json'));
+    expect(printed).not.toContain('zdf-output/workflows/');
 
     logSpy.mockRestore();
   });

@@ -74,17 +74,19 @@ export function extractZuoraErrors(body: unknown): Array<{ code: string; message
     for (const r of b.reasons) {
       if (r && typeof r === 'object') {
         const rr = r as Record<string, unknown>;
-        out.push({ code: String(rr.code ?? ''), message: String(rr.message ?? '') });
+        const message = String(rr.message ?? rr.title ?? rr.detail ?? '');
+        out.push({ code: String(rr.code ?? ''), message });
       }
     }
   }
 
-  // v1 lowercase: { errors: [{ code, message }] }
+  // v1 lowercase: { errors: [{ code, message }] } or { errors: [{ code, title }] } (Workflows API)
   if (Array.isArray(b.errors)) {
     for (const e of b.errors) {
       if (e && typeof e === 'object') {
         const ee = e as Record<string, unknown>;
-        out.push({ code: String(ee.code ?? ''), message: String(ee.message ?? '') });
+        const message = String(ee.message ?? ee.title ?? ee.detail ?? '');
+        out.push({ code: String(ee.code ?? ''), message });
       }
     }
   }
@@ -94,7 +96,8 @@ export function extractZuoraErrors(body: unknown): Array<{ code: string; message
     for (const e of b.Errors) {
       if (e && typeof e === 'object') {
         const ee = e as Record<string, unknown>;
-        out.push({ code: String(ee.Code ?? ''), message: String(ee.Message ?? '') });
+        const message = String(ee.Message ?? ee.Title ?? ee.Detail ?? '');
+        out.push({ code: String(ee.Code ?? ''), message });
       }
     }
   }
@@ -124,12 +127,23 @@ function handleAxiosError(err: unknown, method: string, path: string): never {
     log('  error body:', JSON.stringify(body, null, 2));
     const errors = extractZuoraErrors(body);
     const bodyMessage = body?.message;
-    const message =
+    let message =
       typeof bodyMessage === 'string' && bodyMessage.length > 0
         ? bodyMessage
-        : errors.length > 0
+        : errors.length > 0 && errors[0].message.length > 0
           ? errors[0].message
           : `HTTP ${status}`;
+
+    // If we ended up with a bare HTTP status but the body is non-empty, append a snippet
+    // so no error detail is ever fully swallowed when not in --debug mode
+    if (message === `HTTP ${status}` && body && typeof body === 'object' && Object.keys(body).length > 0) {
+      const snippet = JSON.stringify(body).substring(0, 500);
+      message = `HTTP ${status}: ${snippet}${snippet.length === 500 ? '...' : ''}`;
+    } else if (message === `HTTP ${status}` && body && typeof body === 'string' && body.length > 0) {
+      const snippet = body.substring(0, 500);
+      message = `HTTP ${status}: ${snippet}${snippet.length === 500 ? '...' : ''}`;
+    }
+
     const zuoraErr: ZuoraErrorResponse = {
       statusCode: status,
       message,

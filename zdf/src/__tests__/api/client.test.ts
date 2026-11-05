@@ -263,6 +263,30 @@ describe('extractZuoraErrors', () => {
   it.each([null, {}, 'string'])('returns [] for %p', (body) => {
     expect(extractZuoraErrors(body)).toEqual([]);
   });
+
+  it('extracts title field from Workflows API errors when message is absent', () => {
+    expect(
+      extractZuoraErrors({ errors: [{ title: "Workflow definition '2083376' is not found." }] })
+    ).toEqual([{ code: '', message: "Workflow definition '2083376' is not found." }]);
+  });
+
+  it('prefers message over title when both are present', () => {
+    expect(
+      extractZuoraErrors({ errors: [{ message: 'Primary message', title: 'Fallback title' }] })
+    ).toEqual([{ code: '', message: 'Primary message' }]);
+  });
+
+  it('extracts detail field as final fallback', () => {
+    expect(
+      extractZuoraErrors({ errors: [{ detail: 'Detailed error description' }] })
+    ).toEqual([{ code: '', message: 'Detailed error description' }]);
+  });
+
+  it('title/detail fallback works for reasons[] arrays too', () => {
+    expect(
+      extractZuoraErrors({ reasons: [{ code: 404, title: 'Resource not found' }] })
+    ).toEqual([{ code: '404', message: 'Resource not found' }]);
+  });
 });
 
 describe('handleAxiosError message selection via request()', () => {
@@ -290,5 +314,56 @@ describe('handleAxiosError message selection via request()', () => {
       message: 'HTTP 500',
       errors: [],
     });
+  });
+
+  it('Workflows API 404 with title field: error message contains the title, not empty', async () => {
+    mockRequest.mockRejectedValueOnce(
+      axiosErrorWithStatus(404, {
+        errors: [{ title: "Workflow definition '2083376' is not found." }],
+      })
+    );
+
+    await expect(apiGet('/workflows/2083376/export')).rejects.toMatchObject({
+      statusCode: 404,
+      message: "Workflow definition '2083376' is not found.",
+      errors: [{ code: '', message: "Workflow definition '2083376' is not found." }],
+    });
+  });
+
+  it('unknown body shape with no recognized error fields: message includes raw body snippet', async () => {
+    mockRequest.mockRejectedValueOnce(
+      axiosErrorWithStatus(500, { weird: 'boom', unexpected: 'shape' })
+    );
+
+    const rejection = await apiGet('/v1/accounts/999').catch((e) => e);
+
+    expect(rejection.statusCode).toBe(500);
+    expect(rejection.message).toMatch(/HTTP 500:/);
+    expect(rejection.message).toMatch(/weird/);
+    expect(rejection.message).toMatch(/boom/);
+  });
+
+  it('regression: existing-shape body with reasons still yields the expected message', async () => {
+    mockRequest.mockRejectedValueOnce(
+      axiosErrorWithStatus(400, { reasons: [{ code: 50000, message: 'bad request' }] })
+    );
+
+    await expect(apiGet('/v1/accounts/999')).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'bad request',
+      errors: [{ code: '50000', message: 'bad request' }],
+    });
+  });
+
+  it('body snippet truncated at 500 chars when body is large', async () => {
+    const largeBody = { data: 'x'.repeat(1000) };
+    mockRequest.mockRejectedValueOnce(axiosErrorWithStatus(500, largeBody));
+
+    const rejection = await apiGet('/v1/accounts/999').catch((e) => e);
+
+    expect(rejection.statusCode).toBe(500);
+    expect(rejection.message).toMatch(/HTTP 500:/);
+    expect(rejection.message.length).toBeLessThan(600); // snippet + "HTTP 500: " + "..."
+    expect(rejection.message).toMatch(/\.\.\.$/); // ends with ellipsis
   });
 });
