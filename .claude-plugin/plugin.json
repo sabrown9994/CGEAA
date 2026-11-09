@@ -1,7 +1,7 @@
 {
   "name": "cgeaa",
-  "description": "CarGurus Enterprise Applications Automation — a CLI development tool for working with the applications we support, with SDLC guardrails. Teaches Claude to use the `cgeaa` CLI for Salesforce (deploy/validate/test/diff/logs/rollback) and Zuora (`cgeaa zuora ...` billing-object sync), and bundles Oracle's SuiteCloud development skills for NetSuite/SuiteScript/SDF work. Additional application domains are added as new skills over time.",
-  "version": "1.2.0",
+  "description": "CarGurus Enterprise Applications Automation — a CLI development tool for working with the applications we support, with SDLC guardrails. Teaches Claude to use the `cgeaa` CLI for Salesforce (deploy/validate/test/diff/logs/rollback), Zuora (`cgeaa zuora ...` billing-object sync, including workflow list/pull/push and HTML templates), and NetSuite (`cgeaa netsuite ...` feature-scoped SDF deploys via the bundled NDF framework), and bundles Oracle's SuiteCloud development skills for NetSuite/SuiteScript/SDF authoring. Additional application domains are added as new skills over time.",
+  "version": "1.3.0",
   "author": {
     "name": "CarGurus Enterprise Applications"
   },
