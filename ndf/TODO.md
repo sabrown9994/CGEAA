@@ -121,11 +121,19 @@ production opt-in. On `main` it uploads straight to the production account.)
   `--auto-import`/`--allow-production` as appropriate. (Still deferred by decision 2026-10-22: build
   the CI pipeline only after NDF is proven safe in day-to-day manual use by the team.)
 
+- **[FinSys repo settings — ACTION REQUIRED] Add the `CGEAA_REPO_TOKEN` repository secret.** The NDF
+  workflow's "Checkout CGEAA (pinned)" step checks out `sabrown9994/CGEAA` (a separate, private repo)
+  to build the `cgeaa`/NDF tooling. The default `GITHUB_TOKEN` cannot read another repo, so a
+  **read-scoped** token (a fine-grained PAT or deploy token with read access to `sabrown9994/CGEAA`)
+  must be added as the Actions secret **`CGEAA_REPO_TOKEN`** in the FinSys repo settings. Without it,
+  every NDF workflow run fails at the CGEAA checkout step. **Prerequisite for Phase 1 end-to-end
+  testing.** The assistant cannot set repo secrets — this is a human GitHub-settings action. (Optional
+  companion: a `SUITECLOUD_CI_PASSKEY` secret; the workflow falls back to the legacy literal if unset.)
+
 - **Test the NDF CI workflow end-to-end (user roll-out validation).** The NDF-driven deploy workflow
-  exists in FinSys at `.github/workflows/netsuite-deploy-ndf.yml` on branch `cicd/netsuite` (committed,
-  not yet pushed/activated — the user pushes when ready to test). Validate before any real cutover:
-  (1) add the `CGEAA_REPO_TOKEN` secret (read access to `sabrown9994/CGEAA`); (2) push `cicd/netsuite`
-  and fork a `cicd/netsuite-test/**` branch; (3) merge a trivial script+object change and confirm the
+  is on FinSys branch `cicd/netsuite` (pushed to origin 2026-11-11). Validate before any real cutover:
+  (1) ensure the `CGEAA_REPO_TOKEN` secret is set (see item above); (2) fork a `cicd/netsuite-test/**`
+  branch off `cicd/netsuite`; (3) merge a trivial script+object change and confirm the
   run builds cgeaa, auths to `CG-intQA`, and `cgeaa netsuite deploy` scopes to exactly that change
   (inspect generated `deploy.xml`), and deploys to the sandbox **with tests skipped**
   (`netsuite_run_tests=false` / `--skip-tests`) — this is **Phase 1**, proving the deploy mechanism,
@@ -198,7 +206,7 @@ production opt-in. On `main` it uploads straight to the production account.)
   the FinSys/SuiteScript side, not CGEAA/NDF — listed here only because the two CI items above depend
   on it.
 
-- **✅ DONE ([FinSys] `cicd/netsuite` db0a5ad1 — local, pending push/MR) — Pin third-party GitHub Actions to commit SHAs in `netsuite-deploy-ndf.yml`.**
+- **✅ DONE ([FinSys] `cicd/netsuite` db0a5ad1, pushed to origin) — Pin third-party GitHub Actions to commit SHAs in `netsuite-deploy-ndf.yml`.**
   Semgrep Guardian flagged (2026-11-11, after rebasing `cicd/netsuite` onto `main`) four mutable
   action-tag references in FinSys `.github/workflows/netsuite-deploy-ndf.yml` — rule
   `github-actions-mutable-action-tag` (WARNING). A floating `@v5` tag can be silently repointed by the
