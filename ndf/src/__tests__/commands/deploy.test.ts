@@ -23,7 +23,8 @@ vi.mock('../../helpers/git.js', () => ({ getCurrentBranch: mockGetCurrentBranch 
 vi.mock('../../helpers/auth.js', () => ({ validateAuthId: mockValidateAuthId, setDefaultAuthId: mockSetDefaultAuthId }));
 vi.mock('../../helpers/suitecloud.js', () => ({ runSuitecloud: mockRunSuitecloud }));
 vi.mock('../../helpers/dependency-parser.js', () => ({ parseMissingObjectRefs: mockParseMissing }));
-vi.mock('../../helpers/build-runner.js', () => ({ runBuild: mockRunBuild }));
+const mockWarnIfSharedBranch = vi.hoisted(() => vi.fn());
+vi.mock('../../helpers/build-runner.js', () => ({ runBuild: mockRunBuild, warnIfSharedBranch: mockWarnIfSharedBranch }));
 
 import { registerDeploy } from '../../commands/deploy.js';
 
@@ -173,5 +174,29 @@ describe('dry-run', () => {
     expect(mockRunSuitecloud).toHaveBeenCalledWith(['project:validate'], expect.objectContaining({ cwd: '/proj' }));
     const importCalls = mockRunSuitecloud.mock.calls.filter((c) => (c[0] as string[])[0] === 'object:import');
     expect(importCalls.length).toBe(0);
+  });
+});
+
+describe('shared-branch warning fires once', () => {
+  it('emits shared-branch warning exactly once across multi-round deploy', async () => {
+    mockGetCurrentBranch.mockReturnValue('main');
+    mockRunSuitecloud
+      .mockReturnValueOnce({ status: 1, output: 'missing customrecord_x' })  // deploy #1 fails
+      .mockReturnValueOnce({ status: 0, output: 'imported' })                 // object:import
+      .mockReturnValueOnce({ status: 1, output: 'missing customrecord_y' })  // deploy #2 fails
+      .mockReturnValueOnce({ status: 0, output: 'imported' })                 // object:import
+      .mockReturnValueOnce({ status: 0, output: 'SUCCESS' });                 // deploy #3 ok
+    mockParseMissing
+      .mockReturnValueOnce(['customrecord_x'])
+      .mockReturnValueOnce(['customrecord_y'])
+      .mockReturnValue([]);
+
+    await makeProgram().parseAsync(['node', 'ndf', 'deploy', '--target', 'CG-UAT', '--source', 'CG-intQA', '--auto-import']);
+
+    // warnIfSharedBranch should be called exactly once (before the resolve loop starts)
+    expect(mockWarnIfSharedBranch).toHaveBeenCalledTimes(1);
+    expect(mockWarnIfSharedBranch).toHaveBeenCalledWith('/proj', 'main');
+    // runBuild should be called 3 times (once per round)
+    expect(mockRunBuild).toHaveBeenCalledTimes(3);
   });
 });

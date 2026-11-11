@@ -6,7 +6,7 @@ import { getCurrentBranch } from '../helpers/git.js';
 import { validateAuthId, setDefaultAuthId } from '../helpers/auth.js';
 import { runSuitecloud } from '../helpers/suitecloud.js';
 import { parseMissingObjectRefs } from '../helpers/dependency-parser.js';
-import { runBuild } from '../helpers/build-runner.js';
+import { runBuild, warnIfSharedBranch } from '../helpers/build-runner.js';
 import { output } from '../helpers/output.js';
 
 function ask(question: string): Promise<string> {
@@ -61,6 +61,8 @@ export function registerDeploy(program: Command): void {
         restoreAuthId = getActiveAuthId(projectDir);
         const importedObjectPaths: string[] = [];
         let source = opts.source;
+
+        warnIfSharedBranch(projectDir, opts.base);
 
         for (let round = 1; ; round++) {
           await runBuild({ projectDir, dryRun: false, base: opts.base, extraObjectPaths: importedObjectPaths });

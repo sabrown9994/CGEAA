@@ -3,6 +3,7 @@ import { createInterface } from 'readline';
 import { execSync, spawnSync } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { homedir } from 'os';
 import { writeCgeaaConfigKey } from '../helpers/config.js';
 import { output } from '../helpers/output.js';
 
@@ -22,6 +23,24 @@ function listAuthIds(): string[] {
   }
 }
 
+export function detectProjectDir(): string | undefined {
+  const candidates = [
+    process.cwd(),
+    join(process.cwd(), 'NetSuite'),
+    join(homedir(), 'Documents', 'FinTech', 'NetSuite'),
+    join(homedir(), 'Documents', 'FinSys', 'NetSuite'),
+    join(homedir(), 'FinTech', 'NetSuite'),
+    join(homedir(), 'FinSys', 'NetSuite'),
+  ];
+  return candidates.find((c) => existsSync(join(c, 'suitecloud.config.js')));
+}
+
+export function expandTilde(p: string): string {
+  if (p === '~') return homedir();
+  if (p.startsWith('~/')) return join(homedir(), p.slice(2));
+  return p;
+}
+
 export function registerSetup(program: Command): void {
   program
     .command('setup')
@@ -30,15 +49,23 @@ export function registerSetup(program: Command): void {
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       try {
         // Step 1: project dir
-        const dir = await prompt(rl,
-          'Enter the absolute path to your SDF project root (containing suitecloud.config.js): ');
-        const trimmedDir = dir.trim();
-        if (!existsSync(join(trimmedDir, 'suitecloud.config.js'))) {
-          output.error(`suitecloud.config.js not found at ${trimmedDir}. Check the path and re-run setup.`);
+        const detected = detectProjectDir();
+        const promptText = `Enter the absolute path to your SDF project root (containing suitecloud.config.js)${detected ? ` [${detected}]` : ''}: `;
+        const dir = await prompt(rl, promptText);
+        const raw = dir.trim() || detected || '';
+        const chosen = expandTilde(raw);
+
+        if (!chosen) {
+          output.error('No project directory provided and none auto-detected. Re-run setup with the absolute path to your SDF project root.');
           process.exit(1);
         }
-        writeCgeaaConfigKey('netsuite_project_dir', trimmedDir);
-        output.success(`netsuite_project_dir set to: ${trimmedDir}`);
+
+        if (!existsSync(join(chosen, 'suitecloud.config.js'))) {
+          output.error(`suitecloud.config.js not found at ${chosen}. Check the path and re-run setup.`);
+          process.exit(1);
+        }
+        writeCgeaaConfigKey('netsuite_project_dir', chosen);
+        output.success(`netsuite_project_dir set to: ${chosen}`);
 
         // Step 2: show or create auth IDs
         let authIds = listAuthIds();

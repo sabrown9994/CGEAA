@@ -3,9 +3,10 @@ import { Command } from 'commander';
 
 const mockGetProjectDir = vi.hoisted(() => vi.fn());
 const mockRunBuild = vi.hoisted(() => vi.fn());
+const mockWarnIfSharedBranch = vi.hoisted(() => vi.fn());
 
 vi.mock('../../helpers/project-dir.js', () => ({ getProjectDir: mockGetProjectDir }));
-vi.mock('../../helpers/build-runner.js', () => ({ runBuild: mockRunBuild }));
+vi.mock('../../helpers/build-runner.js', () => ({ runBuild: mockRunBuild, warnIfSharedBranch: mockWarnIfSharedBranch }));
 
 import { registerBuild } from '../../commands/build.js';
 
