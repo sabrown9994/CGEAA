@@ -82,6 +82,20 @@ FinSys workflow, `.github/workflows/netsuite-deploy-scripts.yml`, does auto-depl
 `SuiteScripts/**` files only, with no Objects, no manifest, no SDF `project:deploy`, and no
 production opt-in. On `main` it uploads straight to the production account.)
 
+**Execution guardrails (standing, set 2026-11-11):**
+1. All FinSys-repo development happens **only on the `cicd/netsuite` branch**.
+2. Before developing on `cicd/netsuite`, verify it is **up to date with `main` except the CI-pipeline
+   files** — 0 commits behind `origin/main`, divergence limited to `.github/workflows/netsuite-deploy-ndf.yml`.
+   (Verified 2026-11-11: local `cicd/netsuite` is main + 1 commit, that one file only.) If behind, sync
+   onto `main` first so the pipeline is tested against current NetSuite code.
+3. **No production deployments — test only in intQA (`CG-intQA`) and StagingUAT (`CG-UAT`).** The
+   drafted workflow's `main`→`CG-Production` path stays **dormant/gated** until an explicit prod
+   cutover is approved; exercise only qa→intQA, staging→UAT, and `cicd/netsuite-test/**`→intQA.
+4. The enhanced NDF workflow **coexists with** the legacy `netsuite-deploy-scripts.yml` (it does not
+   delete it). Goal: NDF eventually replaces it; meanwhile the legacy stays a **disable-able
+   fallback** to turn back on if the NDF workflow misbehaves. An existing workflow on `cicd/netsuite`
+   serves as the guiding template.
+
 - **GitHub Action that uses NDF for script *and* object deployment; retire the existing file-upload
   workflow.** Build a CI pipeline that runs `cgeaa netsuite deploy` on merges to FinSys environment
   branches, so deploys go through NDF's feature-scoped build (scripts **and** `src/Objects/**`),
