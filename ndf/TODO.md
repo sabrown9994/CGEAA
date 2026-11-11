@@ -104,6 +104,83 @@ production opt-in. On `main` it uploads straight to the production account.)
   the legacy `netsuite-deploy-scripts.yml` per env. Repin the workflow's CGEAA `ref` to a release tag
   before the `main` cutover.
 
+- **Scoped test execution — run only the Jest tests related to changed scripts (deploy/CI speedup).**
+  Today the FinSys `suitecloud.config.js` `beforeExecuting` hook runs the **whole** Jest suite on
+  every `project:deploy` (`SuiteCloudJestUnitTestRunner.run({})`). As the suite grows (see FINT-17160)
+  this makes every deploy/CI run slower than it needs to be. Run only the tests related to the
+  scripts a deploy actually changed.
+
+  **Enabler (verified 2026-11-11, read-only):** `SuiteCloudJestUnitTestRunner.run(args)` forwards
+  `args` straight to `jest.runCLI(args, projectFolder)`, so the hook can pass Jest selection options.
+  `jest --findRelatedTests <scriptPaths…>` selects only the test files that import those scripts.
+  Fidelity proven with the SuiteCloud preset via `jest … --listTests`:
+    - `--findRelatedTests src/FileCabinet/SuiteScripts/cg_vendor_bill_approval_mr_ss.js` → selected
+      exactly `__tests__/cg_vendor_bill_approval_mr_ss.test.js`.
+    - the same for an **untested** script (`cg_vendor_bill_approval_flip_ss.js`) → selected **no**
+      tests (confirms the empty-set → skip rule below).
+    Resolution works because the tests import their target by relative path
+    (`require('../src/FileCabinet/SuiteScripts/<script>')`); keep that convention (ties to FINT-17160).
+
+  **Recommended shape — producer/consumer split:**
+  1. **[CGEAA / NDF — `ndf/src/commands/deploy.ts`]** NDF already computes `changed.scripts`
+     (`helpers/git.ts getChangedFiles`, with the correct `--base`, local and CI). Export those
+     changed SuiteScript paths (absolute, delimiter-joined) to the `project:deploy` subprocess as a
+     new env var (e.g. `NDF_CHANGED_SCRIPTS`) on the **same `env` object that already carries
+     `NDF_SKIP_TESTS`** (`deploy.ts:56-70`). Scripts only (`src/FileCabinet/SuiteScripts/**`); objects
+     have no unit tests. The GitHub Action needs **no** change — this rides inside `cgeaa netsuite
+     deploy` for both local and CI. Ship via the NDF dev flow with Vitest coverage.
+  2. **[FinSys repo — `NetSuite/suitecloud.config.js` hook]** when `NDF_SKIP_TESTS !== 'true'`, read
+     `NDF_CHANGED_SCRIPTS` and:
+       - non-empty → `run({ findRelatedTests: true, _: [<paths>] })` (only related tests);
+       - **empty** (object/config-only change, or no scripts changed) → **skip** — run nothing, do
+         NOT fall back to the full suite (decision 2026-11-11);
+       - **absent** (hook invoked outside NDF, e.g. a direct `suitecloud project:deploy`) → `run({})`
+         full suite, preserving today's behavior for non-NDF callers.
+     Track this FinSys-side change against **FINT-17160** (which also creates the suite this scoping
+     runs over). See the dedicated FinSys item below.
+
+  **Decisions (2026-11-11):**
+    - Empty changed-scripts set → **skip** (no full-suite fallback).
+    - **Production is scoped too** — prod deploys run only the related tests, identical to every other
+      env (no full-suite-on-prod). NDF exports `NDF_CHANGED_SCRIPTS` regardless of `--target`, and the
+      hook treats prod like any other environment.
+    - Back-compat preserved only for the **absent** var (non-NDF caller) → full suite.
+
+  **Sequencing:** scoping only pays off once real coverage exists — **FINT-17160** ("Create NetSuite
+  Script Documentation and Test Suite", epic FINT-16342) is the prerequisite. Build/validate scoped
+  execution alongside or after it. Validate end-to-end: a changed tested script runs only its test; a
+  changed untested script runs nothing; an object-only change runs nothing; a changed shared lib runs
+  all transitively-related tests.
+
+- **[FinSys repo] `NetSuite/suitecloud.config.js` hook — consume `NDF_CHANGED_SCRIPTS` for scoped
+  test runs (FINT-17160).** The consumer half of the "Scoped test execution" item above: when
+  `NDF_SKIP_TESTS` is unset, branch on `NDF_CHANGED_SCRIPTS` → `findRelatedTests` for a non-empty
+  list, **skip** for an empty list, full suite when the var is absent. Depends on the NDF producer
+  change (exporting `NDF_CHANGED_SCRIPTS`) and on FINT-17160 delivering the test suite this scopes
+  over. FinSys-repo change (same file the `NDF_SKIP_TESTS` gate already lives in); not a CGEAA edit.
+
+- **[FinSys repo] Build out the NetSuite Jest test suite + script docs (FINT-17160).** Today there
+  are ~3 real test files vs ~108 SuiteScripts, so the deploy/CI test gate is near-cosmetic. FINT-17160
+  ("Create NetSuite Script Documentation and Test Suite", epic FINT-16342) tracks authoring Jest
+  coverage (and design docs) for the SuiteScripts. Keep the existing `__tests__/` + relative-`require`
+  convention so NDF/CI run them automatically (and so `findRelatedTests` scoping resolves). Owned by
+  the FinSys/SuiteScript side, not CGEAA/NDF — listed here only because the two CI items above depend
+  on it.
+
+- **[FinSys repo] Pin third-party GitHub Actions to commit SHAs in `netsuite-deploy-ndf.yml`.**
+  Semgrep Guardian flagged (2026-11-11, after rebasing `cicd/netsuite` onto `main`) four mutable
+  action-tag references in FinSys `.github/workflows/netsuite-deploy-ndf.yml` — rule
+  `github-actions-mutable-action-tag` (WARNING). A floating `@v5` tag can be silently repointed by the
+  action owner, a supply-chain risk (cf. the trivy-action / kics-github-action compromises). Pin each
+  to a full 40-char commit SHA, keeping a trailing `# v5` comment:
+    - line 36 `uses: actions/checkout@v5`
+    - line 47 `uses: actions/setup-node@v5`
+    - line 52 `uses: actions/setup-java@v5`
+    - line 62 `uses: actions/checkout@v5`
+  This is a FinSys-repo change on branch `cicd/netsuite` (the only file that branch diverges from
+  `main` by). Fold it into the existing NDF workflow commit or add a follow-up commit. Do this before
+  the `main` cutover, alongside repinning the CGEAA `ref` to a release tag (see item above).
+
 - **Guard against building from a shared branch.** Complementary safety: NDF could warn (or require
   a confirm) when `build`/`deploy` runs with `HEAD` on a known shared/integration branch
   (`main`/`qa`/`uat`) rather than a feature branch, since that's the scenario where the diff scope is
