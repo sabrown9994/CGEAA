@@ -58,6 +58,19 @@ production deploy, which is blocked on valid production auth (see below).
   **supervised** first deploy from `main` with `--base <pre-merge-SHA> --allow-production`. Until the
   token is refreshed, production is unreachable for an operational reason (auth), not a code one.
 
+- **`cgeaa netsuite envs` should not hard-fail when `netsuite_production_auth_id` is unset.** `envs`
+  calls `getProductionAuthId()` before listing (`commands/envs.ts:19`), purely to render the `[PROD]`
+  marker (`envs.ts:24`), so a half-configured machine (project dir set, production auth id not) makes
+  a read-only listing throw `netsuite_production_auth_id not configured. Run 'cgeaa netsuite setup'…`
+  and print nothing. Fix: `envs` should still list the environments when the prod id is unset —
+  omit/soften the `[PROD]` marker and print a one-line hint ("production not yet configured — run
+  `cgeaa netsuite setup`") instead of throwing. Keep the hard requirement on `switch`/`deploy`, where
+  it is a genuine safety gate (the production guard). Context: the half-configured state arises
+  because `setup` writes `netsuite_project_dir` (Step 1) before `netsuite_production_auth_id`
+  (Step 3), so an incomplete `setup` run (bailed at the auth step / Ctrl-C) leaves the prod id unset;
+  making `setup` write both keys atomically was **considered and declined (2026-11-11)** — the chosen
+  remedy is this graceful `envs` degradation plus the re-run-setup / manual-config-line workaround.
+
 ---
 
 ## CI/CD Roadmap
