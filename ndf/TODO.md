@@ -58,7 +58,7 @@ production deploy, which is blocked on valid production auth (see below).
   **supervised** first deploy from `main` with `--base <pre-merge-SHA> --allow-production`. Until the
   token is refreshed, production is unreachable for an operational reason (auth), not a code one.
 
-- **`cgeaa netsuite envs` should not hard-fail when `netsuite_production_auth_id` is unset.** `envs`
+- **✅ DONE (`rollout` 9703ce6) — `cgeaa netsuite envs` no longer hard-fails when `netsuite_production_auth_id` is unset.** `envs`
   calls `getProductionAuthId()` before listing (`commands/envs.ts:19`), purely to render the `[PROD]`
   marker (`envs.ts:24`), so a half-configured machine (project dir set, production auth id not) makes
   a read-only listing throw `netsuite_production_auth_id not configured. Run 'cgeaa netsuite setup'…`
@@ -198,7 +198,7 @@ production opt-in. On `main` it uploads straight to the production account.)
   the FinSys/SuiteScript side, not CGEAA/NDF — listed here only because the two CI items above depend
   on it.
 
-- **[FinSys repo] Pin third-party GitHub Actions to commit SHAs in `netsuite-deploy-ndf.yml`.**
+- **✅ DONE ([FinSys] `cicd/netsuite` db0a5ad1 — local, pending push/MR) — Pin third-party GitHub Actions to commit SHAs in `netsuite-deploy-ndf.yml`.**
   Semgrep Guardian flagged (2026-11-11, after rebasing `cicd/netsuite` onto `main`) four mutable
   action-tag references in FinSys `.github/workflows/netsuite-deploy-ndf.yml` — rule
   `github-actions-mutable-action-tag` (WARNING). A floating `@v5` tag can be silently repointed by the
@@ -212,7 +212,9 @@ production opt-in. On `main` it uploads straight to the production account.)
   `main` by). Fold it into the existing NDF workflow commit or add a follow-up commit. Do this before
   the `main` cutover, alongside repinning the CGEAA `ref` to a release tag (see item above).
 
-- **Guard against building from a shared branch.** Complementary safety: NDF could warn (or require
+- **✅ DONE (`rollout` 9703ce6) — Guard against building from a shared branch.** Implemented as the
+  non-blocking `warnIfSharedBranch()` helper, called once per `build`/`deploy`. Original intent:
+  NDF could warn (or require
   a confirm) when `build`/`deploy` runs with `HEAD` on a known shared/integration branch
   (`main`/`qa`/`uat`) rather than a feature branch, since that's the scenario where the diff scope is
   likely unintended. Document the standing rule in the meantime: **run `build`/`deploy` from your
