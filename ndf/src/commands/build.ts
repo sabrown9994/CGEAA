@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { getProjectDir } from '../helpers/project-dir.js';
-import { runBuild } from '../helpers/build-runner.js';
+import { runBuild, warnIfSharedBranch } from '../helpers/build-runner.js';
 import { output } from '../helpers/output.js';
 
 export function registerBuild(program: Command): void {
@@ -12,6 +12,7 @@ export function registerBuild(program: Command): void {
     .action(async (opts: { dryRun?: boolean; base?: string }) => {
       try {
         const projectDir = getProjectDir();
+        warnIfSharedBranch(projectDir, opts.base);
         await runBuild({ projectDir, dryRun: opts.dryRun ?? false, base: opts.base });
       } catch (err) {
         output.error(err instanceof Error ? err.message : String(err));

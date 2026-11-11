@@ -1,6 +1,6 @@
 import { writeFileSync } from 'fs';
 import { join } from 'path';
-import { getMergeBase, getChangedFiles } from './git.js';
+import { getMergeBase, getChangedFiles, getCurrentBranch } from './git.js';
 import { generateDeployXml, generateManifestXml, objectIdFromPath } from './xml.js';
 import { runSuitecloud } from './suitecloud.js';
 import { output } from './output.js';
@@ -10,6 +10,14 @@ export interface BuildOptions {
   dryRun: boolean;
   extraObjectPaths?: string[];
   base?: string;
+}
+
+export function warnIfSharedBranch(projectDir: string, base?: string): void {
+  const SHARED_BRANCHES = new Set(['main', 'master', 'qa', 'uat', 'staging']);
+  const currentBranch = getCurrentBranch(projectDir);
+  if (SHARED_BRANCHES.has(currentBranch) && (base ?? 'main') === 'main') {
+    output.warn(`Running from shared branch '${currentBranch}' with the default base 'main' — the diff scope may be empty (on main) or over-broad (on a long-lived env branch). Run from a feature branch, or pass --base <ref> to scope deliberately.`);
+  }
 }
 
 export async function runBuild(opts: BuildOptions): Promise<void> {
