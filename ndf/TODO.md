@@ -96,6 +96,20 @@ production opt-in. On `main` it uploads straight to the production account.)
    fallback** to turn back on if the NDF workflow misbehaves. An existing workflow on `cicd/netsuite`
    serves as the guiding template.
 
+**Phasing (ordered — set 2026-11-11):**
+- **Phase 1 — Prove the deploy pipeline with tests OFF.** Get the NDF workflow building and deploying
+  scripts **and** objects to the sandboxes (qa→`CG-intQA`, staging→`CG-UAT`, `cicd/netsuite-test/**`→
+  `CG-intQA`) with Jest **skipped** (`netsuite_run_tests=false` / `--skip-tests` → `NDF_SKIP_TESTS=true`).
+  Rationale: the suite barely exists (~3 tests vs ~108 scripts), so the first milestone is proving
+  build→auth→scope→deploy end-to-end **without** depending on a test gate. Prod path stays dormant.
+- **Phase 2 — Build the Jest test suite (FINT-17160).** Only after Phase 1 works: author real Jest
+  coverage (and script docs) for the SuiteScripts, keeping the `__tests__/` + relative-`require`
+  convention. See the dedicated FinSys item below.
+- **Phase 3 — Turn the test gate on + scope it.** Stop skipping tests (unset the skip), then layer on
+  the "Scoped test execution" plan (`NDF_CHANGED_SCRIPTS` → `findRelatedTests`) so deploys run only
+  the tests related to the changed scripts.
+- **(Later) Production cutover** — only after the above is proven and with explicit approval (guardrail 3).
+
 - **GitHub Action that uses NDF for script *and* object deployment; retire the existing file-upload
   workflow.** Build a CI pipeline that runs `cgeaa netsuite deploy` on merges to FinSys environment
   branches, so deploys go through NDF's feature-scoped build (scripts **and** `src/Objects/**`),
@@ -113,10 +127,12 @@ production opt-in. On `main` it uploads straight to the production account.)
   (1) add the `CGEAA_REPO_TOKEN` secret (read access to `sabrown9994/CGEAA`); (2) push `cicd/netsuite`
   and fork a `cicd/netsuite-test/**` branch; (3) merge a trivial script+object change and confirm the
   run builds cgeaa, auths to `CG-intQA`, and `cgeaa netsuite deploy` scopes to exactly that change
-  (inspect generated `deploy.xml`), runs Jest, and deploys to the sandbox; (4) negative test — a
-  change referencing a missing object must fail loudly; (5) cut over qa → staging → main, deactivating
-  the legacy `netsuite-deploy-scripts.yml` per env. Repin the workflow's CGEAA `ref` to a release tag
-  before the `main` cutover.
+  (inspect generated `deploy.xml`), and deploys to the sandbox **with tests skipped**
+  (`netsuite_run_tests=false` / `--skip-tests`) — this is **Phase 1**, proving the deploy mechanism,
+  not the test gate (tests are turned on in Phase 3, after the suite exists); (4) negative test — a
+  change referencing a missing object must fail loudly; (5) cut over qa → staging (sandboxes only;
+  `main`/prod gated per guardrail 3), deactivating the legacy `netsuite-deploy-scripts.yml` per env as
+  each is proven. Repin the workflow's CGEAA `ref` to a release tag before any `main` cutover.
 
 - **Scoped test execution — run only the Jest tests related to changed scripts (deploy/CI speedup).**
   Today the FinSys `suitecloud.config.js` `beforeExecuting` hook runs the **whole** Jest suite on
@@ -173,7 +189,8 @@ production opt-in. On `main` it uploads straight to the production account.)
   change (exporting `NDF_CHANGED_SCRIPTS`) and on FINT-17160 delivering the test suite this scopes
   over. FinSys-repo change (same file the `NDF_SKIP_TESTS` gate already lives in); not a CGEAA edit.
 
-- **[FinSys repo] Build out the NetSuite Jest test suite + script docs (FINT-17160).** Today there
+- **[FinSys repo] Build out the NetSuite Jest test suite + script docs (FINT-17160) — PHASE 2 (do
+  after Phase 1 proves the test-less workflow).** Today there
   are ~3 real test files vs ~108 SuiteScripts, so the deploy/CI test gate is near-cosmetic. FINT-17160
   ("Create NetSuite Script Documentation and Test Suite", epic FINT-16342) tracks authoring Jest
   coverage (and design docs) for the SuiteScripts. Keep the existing `__tests__/` + relative-`require`
