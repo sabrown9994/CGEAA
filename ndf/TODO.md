@@ -130,9 +130,21 @@ production opt-in. On `main` it uploads straight to the production account.)
   - **Pilot:** added `cg_email_library_ss.test.js` (4 tests) proving the pattern replicates to an untested
     script. Gotcha documented: `jest.clearAllMocks()` clears call records but NOT `mockImplementation` —
     use `mockImplementationOnce` for throw-cases so they don't leak into later tests.
-  - **Ownership (user decision 2026-11-16):** sequence is fix stale tests → get the Action green with the
-    gate on → author ~4-5 major-archetype exemplars → then require every future PR to add tests (coverage
-    grows organically, enforced by the gate). The long tail is NOT a write-all-109 effort up front.
+  - **Archetype exemplars (step 3 — done 2026-11-16):** one clean exemplar per previously-uncovered
+    archetype — Workflow Action (`cg_journal_approval_check_ss`), RESTlet (`torii_restlet_v1`), Client
+    Script (`CG_VBJE_CS` validateLine), Scheduled (`cg_journal_entry_approver_update_ss`), User Event
+    (`cg_payment_create_jefee_ue`). Suite now **9 files / 58 tests, green**. Coverage spans suitelet,
+    map/reduce, library, workflow-action, restlet, user-event, client-script, scheduled — the pattern is
+    established for the FINT-17160 build-out.
+  - **Bug surfaced by the RESTlet exemplar (needs a FinSys fix):** `torii_restlet_v1.js` error handler calls
+    `reply({error,stack})`, but `reply` is `const`-scoped INSIDE the `try`, so every error path throws
+    `ReferenceError: reply is not defined` instead of returning the intended error object. Pinned with a
+    labeled characterization test; fix = hoist `reply` to function scope, then flip that test to assert the
+    returned error object. (A latent scheduled-script bug was also noted and avoided: `cg_vendor_update_sch.js`
+    imports `'N.log'` instead of `'N/log'`.)
+  - **Ownership (user decision 2026-11-16):** sequence is ✅ fix stale tests → ✅ get the Action green with the
+    gate on → ✅ author major-archetype exemplars → ⏭️ require every future PR to add tests (coverage grows
+    organically, enforced by the gate). The long tail is NOT a write-all-109 effort up front.
 - **Phase 3 — Turn the test gate on + scope it.** Stop skipping tests (unset the skip), then layer on
   the "Scoped test execution" plan (`NDF_CHANGED_SCRIPTS` → `findRelatedTests`) so deploys run only
   the tests related to the changed scripts.
