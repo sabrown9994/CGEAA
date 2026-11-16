@@ -97,11 +97,25 @@ production opt-in. On `main` it uploads straight to the production account.)
    serves as the guiding template.
 
 **Phasing (ordered — set 2026-11-11):**
-- **Phase 1 — Prove the deploy pipeline with tests OFF.** Get the NDF workflow building and deploying
-  scripts **and** objects to the sandboxes (qa→`CG-intQA`, staging→`CG-UAT`, `cicd/netsuite-test/**`→
-  `CG-intQA`) with Jest **skipped** (`netsuite_run_tests=false` / `--skip-tests` → `NDF_SKIP_TESTS=true`).
-  Rationale: the suite barely exists (~3 tests vs ~108 scripts), so the first milestone is proving
-  build→auth→scope→deploy end-to-end **without** depending on a test gate. Prod path stays dormant.
+- **Phase 1 — Prove the deploy pipeline with tests OFF. ✅ PROVEN 2026-11-16.** Got the NDF workflow
+  building and deploying scripts **and** objects to the sandboxes (qa→`CG-intQA`, staging→`CG-UAT`,
+  `cicd/netsuite-test/**`→`CG-intQA`) with Jest **skipped** (`netsuite_run_tests=false` / `--skip-tests`
+  → `NDF_SKIP_TESTS=true`). Rationale: the suite barely exists (~3 tests vs ~108 scripts), so the first
+  milestone is proving build→auth→scope→deploy end-to-end **without** depending on a test gate. Prod
+  path stays dormant.
+  - Validated on a `cicd/netsuite-test/phase1-smoke` branch (now deleted): a one-script change deployed
+    end-to-end to `CG-intQA` — `account:setup:ci` auth ✓, `NDF_SKIP_TESTS=true` honored at both the NDF
+    layer and the `suitecloud.config.js` Jest hook ✓, `deploy.xml`/`manifest.xml` auto-generated ✓,
+    diff scoped to exactly the one changed script (`Upload file -- …/CB_JE_AMORT_MU.js`) ✓,
+    `Installation COMPLETE` ✓. Sandbox restored afterward (revert redeployed the clean file; test
+    branch deleted local+remote) per the dev-flow cleanup guardrail.
+  - Plumbing fixes shipped on `cicd/netsuite` to get there (none were NDF-logic bugs — all CI-env gaps):
+    (1) build step uses `npm install`, not `npm ci` (CGEAA gitignores `ndf/package-lock.json`);
+    (2) install SuiteCloud CLI fresh via `npm install -g --acceptSuiteCloudSDKLicense @oracle/suitecloud-cli@^3.1.2`
+    (the vendored `NetSuite/node_modules` copy lacks the postinstall-fetched SDK JAR — do NOT also add the
+    vendored `.bin` to PATH or the JAR-less copy shadows the good one); (3) base-SHA resolution falls back
+    to `HEAD~1` when `github.event.before` is all-zeros, empty, OR unreachable (force-push/rebase/gc), with
+    the `~` resolved to a plain SHA before `--base` (NDF's injection guard rejects `~`).
 - **Phase 2 — Build the Jest test suite (FINT-17160).** Only after Phase 1 works: author real Jest
   coverage (and script docs) for the SuiteScripts, keeping the `__tests__/` + relative-`require`
   convention. See the dedicated FinSys item below.
@@ -132,15 +146,17 @@ production opt-in. On `main` it uploads straight to the production account.)
 
 - **Test the NDF CI workflow end-to-end (user roll-out validation).** The NDF-driven deploy workflow
   is on FinSys branch `cicd/netsuite` (pushed to origin 2026-11-11). Validate before any real cutover:
-  (1) ensure the `CGEAA_REPO_TOKEN` secret is set (see item above); (2) fork a `cicd/netsuite-test/**`
-  branch off `cicd/netsuite`; (3) merge a trivial script+object change and confirm the
-  run builds cgeaa, auths to `CG-intQA`, and `cgeaa netsuite deploy` scopes to exactly that change
-  (inspect generated `deploy.xml`), and deploys to the sandbox **with tests skipped**
-  (`netsuite_run_tests=false` / `--skip-tests`) — this is **Phase 1**, proving the deploy mechanism,
-  not the test gate (tests are turned on in Phase 3, after the suite exists); (4) negative test — a
-  change referencing a missing object must fail loudly; (5) cut over qa → staging (sandboxes only;
+  (1) ✅ `CGEAA_REPO_TOKEN` secret set (user added it 2026-11-16); (2) ✅ forked a
+  `cicd/netsuite-test/phase1-smoke` branch off `cicd/netsuite`; (3) ✅ merged a trivial script change and
+  confirmed the run builds cgeaa, auths to `CG-intQA`, and `cgeaa netsuite deploy` scopes to exactly that
+  change (one script uploaded, `deploy.xml`/`manifest.xml` auto-generated), deploying to the sandbox
+  **with tests skipped** (`NDF_SKIP_TESTS=true`) — **Phase 1 proven 2026-11-16**, deploy mechanism only,
+  not the test gate (tests turn on in Phase 3, after the suite exists); **(4) REMAINING — negative test**:
+  a change referencing a missing object must fail loudly (no silent import, since the workflow passes no
+  `--source`/`--auto-import`); **(5) REMAINING — env cutovers**: cut over qa → staging (sandboxes only;
   `main`/prod gated per guardrail 3), deactivating the legacy `netsuite-deploy-scripts.yml` per env as
-  each is proven. Repin the workflow's CGEAA `ref` to a release tag before any `main` cutover.
+  each is proven. Repin the workflow's CGEAA `ref` to a release tag (or the current `main` SHA) before any
+  `main` cutover — it is pinned to rollout HEAD `b12e503` for the dev cycle.
 
 - **Scoped test execution — run only the Jest tests related to changed scripts (deploy/CI speedup).**
   Today the FinSys `suitecloud.config.js` `beforeExecuting` hook runs the **whole** Jest suite on
