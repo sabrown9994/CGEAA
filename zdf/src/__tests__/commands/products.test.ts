@@ -4,7 +4,8 @@ import { Command } from 'commander';
 const mockPost = vi.hoisted(() => vi.fn());
 const mockPut = vi.hoisted(() => vi.fn());
 const mockDelete = vi.hoisted(() => vi.fn());
-vi.mock('../../api/client.js', () => ({ apiGet: vi.fn(), apiPost: mockPost, apiPut: mockPut, apiDelete: mockDelete, apiQuery: vi.fn(), setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
+const mockApiQuery = vi.hoisted(() => vi.fn());
+vi.mock('../../api/client.js', () => ({ apiGet: vi.fn(), apiPost: mockPost, apiPut: mockPut, apiDelete: mockDelete, apiQuery: mockApiQuery, setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
 
 const mockWrite = vi.hoisted(() => vi.fn());
 const mockRead = vi.hoisted(() => vi.fn());
@@ -54,19 +55,41 @@ function makeProgram() {
 
 beforeEach(() => { vi.clearAllMocks(); });
 
+const INTERNAL_ID = '2c92c0f965ff2d4201660fb2b2ca7b23';
+
 describe('zdf pull product', () => {
   it('calls resolveAndSync with pull action and succeeds when the top-level fetch succeeds', async () => {
     mockResolve.mockResolvedValue(true);
-    await makeProgram().parseAsync(['node', 'zdf', 'pull', 'product', 'prod-001']);
-    expect(mockResolve).toHaveBeenCalledWith('product', 'prod-001', 'pull');
+    await makeProgram().parseAsync(['node', 'zdf', 'pull', 'product', INTERNAL_ID]);
+    expect(mockResolve).toHaveBeenCalledWith('product', INTERNAL_ID, 'pull');
   });
 
   it('throws and exits non-zero without printing success when the top-level fetch fails', async () => {
     mockResolve.mockResolvedValue(false);
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
     await expect(
-      makeProgram().parseAsync(['node', 'zdf', 'pull', 'product', 'prod-001'])
+      makeProgram().parseAsync(['node', 'zdf', 'pull', 'product', INTERNAL_ID])
     ).rejects.toThrow('exit');
+    exitSpy.mockRestore();
+  });
+
+  it('resolves a SKU/Name key to an internal id via ZOQL before calling resolveAndSync', async () => {
+    mockApiQuery.mockResolvedValue([{ Id: INTERNAL_ID }]);
+    mockResolve.mockResolvedValue(true);
+    await makeProgram().parseAsync(['node', 'zdf', 'pull', 'product', 'PriceVantage']);
+    expect(mockApiQuery).toHaveBeenCalledWith(
+      `SELECT Id FROM Product WHERE SKU = 'PriceVantage' OR Name = 'PriceVantage'`
+    );
+    expect(mockResolve).toHaveBeenCalledWith('product', INTERNAL_ID, 'pull');
+  });
+
+  it('throws a not-found error and never calls resolveAndSync when the key matches nothing', async () => {
+    mockApiQuery.mockResolvedValue([]);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    await expect(
+      makeProgram().parseAsync(['node', 'zdf', 'pull', 'product', 'NoSuchSku'])
+    ).rejects.toThrow('exit');
+    expect(mockResolve).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
 });
@@ -102,6 +125,21 @@ function commerceProductBody() {
 // (setEnvEntry) when storing the _zdf map, so tests must not share one mutable fixture object
 // across assertions/tests.
 const COMMERCE_PRODUCT_BODY = commerceProductBody();
+
+describe('zdf list products', () => {
+  it('prints a readable Id / SKU / Name / EffectiveStartDate row per product', async () => {
+    mockApiQuery.mockResolvedValue([
+      { Id: INTERNAL_ID, SKU: 'PTL-EDG', Name: 'PriceVantage', EffectiveStartDate: '2026-01-01' },
+    ]);
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'products']);
+    expect(mockApiQuery).toHaveBeenCalledWith('SELECT Id, SKU, Name, EffectiveStartDate FROM Product');
+  });
+
+  it('prints a graceful message when no products are found', async () => {
+    mockApiQuery.mockResolvedValue([]);
+    await expect(makeProgram().parseAsync(['node', 'zdf', 'list', 'products'])).resolves.not.toThrow();
+  });
+});
 
 describe('zdf create product', () => {
   it('posts the file body verbatim to /commerce/products and renames the file to the returned id', async () => {

@@ -333,6 +333,36 @@ describe('zdf list workflows', () => {
     expect(output.success).toHaveBeenCalledWith('Fetched 0 workflows.');
   });
 
+  it('--name filters the printed rows to a case-insensitive substring match', async () => {
+    mockGet.mockResolvedValue({
+      data: [
+        { id: 1, name: 'CoOp Rebate Workflow', status: 'Active', active_version: { version: '1.0' } },
+        { id: 2, name: 'Invoice Cleanup', status: 'Draft', active_version: { version: '2.1' } },
+        { id: 3, name: 'coop rebate v2', status: 'Active', active_version: { version: '3.0' } },
+      ],
+      pagination: { page: 1, page_length: 50, total_count: 3, next_page: null },
+    });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'workflows', '--name', 'CoOp Rebate']);
+
+    expect(output.info).toHaveBeenCalledWith('1  CoOp Rebate Workflow  Active  v1.0');
+    expect(output.info).toHaveBeenCalledWith('3  coop rebate v2  Active  v3.0');
+    expect(output.info).not.toHaveBeenCalledWith(expect.stringContaining('Invoice Cleanup'));
+    expect(output.success).toHaveBeenCalledWith('Fetched 3 workflows (2 matching "CoOp Rebate").');
+  });
+
+  it('--name with no matches prints a graceful message, not an error', async () => {
+    mockGet.mockResolvedValue({
+      data: [{ id: 1, name: 'Invoice Cleanup', status: 'Draft', active_version: { version: '1.0' } }],
+      pagination: { page: 1, page_length: 50, total_count: 1, next_page: null },
+    });
+
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'workflows', '--name', 'NoSuchWorkflow']);
+
+    expect(output.info).toHaveBeenCalledWith('No workflows found matching --name "NoSuchWorkflow".');
+    expect(output.success).toHaveBeenCalledWith('Fetched 1 workflows (0 matching "NoSuchWorkflow").');
+  });
+
   it('handles missing optional fields gracefully', async () => {
     mockGet.mockResolvedValue({
       data: [

@@ -125,6 +125,16 @@ Product catalog child lookups use ZOQL via `apiQuery<T>(zoql)`:
 `apiQuery` does NOT honor ZOQL `LIMIT` clauses — `/v1/action/query` paginates all matching
 rows regardless. Use `APIQUERY_MAX_ROWS` / `--max-rows` to bound pagination.
 
+**Natural-key resolution for `pull` (catalog).** `pull product|product-rate-plan|product-rate-plan-charge`
+accepts a natural key (SKU/Name) OR an internal id. `resolveCatalogId(resource, keyOrId)`
+(`src/helpers/catalog-resolve.ts`) returns the arg unchanged if it matches a Zuora internal id
+(`/^[0-9a-f]{32}$/i`), else ZOQL-resolves it: product by `SELECT Id FROM Product WHERE SKU = '…' OR
+Name = '…'`, rate-plan/charge by `Name`. 0 rows → clear not-found error; >1 → ambiguous error listing
+the candidate ids. Keys are single-quote-escaped via `escapeZoqlString` (extracted from `upsert.ts`
+`searchByKey`). **Limitation:** a SKU/Name that is itself 32-hex is treated as an id (the object-GET
+then fails loudly — never a silent wrong record). `list products` (`SELECT Id, SKU, Name,
+EffectiveStartDate FROM Product`) is the discovery path for finding the current id.
+
 ### Invoice / credit-memo / debit-memo items
 
 Sub-items are fetched and **embedded inline** in the pulled file for human reference
@@ -206,6 +216,21 @@ Zuora has no PUT endpoint for bill runs. `push bill-run` re-fetches (same as pul
 writing anything. **There is no `delete bill-run` command** (removed 2026-08-21): Zuora only
 deletes Pending/Canceled runs, but an API-created run reaches Completed almost immediately, so a
 delete would always be rejected — the command was removed instead of left as a failing stub.
+
+### Data Query job creation body
+
+`create data-query` posts `{ query, outputFormat: 'JSON', compression: 'NONE', retries: 3,
+output: { target: 's3' } }` to `POST /query/jobs`. **LIVE-VERIFIED on intQA 2026-11-16** by probing
+each variant: the job submits (200) and polls to `queryStatus: completed` with a pre-signed `dataFile`
+URL. **All five fields are required** — `query`, `outputFormat` (JSON|CSV|TSV), `compression`
+(NONE|GZIP), `retries`, and `output.target`. `target: 's3'` means **Zuora's own managed result store**
+(not a customer S3 bucket); Zuora writes the result there and hands back the `dataFile` URL.
+**Every body missing `output` 400s `"Unable to process JSON"`** — verified for `{query,outputFormat,
+compression}` (the field-rename-only fix), `{…,retries}` (no output), and `{query}` alone. So do NOT
+drop `output` or `retries`. (The original `{ queryString }` was wrong on two counts — field name AND
+the missing `output`/`retries`.) **Known limitation:** the CLI writes the job object (incl. the
+`dataFile` URL) but does not yet download the result file — fetching/parsing `dataFile` is a future
+enhancement.
 
 ### Workflows API — export/import model
 
@@ -327,9 +352,9 @@ Use `--no-dependency` to skip all traversal. Essential for large accounts.
 | subscription | ✓ | ✓ | — (removed; use Orders API) | — (removed; no Zuora DELETE endpoint) | |
 | order | ✓ | ✓ (Draft/Scheduled only) | ✓ | ✓ | ✓ |
 | order-line-item | ✓ | ✓ | | | |
-| product | ✓ | ✓ | ✓ (Commerce API `POST /commerce/products`) | ✓ (`DELETE /v1/object/product/{id}`) | |
-| product-rate-plan | ✓ | ✓ | ✓ (`POST /v1/object/product-rate-plan`) | ✓ | |
-| product-rate-plan-charge | ✓ | ✓ | ✓ (requires `POBIdentifier__c` + `ProductRatePlanChargeTierData`) | ✓ | |
+| product | ✓ (SKU/Name or id) | ✓ | ✓ (Commerce API `POST /commerce/products`) | ✓ (`DELETE /v1/object/product/{id}`) | ✓ (`list products`) |
+| product-rate-plan | ✓ (Name or id) | ✓ | ✓ (`POST /v1/object/product-rate-plan`) | ✓ | |
+| product-rate-plan-charge | ✓ (Name or id) | ✓ | ✓ (requires `POBIdentifier__c` + `ProductRatePlanChargeTierData`) | ✓ | |
 | invoice | ✓ | ✓ | ✓ (`POST /v1/invoices`; accounting fields required in body) | ✓ (cancel-then-delete; disappearance poll) | |
 | credit-memo | ✓ | ✓ | ✓ (`--invoice <id>` required; `skuName` per item) | ✓ (Draft→cancel→delete; Cancelled direct; Posted rejected) | |
 | debit-memo | ✓ | ✓ | ✓ (`--invoice <id>` required; `skuName` per item) | ✓ (Draft→cancel→delete; Cancelled direct; Posted rejected) | |

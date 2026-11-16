@@ -51,18 +51,29 @@ describe('zdf create data-query', () => {
   it('reads .sql file, submits job, polls, writes results JSON', async () => {
     vi.useFakeTimers();
     mockRead.mockReturnValue('SELECT id FROM Account');
-    mockPost.mockResolvedValue({ id: 'job-new' });
+    // Data Query wraps submit + poll responses under `data` (matches the live intQA shape).
+    mockPost.mockResolvedValue({ data: { id: 'job-new' } });
     mockGet
-      .mockResolvedValueOnce({ id: 'job-new', queryStatus: 'in_progress' })
-      .mockResolvedValueOnce({ id: 'job-new', queryStatus: 'completed', data: [{ id: '1' }] });
+      .mockResolvedValueOnce({ data: { id: 'job-new', queryStatus: 'in_progress' } })
+      .mockResolvedValueOnce({ data: { id: 'job-new', queryStatus: 'completed', dataFile: 'https://zuora.example/result.jsonl', outputRows: 1 } });
 
     const parsePromise = makeProgram().parseAsync(['node', 'zdf', 'create', 'data-query', 'my-query']);
     await vi.runAllTimersAsync();
     await parsePromise;
 
     expect(mockRead).toHaveBeenCalledWith('data-query', 'my-query', 'sql');
-    expect(mockPost).toHaveBeenCalledWith('/query/jobs', { queryString: 'SELECT id FROM Account' });
-    expect(mockWrite).toHaveBeenCalledWith('data-query', 'job-new', expect.objectContaining({ data: [{ id: '1' }] }));
+    // The live-verified Data Query job-creation body (intQA 2026-11-16): query, outputFormat,
+    // compression, retries, and a required output.target ('s3' = Zuora's managed result store).
+    // Omitting output or retries 400s "Unable to process JSON".
+    const [, body] = mockPost.mock.calls[0];
+    expect(body).toEqual({
+      query: 'SELECT id FROM Account',
+      outputFormat: 'JSON',
+      compression: 'NONE',
+      retries: 3,
+      output: { target: 's3' },
+    });
+    expect(mockWrite).toHaveBeenCalledWith('data-query', 'job-new', expect.objectContaining({ queryStatus: 'completed', dataFile: 'https://zuora.example/result.jsonl' }));
     expect(mockRename).not.toHaveBeenCalled();
   });
 });
