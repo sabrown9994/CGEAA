@@ -207,6 +207,17 @@ writing anything. **There is no `delete bill-run` command** (removed 2026-08-21)
 deletes Pending/Canceled runs, but an API-created run reaches Completed almost immediately, so a
 delete would always be rejected — the command was removed instead of left as a failing stub.
 
+### Data Query job creation body
+
+`create data-query` posts `{ query, outputFormat: 'JSON', compression: 'NONE' }` to
+`POST /query/jobs`. These three fields match the documented Data Query job-creation schema
+(confirmed against a third-party adapter spec built off Zuora's published OpenAPI, which lists
+`query`, `outputFormat` (JSON|CSV|TSV), `compression`, plus optional `output`/`readDeleted` that
+ZDF doesn't need). **Not live-verified against a real tenant** — if intQA rejects/ignores a field
+here, fix it there first. There is **no `retries` field** in that schema; an earlier version of
+this body included one and it was removed (unconfirmed, and Data Query may 400 on unrecognized
+keys) — do not reintroduce it without live-verifying it first.
+
 ### Workflows API — export/import model
 
 Base path `/workflows` (not `/v1/api/workflows`). Workflows are handled via the **export/import**
