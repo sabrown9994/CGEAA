@@ -80,6 +80,15 @@ traversal), so direct OLI pull is not regularly exercised live — covered by un
 
 ### User roll-out feedback — product catalog pull & data-query (reported 2026-11-16)
 
+> **✅ SHIPPED 2026-11-16** on branch `zdf-feedback-fixes` (off `main`@`3900ffb`; merged into `rollout`;
+> pushed for a separate `main` PR). All four resolutions done — **A** `pull` natural-key resolution
+> (`src/helpers/catalog-resolve.ts`), **B** `list products`, **C** data-query body (`{query,outputFormat,
+> compression}` — the unconfirmed `retries` field was dropped; see `CLAUDE.md` "Data Query job creation
+> body"), **D** `list workflows --name`. 517 unit tests pass; **live-verified read-only on intQA**:
+> `list products` shows PriceVantage (`8a369dbd…`/`PTL-EDG`), and `pull product PriceVantage` / `PTL-EDG`
+> both resolve→pull (the exact reported commands). Docs updated (CLAUDE.md + README-ZDF.md). The findings
+> below are kept for history. Remaining nit (low): live-verify the data-query body against a real job.
+
 Surfaced during roll-out from a use-case-3 (catalog) read attempt on intQA — pull the PriceVantage
 product + its rate plan + charges (`cgeaa zuora pull product PriceVantage`). Three distinct gaps; fix
 via the ranked path below. **All three ship via the Required development flow (top of file)** — Vitest
