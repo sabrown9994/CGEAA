@@ -80,14 +80,18 @@ traversal), so direct OLI pull is not regularly exercised live — covered by un
 
 ### User roll-out feedback — product catalog pull & data-query (reported 2026-11-16)
 
-> **✅ SHIPPED 2026-11-16** on branch `zdf-feedback-fixes` (off `main`@`3900ffb`; merged into `rollout`;
-> pushed for a separate `main` PR). All four resolutions done — **A** `pull` natural-key resolution
-> (`src/helpers/catalog-resolve.ts`), **B** `list products`, **C** data-query body (`{query,outputFormat,
-> compression}` — the unconfirmed `retries` field was dropped; see `CLAUDE.md` "Data Query job creation
-> body"), **D** `list workflows --name`. 517 unit tests pass; **live-verified read-only on intQA**:
-> `list products` shows PriceVantage (`8a369dbd…`/`PTL-EDG`), and `pull product PriceVantage` / `PTL-EDG`
-> both resolve→pull (the exact reported commands). Docs updated (CLAUDE.md + README-ZDF.md). The findings
-> below are kept for history. Remaining nit (low): live-verify the data-query body against a real job.
+> **✅ SHIPPED + LIVE-VERIFIED 2026-11-16** on branch `zdf-feedback-fixes` (off `main`@`3900ffb`; merged
+> into `rollout`; pushed for a separate `main` PR). All four resolutions done — **A** `pull` natural-key
+> resolution (`src/helpers/catalog-resolve.ts`), **B** `list products`, **C** `create data-query` fully
+> working (body `{query, outputFormat, compression, retries, output:{target:'s3'}}` + `data`-envelope
+> response unwrap — see `CLAUDE.md` "Data Query job creation body"), **D** `list workflows --name`. 517 unit
+> tests pass; **live-verified on intQA**: `list products` shows PriceVantage (`8a369dbd…`/`PTL-EDG`),
+> `pull product PriceVantage`/`PTL-EDG` resolve→pull (the exact reported commands), and `create data-query`
+> submits→polls→`completed` (outputRows=5, dataFile returned). Docs updated (CLAUDE.md + README-ZDF.md).
+> The findings below are kept for history. **Correction note:** the first data-query fix (field rename only,
+> and a later `retries` removal) 400'd live — `retries` AND `output.target` are both required; fixed in
+> `c8fc0e3`. Remaining enhancement (low): the CLI writes the job incl. the `dataFile` URL but doesn't yet
+> download/parse the result file.
 
 Surfaced during roll-out from a use-case-3 (catalog) read attempt on intQA — pull the PriceVantage
 product + its rate plan + charges (`cgeaa zuora pull product PriceVantage`). Three distinct gaps; fix
