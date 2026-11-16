@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { readFileSync } from 'fs';
-import { apiGet, apiPost, apiPut, apiDelete } from '../api/client.js';
+import { apiGet, apiPost, apiPut, apiDelete, apiQuery } from '../api/client.js';
 import { writeResourceFile, readResourceFile, readResourceFileByIdOrName, renameResourceFile, resolveFilePath, getOutputDir } from '../helpers/file-io.js';
 import { output } from '../helpers/output.js';
 import { runCommand } from '../helpers/command-runner.js';
@@ -8,6 +8,7 @@ import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.js';
 import { resolveTargetId, crossTenantKeyValue } from '../helpers/upsert.js';
+import { resolveCatalogId } from '../helpers/catalog-resolve.js';
 import { stripEnvMap, setEnvEntry, getEnvEntry, activeEnvName } from '../helpers/env-map.js';
 import { getOrCreate, capturePriorEnvMap, carryForwardEnvMap, carryForwardEnvMapToFile, deleteStaleSourceFile } from '../helpers/upsert-command.js';
 
@@ -17,20 +18,41 @@ const COMMERCE_ENDPOINT = '/commerce/products';
 
 export function register(program: Command): void {
   const pullCmd = getOrCreate(program, 'pull', 'Fetch a resource from Zuora');
+  const listCmd = getOrCreate(program, 'list', 'List resources from Zuora');
   const createCmd = getOrCreate(program, 'create', 'Create a resource in Zuora from a local file');
   const pushCmd = getOrCreate(program, 'push', 'Update a resource in Zuora from a local file');
   const deleteCmd = getOrCreate(program, 'delete', 'Delete a resource in Zuora');
 
+  listCmd
+    .command('products')
+    .description('List products from Zuora (Id / SKU / Name / EffectiveStartDate) — use to discover the current internal id without the Zuora UI')
+    .action(() =>
+      runCommand(program, async () => {
+        const rows = await apiQuery<{ Id: string; SKU?: string; Name?: string; EffectiveStartDate?: string }>(
+          'SELECT Id, SKU, Name, EffectiveStartDate FROM Product'
+        );
+        if (rows.length === 0) {
+          output.info('No products found.');
+          return;
+        }
+        for (const row of rows) {
+          output.info(`${row.Id}  ${row.SKU ?? '(no SKU)'}  ${row.Name ?? '(no Name)'}  ${row.EffectiveStartDate ?? ''}`);
+        }
+        output.success(`Fetched ${rows.length} products.`);
+      })()
+    );
+
   pullCmd
     .command('product <id>')
-    .description('Fetch a product from Zuora by internal ID')
+    .description('Fetch a product from Zuora by internal ID, SKU, or Name')
     .action((id: string) =>
       runCommand(program, async () => {
-        const fetched = await resolveAndSync(RESOURCE, id, 'pull');
+        const resolvedId = await resolveCatalogId(RESOURCE, id);
+        const fetched = await resolveAndSync(RESOURCE, resolvedId, 'pull');
         if (!fetched) {
-          throw new Error(`Failed to pull product ${id} (see error above).`);
+          throw new Error(`Failed to pull product ${resolvedId} (see error above).`);
         }
-        output.success(`Product ${id} written to ${getLastPulledPath() ?? resolveFilePath(RESOURCE, id)}`);
+        output.success(`Product ${resolvedId} written to ${getLastPulledPath() ?? resolveFilePath(RESOURCE, resolvedId)}`);
       })()
     );
 

@@ -7,6 +7,7 @@ import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync } from '../helpers/dependency-graph.js';
+import { resolveCatalogId } from '../helpers/catalog-resolve.js';
 
 const RESOURCE = 'product-rate-plan-charge';
 const OBJECT_ENDPOINT = '/v1/object/product-rate-plan-charge';
@@ -23,14 +24,15 @@ export function register(program: Command): void {
 
   pullCmd
     .command('product-rate-plan-charge <id>')
-    .description('Fetch a product rate plan charge from Zuora by internal ID')
+    .description('Fetch a product rate plan charge from Zuora by internal ID or Name')
     .action((id: string) =>
       runCommand(program, async () => {
-        const fetched = await resolveAndSync(RESOURCE, id, 'pull');
+        const resolvedId = await resolveCatalogId(RESOURCE, id);
+        const fetched = await resolveAndSync(RESOURCE, resolvedId, 'pull');
         if (!fetched) {
-          throw new Error(`Failed to pull product-rate-plan-charge ${id} (see error above).`);
+          throw new Error(`Failed to pull product-rate-plan-charge ${resolvedId} (see error above).`);
         }
-        output.success(`Product rate plan charge ${id} written to ${resolveFilePath(RESOURCE, id)}`);
+        output.success(`Product rate plan charge ${resolvedId} written to ${resolveFilePath(RESOURCE, resolvedId)}`);
       })()
     );
 

@@ -4,7 +4,8 @@ import { Command } from 'commander';
 const mockPost = vi.hoisted(() => vi.fn());
 const mockPut = vi.hoisted(() => vi.fn());
 const mockDelete = vi.hoisted(() => vi.fn());
-vi.mock('../../api/client.js', () => ({ apiGet: vi.fn(), apiPost: mockPost, apiPut: mockPut, apiDelete: mockDelete, apiQuery: vi.fn(), setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
+const mockApiQuery = vi.hoisted(() => vi.fn());
+vi.mock('../../api/client.js', () => ({ apiGet: vi.fn(), apiPost: mockPost, apiPut: mockPut, apiDelete: mockDelete, apiQuery: mockApiQuery, setDebug: vi.fn(), setMaxRows: vi.fn(), APIQUERY_MAX_ROWS: 5000 }));
 
 const mockRead = vi.hoisted(() => vi.fn());
 const mockRename = vi.hoisted(() => vi.fn());
@@ -36,20 +37,30 @@ function makeProgram() {
 
 beforeEach(() => { vi.clearAllMocks(); });
 
+const INTERNAL_ID = '2c92c0f965ff2d4201660fb2b2ca7b23';
+
 describe('zdf pull product-rate-plan', () => {
   it('calls resolveAndSync with pull action and succeeds when the top-level fetch succeeds', async () => {
     mockResolve.mockResolvedValue(true);
-    await makeProgram().parseAsync(['node', 'zdf', 'pull', 'product-rate-plan', 'prp-001']);
-    expect(mockResolve).toHaveBeenCalledWith('product-rate-plan', 'prp-001', 'pull');
+    await makeProgram().parseAsync(['node', 'zdf', 'pull', 'product-rate-plan', INTERNAL_ID]);
+    expect(mockResolve).toHaveBeenCalledWith('product-rate-plan', INTERNAL_ID, 'pull');
   });
 
   it('throws and exits non-zero without printing success when the top-level fetch fails', async () => {
     mockResolve.mockResolvedValue(false);
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
     await expect(
-      makeProgram().parseAsync(['node', 'zdf', 'pull', 'product-rate-plan', 'prp-001'])
+      makeProgram().parseAsync(['node', 'zdf', 'pull', 'product-rate-plan', INTERNAL_ID])
     ).rejects.toThrow('exit');
     exitSpy.mockRestore();
+  });
+
+  it('resolves a Name key to an internal id via ZOQL before calling resolveAndSync', async () => {
+    mockApiQuery.mockResolvedValue([{ Id: INTERNAL_ID }]);
+    mockResolve.mockResolvedValue(true);
+    await makeProgram().parseAsync(['node', 'zdf', 'pull', 'product-rate-plan', 'My Rate Plan']);
+    expect(mockApiQuery).toHaveBeenCalledWith(`SELECT Id FROM ProductRatePlan WHERE Name = 'My Rate Plan'`);
+    expect(mockResolve).toHaveBeenCalledWith('product-rate-plan', INTERNAL_ID, 'pull');
   });
 });
 

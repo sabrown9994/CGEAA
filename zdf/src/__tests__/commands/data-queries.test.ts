@@ -61,7 +61,15 @@ describe('zdf create data-query', () => {
     await parsePromise;
 
     expect(mockRead).toHaveBeenCalledWith('data-query', 'my-query', 'sql');
-    expect(mockPost).toHaveBeenCalledWith('/query/jobs', { queryString: 'SELECT id FROM Account' });
+    // Only the documented Data Query job fields: query, outputFormat, compression. No `retries` —
+    // that is not a real field in the Data Query job-creation schema.
+    const [, body] = mockPost.mock.calls[0];
+    expect(body).toEqual({
+      query: 'SELECT id FROM Account',
+      outputFormat: 'JSON',
+      compression: 'NONE',
+    });
+    expect(body).not.toHaveProperty('retries');
     expect(mockWrite).toHaveBeenCalledWith('data-query', 'job-new', expect.objectContaining({ data: [{ id: '1' }] }));
     expect(mockRename).not.toHaveBeenCalled();
   });

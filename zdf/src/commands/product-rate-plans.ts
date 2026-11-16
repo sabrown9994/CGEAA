@@ -7,6 +7,7 @@ import { runCommand } from '../helpers/command-runner.js';
 import { assertSuccess, ZuoraWriteResponse } from '../helpers/zuora-response.js';
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync } from '../helpers/dependency-graph.js';
+import { resolveCatalogId } from '../helpers/catalog-resolve.js';
 
 const RESOURCE = 'product-rate-plan';
 // Both create (POST) and delete (DELETE) use the legacy object endpoint.
@@ -25,14 +26,15 @@ export function register(program: Command): void {
 
   pullCmd
     .command('product-rate-plan <id>')
-    .description('Fetch a product rate plan from Zuora by internal ID')
+    .description('Fetch a product rate plan from Zuora by internal ID or Name')
     .action((id: string) =>
       runCommand(program, async () => {
-        const fetched = await resolveAndSync(RESOURCE, id, 'pull');
+        const resolvedId = await resolveCatalogId(RESOURCE, id);
+        const fetched = await resolveAndSync(RESOURCE, resolvedId, 'pull');
         if (!fetched) {
-          throw new Error(`Failed to pull product-rate-plan ${id} (see error above).`);
+          throw new Error(`Failed to pull product-rate-plan ${resolvedId} (see error above).`);
         }
-        output.success(`Product rate plan ${id} written to ${resolveFilePath(RESOURCE, id)}`);
+        output.success(`Product rate plan ${resolvedId} written to ${resolveFilePath(RESOURCE, resolvedId)}`);
       })()
     );
 

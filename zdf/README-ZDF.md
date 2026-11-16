@@ -282,6 +282,13 @@ Fetch a resource from Zuora and write it (plus all dependent records, unless `--
 cgeaa zuora pull <resource> <id>
 ```
 
+For the product catalog (`product`, `product-rate-plan`, `product-rate-plan-charge`), `<id>` may be a
+**natural key** — a product SKU or Name, or a rate-plan/charge Name — not just the internal id; ZDF
+resolves it to the current tenant id via ZOQL before pulling (e.g. `cgeaa zuora pull product PriceVantage`
+or `cgeaa zuora pull product PTL-EDG`). An unknown key fails with a clear "No product found" error; an
+ambiguous one lists the candidate ids. Use `cgeaa zuora list products` to discover keys/ids. (A SKU/Name
+that is itself a 32-hex string is treated as an internal id — find it via `list products` and pass the id.)
+
 ### push
 
 Read the local JSON file and update the resource in Zuora. Dependent records are re-fetched (pulled) to keep local files consistent.
@@ -319,9 +326,13 @@ Fetch all records of a type and write them to local storage.
 
 ```
 cgeaa zuora list orders
+cgeaa zuora list products                      # Id / SKU / Name / EffectiveStartDate — catalog discovery
 cgeaa zuora list billing-templates
-cgeaa zuora list workflows
+cgeaa zuora list workflows [--name <substr>]   # --name: case-insensitive substring filter on the workflow name
 ```
+
+`list products` and `list workflows` are the discovery path when you don't know a record's current
+internal id (e.g. after a sandbox refresh re-mints ids): list to find the id, then `pull` it.
 
 ### template
 

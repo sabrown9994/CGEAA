@@ -8,6 +8,11 @@ import { CROSS_TENANT } from './resource-registry.js';
 
 type Rec = Record<string, unknown>;
 
+/** Escapes a ZOQL string-literal value by doubling single quotes, per ZOQL string-literal rules. */
+export function escapeZoqlString(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
 function str(v: unknown): string | undefined {
   if (v === undefined || v === null) return undefined;
   const s = String(v).trim();
@@ -63,7 +68,7 @@ type GetResponse = {
 export async function searchByKey(resource: string, key: string): Promise<string | undefined> {
   const config = CROSS_TENANT[resource];
   if (!config) return undefined;
-  const escaped = key.replace(/'/g, "''");
+  const escaped = escapeZoqlString(key);
   const rows = await apiQuery<{ Id: string }>(
     `SELECT Id FROM ${config.zoqlObject} WHERE ${config.zoqlKeyField} = '${escaped}'`
   );
