@@ -126,6 +126,16 @@ verification (resolve + `pull product <SKU>` against the live sandbox; never wri
   it's a poor fit for a quick ID lookup anyway — hence A/B are the better primary fixes. Still worth fixing
   since the command is advertised and currently 100% broken. (Full support later = poll the job to `completed`
   + download/parse the result file.)
+- **D. Add a `--name <substr>` filter to the already-shipped `list workflows`** (minor enhancement; reported
+  2026-11-16 from a workflow-pull-by-name attempt on intQA). The `list workflows` discovery command itself
+  **already exists** (`src/commands/workflows.ts:263`, paginated `GET /workflows`) — the roll-out report hit
+  the gap only because the installed `cgeaa` bundle predates it (**rebuild to get it**; the same stale-bundle
+  cause as the data-query 404s). The one net-new ask is a client-side **case-insensitive substring filter on
+  the workflow name** so an operator can run `cgeaa zuora list workflows --name "CoOp Rebate"` to find the
+  current tenant workflow-definition ID, then feed it to `pull workflow <id>`. This is a *discovery filter*,
+  **not** name→ID resolution — workflow verbs stay ID-only by design (names aren't guaranteed unique; see
+  `CLAUDE.md` "Workflows API"). Ship via the ZDF dev flow with a unit test on the filter. (`list products`
+  from fix B closes the equivalent catalog gap.)
 
 ### Open item
 - **Credit/debit-memo cross-tenant create is unit + real-filesystem tested but not yet
@@ -152,6 +162,11 @@ verification (resolve + `pull product <SKU>` against the live sandbox; never wri
     fall back to today's `./zdf-output`; `ZDF_OUTPUT_DIR` and `zuora_output_dir` remain explicit
     overrides that take precedence. Ship via the ZDF dev flow with unit tests pinning the full
     resolution order.
+  - **Re-reported 2026-11-16 (user roll-out):** running `cgeaa zuora` from inside the repo's `NetSuite/`
+    directory created `zdf-output` **under `NetSuite/`** — exactly the cwd-scattering this item fixes. Desired
+    behavior: ZDF always resolves to the repo's `FinTech/Zuora/zdf-output` (via the walk-up above) regardless
+    of which subdirectory the CLI is invoked from, and reads/writes state there on every session. **Still
+    pending — this is unimplemented work, NOT a stale-bundle issue** (unlike the `list workflows` report above).
 
 - **Cross-tenant sync/upsert for `workflow` and `billing-template` via the `_zdf` id-map.**
   Extend the cross-tenant push (today scoped to account/product/invoice/credit-memo/debit-memo) to
