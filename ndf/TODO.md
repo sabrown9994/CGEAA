@@ -143,8 +143,10 @@ production opt-in. On `main` it uploads straight to the production account.)
     returned error object. (A latent scheduled-script bug was also noted and avoided: `cg_vendor_update_sch.js`
     imports `'N.log'` instead of `'N/log'`.)
   - **Ownership (user decision 2026-11-16):** sequence is ✅ fix stale tests → ✅ get the Action green with the
-    gate on → ✅ author major-archetype exemplars → ⏭️ require every future PR to add tests (coverage grows
-    organically, enforced by the gate). The long tail is NOT a write-all-109 effort up front.
+    gate on → ✅ author major-archetype exemplars → ✅ require every future PR to add tests (new
+    `netsuite-jest.yml` runs `npm test` on every PR touching `NetSuite/`; coverage grows organically,
+    enforced by the gate). The long tail is NOT a write-all-109 effort up front — the FINT-17160 build-out
+    continues from here PR-by-PR.
 - **Phase 3 — Turn the test gate on + scope it.** Stop skipping tests (unset the skip), then layer on
   the "Scoped test execution" plan (`NDF_CHANGED_SCRIPTS` → `findRelatedTests`) so deploys run only
   the tests related to the changed scripts.
@@ -153,10 +155,15 @@ production opt-in. On `main` it uploads straight to the production account.)
     Jest suite during `project:deploy` — `Test Suites: 4 passed`, `Tests: 33 passed`, `Ran all test suites`
     — then the deploy proceeded (`Upload file …`, `✔ Deploy complete.`). So the gate gates the deploy as
     designed. The toolchain is present in CI because `NetSuite/node_modules` (incl. `jest` +
-    `@oracle/suitecloud-unit-testing`) is committed. **Cutover remaining:** drop the hardcoded `--skip-tests`
-    from the deploy step on `cicd/netsuite` (then qa/staging). Deferred by the user's sequence until the
-    archetype exemplars exist; consider a one-switch toggle (`vars.NDF_SKIP_TESTS`, default skip) so the
-    flip is a repo-variable change, not a code change.
+    `@oracle/suitecloud-unit-testing`) is committed.
+  - **Partial cutover SHIPPED 2026-11-16 (`cicd/netsuite` @ `6dfa4025`):** the deploy workflow now gates
+    per-branch via a `RUN_TESTS` flag — **ON** (`--skip-tests` dropped) for `cicd/netsuite` +
+    `cicd/netsuite-test/**` (NDF-only sandbox path), **deferred** (`RUN_TESTS=0`) for `qa`/`staging` until
+    each is cut over to NDF and the legacy `netsuite-deploy-scripts.yml` is deactivated there. `main` stays
+    hard-gated upstream. Also added `netsuite-jest.yml` (PR-side gate, validated green on PR #173: 9 suites /
+    58 tests). **Remaining for full Phase 3:** (1) flip `RUN_TESTS=1` for `qa`/`staging` as legacy is
+    deactivated per env; (2) the "Scoped test execution" plan (`NDF_CHANGED_SCRIPTS` → `findRelatedTests`) so
+    deploys run only the tests related to the changed scripts.
 - **(Later) Production cutover** — only after the above is proven and with explicit approval (guardrail 3).
 
 - **GitHub Action that uses NDF for script *and* object deployment; retire the existing file-upload
