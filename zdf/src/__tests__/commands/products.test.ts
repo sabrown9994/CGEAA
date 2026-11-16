@@ -126,6 +126,21 @@ function commerceProductBody() {
 // across assertions/tests.
 const COMMERCE_PRODUCT_BODY = commerceProductBody();
 
+describe('zdf list products', () => {
+  it('prints a readable Id / SKU / Name / EffectiveStartDate row per product', async () => {
+    mockApiQuery.mockResolvedValue([
+      { Id: INTERNAL_ID, SKU: 'PTL-EDG', Name: 'PriceVantage', EffectiveStartDate: '2026-01-01' },
+    ]);
+    await makeProgram().parseAsync(['node', 'zdf', 'list', 'products']);
+    expect(mockApiQuery).toHaveBeenCalledWith('SELECT Id, SKU, Name, EffectiveStartDate FROM Product');
+  });
+
+  it('prints a graceful message when no products are found', async () => {
+    mockApiQuery.mockResolvedValue([]);
+    await expect(makeProgram().parseAsync(['node', 'zdf', 'list', 'products'])).resolves.not.toThrow();
+  });
+});
+
 describe('zdf create product', () => {
   it('posts the file body verbatim to /commerce/products and renames the file to the returned id', async () => {
     mockRead.mockReturnValue(commerceProductBody());
