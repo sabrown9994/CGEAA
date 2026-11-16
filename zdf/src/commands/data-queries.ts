@@ -20,7 +20,9 @@ async function pollUntilComplete(jobId: string): Promise<Record<string, unknown>
   const spinner = ora(`Waiting for data query job ${jobId} to complete…`).start();
   try {
     while (true) {
-      const job = await apiGet<Record<string, unknown>>(`${ENDPOINT}/${jobId}`);
+      // The Data Query GET wraps the job under `data`: { data: { queryStatus, dataFile, … } }.
+      const res = await apiGet<{ data?: Record<string, unknown> }>(`${ENDPOINT}/${jobId}`);
+      const job = res.data ?? {};
       const status = job['queryStatus'];
       if (typeof status !== 'string') throw new Error(`Unexpected queryStatus value: ${JSON.stringify(status)}`);
       if (status === 'completed' || status === 'failed' || status === 'cancelled') {
@@ -61,15 +63,22 @@ export function register(program: Command): void {
         const sql: string = opts.file
           ? readFileSync(opts.file, 'utf-8')
           : (readResourceFile(RESOURCE, name, 'sql') as string);
-        // Body shape is the documented Data Query job-creation schema: `query`, `outputFormat`
-        // (JSON|CSV|TSV), `compression` (NONE|GZIP), plus optional `output`/`readDeleted` we don't
-        // need here. There is no `retries` field in that schema — do not reintroduce it.
-        const res = await apiPost<{ id: string }>(`${ENDPOINT}`, {
+        // Body shape — LIVE-VERIFIED against intQA 2026-11-16 (job submitted + polled to
+        // `completed` with a `dataFile` URL returned). Required: `query`, `outputFormat`
+        // (JSON|CSV|TSV), `compression` (NONE|GZIP), `retries`, and `output.target` ('s3' =
+        // Zuora's own managed result store — NOT a customer S3 bucket; Zuora returns a pre-signed
+        // `dataFile` URL). Omitting `output` OR `retries` yields `400 Unable to process JSON`
+        // (both verified to fail), so do NOT drop either.
+        // The POST response also wraps the job under `data`: { data: { id, queryStatus, … } }.
+        const res = await apiPost<{ data?: { id?: string } }>(`${ENDPOINT}`, {
           query: sql,
           outputFormat: 'JSON',
           compression: 'NONE',
+          retries: 3,
+          output: { target: 's3' },
         });
-        const jobId = res.id;
+        const jobId = res.data?.id;
+        if (!jobId) throw new Error(`Data query submission returned no job id: ${JSON.stringify(res)}`);
         const job = await pollUntilComplete(jobId);
         if (job['queryStatus'] !== 'completed') {
           throw new Error(`Data query job ${jobId} ended with status: ${String(job['queryStatus'])}`);

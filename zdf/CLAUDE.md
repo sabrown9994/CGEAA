@@ -219,14 +219,18 @@ delete would always be rejected — the command was removed instead of left as a
 
 ### Data Query job creation body
 
-`create data-query` posts `{ query, outputFormat: 'JSON', compression: 'NONE' }` to
-`POST /query/jobs`. These three fields match the documented Data Query job-creation schema
-(confirmed against a third-party adapter spec built off Zuora's published OpenAPI, which lists
-`query`, `outputFormat` (JSON|CSV|TSV), `compression`, plus optional `output`/`readDeleted` that
-ZDF doesn't need). **Not live-verified against a real tenant** — if intQA rejects/ignores a field
-here, fix it there first. There is **no `retries` field** in that schema; an earlier version of
-this body included one and it was removed (unconfirmed, and Data Query may 400 on unrecognized
-keys) — do not reintroduce it without live-verifying it first.
+`create data-query` posts `{ query, outputFormat: 'JSON', compression: 'NONE', retries: 3,
+output: { target: 's3' } }` to `POST /query/jobs`. **LIVE-VERIFIED on intQA 2026-11-16** by probing
+each variant: the job submits (200) and polls to `queryStatus: completed` with a pre-signed `dataFile`
+URL. **All five fields are required** — `query`, `outputFormat` (JSON|CSV|TSV), `compression`
+(NONE|GZIP), `retries`, and `output.target`. `target: 's3'` means **Zuora's own managed result store**
+(not a customer S3 bucket); Zuora writes the result there and hands back the `dataFile` URL.
+**Every body missing `output` 400s `"Unable to process JSON"`** — verified for `{query,outputFormat,
+compression}` (the field-rename-only fix), `{…,retries}` (no output), and `{query}` alone. So do NOT
+drop `output` or `retries`. (The original `{ queryString }` was wrong on two counts — field name AND
+the missing `output`/`retries`.) **Known limitation:** the CLI writes the job object (incl. the
+`dataFile` URL) but does not yet download the result file — fetching/parsing `dataFile` is a future
+enhancement.
 
 ### Workflows API — export/import model
 
