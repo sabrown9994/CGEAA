@@ -11,6 +11,8 @@ const mockSetDefaultAuthId = vi.hoisted(() => vi.fn());
 const mockRunSuitecloud = vi.hoisted(() => vi.fn());
 const mockParseMissing = vi.hoisted(() => vi.fn());
 const mockRunBuild = vi.hoisted(() => vi.fn());
+const mockGetMergeBase = vi.hoisted(() => vi.fn());
+const mockGetChangedFiles = vi.hoisted(() => vi.fn());
 
 vi.mock('../../helpers/project-dir.js', () => ({
   getProjectDir: mockGetProjectDir, getProductionAuthId: mockGetProductionAuthId, getRunTests: mockGetRunTests,
@@ -19,7 +21,7 @@ vi.mock('../../helpers/production-guard.js', () => ({
   getActiveAuthId: mockGetActiveAuthId,
   ProductionGuardError: class ProductionGuardError extends Error {},
 }));
-vi.mock('../../helpers/git.js', () => ({ getCurrentBranch: mockGetCurrentBranch }));
+vi.mock('../../helpers/git.js', () => ({ getCurrentBranch: mockGetCurrentBranch, getMergeBase: mockGetMergeBase, getChangedFiles: mockGetChangedFiles }));
 vi.mock('../../helpers/auth.js', () => ({ validateAuthId: mockValidateAuthId, setDefaultAuthId: mockSetDefaultAuthId }));
 vi.mock('../../helpers/suitecloud.js', () => ({ runSuitecloud: mockRunSuitecloud }));
 vi.mock('../../helpers/dependency-parser.js', () => ({ parseMissingObjectRefs: mockParseMissing }));
@@ -39,6 +41,8 @@ beforeEach(() => {
   mockValidateAuthId.mockImplementation(() => {});
   mockSetDefaultAuthId.mockImplementation(() => {});
   mockRunBuild.mockResolvedValue(undefined);
+  mockGetMergeBase.mockReturnValue('base-sha');
+  mockGetChangedFiles.mockReturnValue({ scripts: [], objects: [] });
   mockRunSuitecloud.mockReturnValue({ status: 0, output: 'SUCCESS' });
   mockParseMissing.mockReturnValue([]);
   vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
@@ -58,6 +62,40 @@ describe('deploy happy path', () => {
   it('passes --base option to runBuild', async () => {
     await makeProgram().parseAsync(['node', 'ndf', 'deploy', '--target', 'CG-UAT', '--base', 'someSha']);
     expect(mockRunBuild).toHaveBeenCalledWith(expect.objectContaining({ base: 'someSha' }));
+  });
+
+  it('exports changed SuiteScript paths (absolute, newline-joined) as NDF_CHANGED_SCRIPTS', async () => {
+    mockGetChangedFiles.mockReturnValue({
+      scripts: ['src/FileCabinet/SuiteScripts/foo.js', 'src/FileCabinet/SuiteScripts/CG - Bar (Portlet).js'],
+      objects: [],
+    });
+    await makeProgram().parseAsync(['node', 'ndf', 'deploy', '--target', 'CG-UAT']);
+    expect(mockGetMergeBase).toHaveBeenCalledWith('/proj', 'main');
+    expect(mockRunSuitecloud).toHaveBeenCalledWith(['project:deploy'], expect.objectContaining({
+      env: expect.objectContaining({
+        NDF_CHANGED_SCRIPTS:
+          '/proj/src/FileCabinet/SuiteScripts/foo.js\n/proj/src/FileCabinet/SuiteScripts/CG - Bar (Portlet).js',
+      }),
+    }));
+  });
+
+  it('sets NDF_CHANGED_SCRIPTS empty for an object-only change (hook will skip)', async () => {
+    mockGetChangedFiles.mockReturnValue({ scripts: [], objects: ['src/Objects/customrecord_x.xml'] });
+    await makeProgram().parseAsync(['node', 'ndf', 'deploy', '--target', 'CG-UAT']);
+    expect(mockRunSuitecloud).toHaveBeenCalledWith(['project:deploy'], expect.objectContaining({
+      env: expect.objectContaining({ NDF_CHANGED_SCRIPTS: '' }),
+    }));
+  });
+
+  it('exports NDF_CHANGED_SCRIPTS alongside NDF_SKIP_TESTS when --skip-tests', async () => {
+    mockGetChangedFiles.mockReturnValue({ scripts: ['src/FileCabinet/SuiteScripts/foo.js'], objects: [] });
+    await makeProgram().parseAsync(['node', 'ndf', 'deploy', '--target', 'CG-UAT', '--skip-tests']);
+    expect(mockRunSuitecloud).toHaveBeenCalledWith(['project:deploy'], expect.objectContaining({
+      env: expect.objectContaining({
+        NDF_SKIP_TESTS: 'true',
+        NDF_CHANGED_SCRIPTS: '/proj/src/FileCabinet/SuiteScripts/foo.js',
+      }),
+    }));
   });
 });
 
