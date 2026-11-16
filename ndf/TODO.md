@@ -116,12 +116,35 @@ production opt-in. On `main` it uploads straight to the production account.)
     vendored `.bin` to PATH or the JAR-less copy shadows the good one); (3) base-SHA resolution falls back
     to `HEAD~1` when `github.event.before` is all-zeros, empty, OR unreachable (force-push/rebase/gc), with
     the `~` resolved to a plain SHA before `--base` (NDF's injection guard rejects `~`).
-- **Phase 2 — Build the Jest test suite (FINT-17160).** Only after Phase 1 works: author real Jest
-  coverage (and script docs) for the SuiteScripts, keeping the `__tests__/` + relative-`require`
-  convention. See the dedicated FinSys item below.
+- **Phase 2 — Build the Jest test suite (FINT-17160). 🔄 IN PROGRESS (started 2026-11-16).** Author real
+  Jest coverage (and script docs) for the SuiteScripts, keeping the `__tests__/` + relative-`require`
+  convention. See the dedicated FinSys item below. Progress on `cicd/netsuite`:
+  - **Investigation:** 109 SuiteScripts, 2 tested at start. Testability is **not** a blocker — nearly all
+    scripts expose SuiteScript entry points (`beforeSubmit`/`afterSubmit`/`onRequest`/`onAction`/`execute`/
+    `get`/`post`, and `getInputData/map/reduce/summarize`) that test cleanly against mocked `N/*` modules,
+    **no production-script refactoring needed**. So Phase 2 is bounded by authoring volume, not feasibility.
+  - **Stale-test fix (required for the gate):** the suite was already **red** — `cg_vendor_bill_approval_suitelet_ss.test.js`
+    asserted the pre-FINT-16833 shape (the `csv approvals` rewrite changed filters/columns/result shape and
+    `mainline` T→F but left the tests). Fixed the 3 assertions to match the shipped script. Full suite now
+    **green: 4 suites, 33 tests**.
+  - **Pilot:** added `cg_email_library_ss.test.js` (4 tests) proving the pattern replicates to an untested
+    script. Gotcha documented: `jest.clearAllMocks()` clears call records but NOT `mockImplementation` —
+    use `mockImplementationOnce` for throw-cases so they don't leak into later tests.
+  - **Ownership (user decision 2026-11-16):** sequence is fix stale tests → get the Action green with the
+    gate on → author ~4-5 major-archetype exemplars → then require every future PR to add tests (coverage
+    grows organically, enforced by the gate). The long tail is NOT a write-all-109 effort up front.
 - **Phase 3 — Turn the test gate on + scope it.** Stop skipping tests (unset the skip), then layer on
   the "Scoped test execution" plan (`NDF_CHANGED_SCRIPTS` → `findRelatedTests`) so deploys run only
   the tests related to the changed scripts.
+  - **Gate mechanism VALIDATED in CI 2026-11-16** (on a throwaway `cicd/netsuite-test/gate-check` branch,
+    now deleted): with `--skip-tests` removed, the `suitecloud.config.js` `beforeExecuting` hook ran the full
+    Jest suite during `project:deploy` — `Test Suites: 4 passed`, `Tests: 33 passed`, `Ran all test suites`
+    — then the deploy proceeded (`Upload file …`, `✔ Deploy complete.`). So the gate gates the deploy as
+    designed. The toolchain is present in CI because `NetSuite/node_modules` (incl. `jest` +
+    `@oracle/suitecloud-unit-testing`) is committed. **Cutover remaining:** drop the hardcoded `--skip-tests`
+    from the deploy step on `cicd/netsuite` (then qa/staging). Deferred by the user's sequence until the
+    archetype exemplars exist; consider a one-switch toggle (`vars.NDF_SKIP_TESTS`, default skip) so the
+    flip is a repo-variable change, not a code change.
 - **(Later) Production cutover** — only after the above is proven and with explicit approval (guardrail 3).
 
 - **GitHub Action that uses NDF for script *and* object deployment; retire the existing file-upload
