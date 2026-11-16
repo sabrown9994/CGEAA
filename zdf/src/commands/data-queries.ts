@@ -61,7 +61,12 @@ export function register(program: Command): void {
         const sql: string = opts.file
           ? readFileSync(opts.file, 'utf-8')
           : (readResourceFile(RESOURCE, name, 'sql') as string);
-        const res = await apiPost<{ id: string }>(`${ENDPOINT}`, { queryString: sql });
+        const res = await apiPost<{ id: string }>(`${ENDPOINT}`, {
+          query: sql,
+          outputFormat: 'JSON',
+          compression: 'NONE',
+          retries: 3,
+        });
         const jobId = res.id;
         const job = await pollUntilComplete(jobId);
         if (job['queryStatus'] !== 'completed') {

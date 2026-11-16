@@ -61,7 +61,12 @@ describe('zdf create data-query', () => {
     await parsePromise;
 
     expect(mockRead).toHaveBeenCalledWith('data-query', 'my-query', 'sql');
-    expect(mockPost).toHaveBeenCalledWith('/query/jobs', { queryString: 'SELECT id FROM Account' });
+    expect(mockPost).toHaveBeenCalledWith('/query/jobs', {
+      query: 'SELECT id FROM Account',
+      outputFormat: 'JSON',
+      compression: 'NONE',
+      retries: 3,
+    });
     expect(mockWrite).toHaveBeenCalledWith('data-query', 'job-new', expect.objectContaining({ data: [{ id: '1' }] }));
     expect(mockRename).not.toHaveBeenCalled();
   });
