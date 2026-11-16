@@ -8,6 +8,7 @@ import { assertSuccess, assertReadSuccess, ZuoraWriteResponse } from '../helpers
 import { filterUpdatableFields } from '../helpers/updatable-fields.js';
 import { resolveAndSync, getLastPulledPath } from '../helpers/dependency-graph.js';
 import { resolveTargetId, crossTenantKeyValue } from '../helpers/upsert.js';
+import { resolveCatalogId } from '../helpers/catalog-resolve.js';
 import { stripEnvMap, setEnvEntry, getEnvEntry, activeEnvName } from '../helpers/env-map.js';
 import { getOrCreate, capturePriorEnvMap, carryForwardEnvMap, carryForwardEnvMapToFile, deleteStaleSourceFile } from '../helpers/upsert-command.js';
 
@@ -23,14 +24,15 @@ export function register(program: Command): void {
 
   pullCmd
     .command('product <id>')
-    .description('Fetch a product from Zuora by internal ID')
+    .description('Fetch a product from Zuora by internal ID, SKU, or Name')
     .action((id: string) =>
       runCommand(program, async () => {
-        const fetched = await resolveAndSync(RESOURCE, id, 'pull');
+        const resolvedId = await resolveCatalogId(RESOURCE, id);
+        const fetched = await resolveAndSync(RESOURCE, resolvedId, 'pull');
         if (!fetched) {
-          throw new Error(`Failed to pull product ${id} (see error above).`);
+          throw new Error(`Failed to pull product ${resolvedId} (see error above).`);
         }
-        output.success(`Product ${id} written to ${getLastPulledPath() ?? resolveFilePath(RESOURCE, id)}`);
+        output.success(`Product ${resolvedId} written to ${getLastPulledPath() ?? resolveFilePath(RESOURCE, resolvedId)}`);
       })()
     );
 
