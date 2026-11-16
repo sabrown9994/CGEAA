@@ -263,7 +263,8 @@ export function register(program: Command): void {
   listCmd
     .command('workflows')
     .description('List workflows from Zuora')
-    .action(() =>
+    .option('--name <substr>', 'filter the printed list to workflow names containing this substring (case-insensitive); display-only, does not affect pull/push/delete which stay id-only')
+    .action((opts: { name?: string }) =>
       runCommand(program, async () => {
         const PAGE_LENGTH = 50;
         const MAX_WORKFLOWS = 5000;
@@ -316,16 +317,29 @@ export function register(program: Command): void {
           );
         }
 
-        // Print one row per workflow
-        for (const w of all) {
-          const id = String(w.id);
-          const name = String(w.name ?? '');
-          const status = String(w.status ?? '');
-          const version = w.active_version?.version !== undefined ? `v${String(w.active_version.version)}` : 'v?';
-          output.info(`${id}  ${name}  ${status}  ${version}`);
+        // --name is a client-side DISPLAY filter only (case-insensitive substring match on
+        // name) — it does not resolve names to ids. pull/push/delete stay id-only by design
+        // (workflow names aren't guaranteed unique); use the id printed here with those verbs.
+        const needle = opts.name?.toLowerCase();
+        const displayed = needle ? all.filter((w) => String(w.name ?? '').toLowerCase().includes(needle)) : all;
+
+        if (needle && displayed.length === 0) {
+          output.info(`No workflows found matching --name "${opts.name}".`);
+        } else {
+          for (const w of displayed) {
+            const id = String(w.id);
+            const name = String(w.name ?? '');
+            const status = String(w.status ?? '');
+            const version = w.active_version?.version !== undefined ? `v${String(w.active_version.version)}` : 'v?';
+            output.info(`${id}  ${name}  ${status}  ${version}`);
+          }
         }
 
-        output.success(`Fetched ${all.length} workflows.`);
+        output.success(
+          needle
+            ? `Fetched ${all.length} workflows (${displayed.length} matching "${opts.name}").`
+            : `Fetched ${all.length} workflows.`
+        );
       })()
     );
 
