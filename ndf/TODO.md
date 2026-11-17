@@ -201,6 +201,20 @@ production opt-in. On `main` it uploads straight to the production account.)
   `main` cutover — it is pinned to rollout HEAD `b12e503` for the dev cycle.
 
 - **Scoped test execution — run only the Jest tests related to changed scripts (deploy/CI speedup).**
+  > **✅ DONE + VERIFIED ON ACTIONS 2026-11-17.** Producer: CGEAA `rollout` `e548a22` — NDF `deploy`
+  > exports `NDF_CHANGED_SCRIPTS` (absolute, newline-joined), sourced from `runBuild`'s returned
+  > `changedScripts` (single diff computation). Consumer: FinSys `cicd/netsuite` `48417e2f`/`65539245` —
+  > `suitecloud.config.js` branches on it (`findRelatedTests` / skip-on-empty / full-suite-when-absent).
+  > **AMD-`define` gap (found by adversarial review, HIGH) fixed:** jest-haste-map's default extractor
+  > ignores `define([...])` arrays, so a changed shared library would miss its consumer tests. Added
+  > FinSys `NetSuite/jest-amd-dependency-extractor.js` (custom `dependencyExtractor`, wired in
+  > `jest.config.js`) that parses `define([...])` deps → resolved via the SuiteCloud `moduleNameMapper`.
+  > **Verified in CI:** a changed script → only its own test (`1 suite`); a changed shared lib
+  > (`cg_email_library_ss.js`) → its test **+** the define-consumer `CG_VBJE_CS.test.js` (`2 suites`,
+  > transitive); an untested/object-only change → skip. Full suite still 9 suites / 58 tests green.
+  > Remaining: turn the gate on for qa/staging as those envs cut over (the gate itself is already on for
+  > `cicd/netsuite`).
+
   Today the FinSys `suitecloud.config.js` `beforeExecuting` hook runs the **whole** Jest suite on
   every `project:deploy` (`SuiteCloudJestUnitTestRunner.run({})`). As the suite grows (see FINT-17160)
   this makes every deploy/CI run slower than it needs to be. Run only the tests related to the
