@@ -12,6 +12,11 @@ export interface BuildOptions {
   base?: string;
 }
 
+export interface BuildResult {
+  /** The feature's changed SuiteScript paths (project-relative, `src/...`), from base..HEAD. */
+  changedScripts: string[];
+}
+
 export function warnIfSharedBranch(projectDir: string, base?: string): void {
   const SHARED_BRANCHES = new Set(['main', 'master', 'qa', 'uat', 'staging']);
   const currentBranch = getCurrentBranch(projectDir);
@@ -20,7 +25,7 @@ export function warnIfSharedBranch(projectDir: string, base?: string): void {
   }
 }
 
-export async function runBuild(opts: BuildOptions): Promise<void> {
+export async function runBuild(opts: BuildOptions): Promise<BuildResult> {
   const { projectDir, dryRun } = opts;
   const mergeBase = getMergeBase(projectDir, opts.base ?? 'main');
   const changed = getChangedFiles(projectDir, mergeBase);
@@ -42,7 +47,7 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
     console.log(deployXml);
     console.log('--- manifest.xml (dry run) ---');
     console.log(manifestXml);
-    return;
+    return { changedScripts: changed.scripts };
   }
 
   writeFileSync(join(projectDir, 'src', 'deploy.xml'), deployXml, 'utf-8');
@@ -54,4 +59,5 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
   }
 
   output.success('deploy.xml and manifest.xml updated — review and commit them to your feature branch.');
+  return { changedScripts: changed.scripts };
 }

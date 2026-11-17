@@ -3,7 +3,7 @@ import { createInterface } from 'readline';
 import { getProjectDir, getProductionAuthId, getRunTests } from '../helpers/project-dir.js';
 import { getActiveAuthId, ProductionGuardError } from '../helpers/production-guard.js';
 import { resolve } from 'path';
-import { getCurrentBranch, getMergeBase, getChangedFiles } from '../helpers/git.js';
+import { getCurrentBranch } from '../helpers/git.js';
 import { validateAuthId, setDefaultAuthId } from '../helpers/auth.js';
 import { runSuitecloud } from '../helpers/suitecloud.js';
 import { parseMissingObjectRefs } from '../helpers/dependency-parser.js';
@@ -54,28 +54,31 @@ export function registerDeploy(program: Command): void {
 
         const maxRounds = Math.max(1, parseInt(opts.maxImportRounds, 10) || 10);
         const skipTests = opts.skipTests || getRunTests() === false;
-        // Scoped test selection: export the feature's changed SuiteScript paths (absolute, newline-
-        // joined — some script filenames contain spaces/parens) so the FinSys suitecloud.config.js Jest
-        // hook can run `jest --findRelatedTests` over exactly them. Computed once from the base diff;
-        // import rounds add objects, not scripts. Empty (object-only change) => the hook skips tests.
-        const mergeBase = getMergeBase(projectDir, opts.base ?? 'main');
-        const changedScriptsAbs = getChangedFiles(projectDir, mergeBase).scripts.map((s) => resolve(projectDir, s));
-        const env: NodeJS.ProcessEnv = {
-          ...process.env,
-          NDF_SKIP_TESTS: skipTests ? 'true' : undefined,
-          NDF_CHANGED_SCRIPTS: changedScriptsAbs.join('\n'),
-        };
-        if (skipTests) output.info('Skipping SuiteCloud Jest tests for this deploy (NDF_SKIP_TESTS=true).');
-        else output.info(`Jest scoped to ${changedScriptsAbs.length} changed script(s) for this deploy (NDF_CHANGED_SCRIPTS).`);
 
         restoreAuthId = getActiveAuthId(projectDir);
         const importedObjectPaths: string[] = [];
         let source = opts.source;
+        // Built once (on round 1) from the changed scripts runBuild reports, so the base diff is
+        // computed in exactly one place. Carries NDF_SKIP_TESTS and NDF_CHANGED_SCRIPTS (absolute,
+        // newline-joined — some script filenames contain spaces/parens) for the FinSys
+        // suitecloud.config.js hook: it runs `jest --findRelatedTests` over exactly these scripts, or
+        // skips when the list is empty (object-only change). Import rounds add objects, not scripts.
+        let env: NodeJS.ProcessEnv | undefined;
 
         warnIfSharedBranch(projectDir, opts.base);
 
         for (let round = 1; ; round++) {
-          await runBuild({ projectDir, dryRun: false, base: opts.base, extraObjectPaths: importedObjectPaths });
+          const built = await runBuild({ projectDir, dryRun: false, base: opts.base, extraObjectPaths: importedObjectPaths });
+          if (!env) {
+            const changedScriptsAbs = built.changedScripts.map((s) => resolve(projectDir, s));
+            env = { ...process.env, NDF_CHANGED_SCRIPTS: changedScriptsAbs.join('\n') };
+            if (skipTests) {
+              env.NDF_SKIP_TESTS = 'true';
+              output.info('Skipping SuiteCloud Jest tests for this deploy (NDF_SKIP_TESTS=true).');
+            } else {
+              output.info(`Jest scoped to ${changedScriptsAbs.length} changed script(s) for this deploy (NDF_CHANGED_SCRIPTS).`);
+            }
+          }
 
           setDefaultAuthId(projectDir, opts.target);
           const cmd = opts.dryRun ? ['project:validate'] : ['project:deploy'];
