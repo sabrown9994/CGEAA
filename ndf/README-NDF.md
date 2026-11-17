@@ -131,16 +131,19 @@ The imported object XML files are left in the working tree (under `src/Objects/`
 **Gating:**
 Named-only import: if SDF names a missing object ID during resolution, only that object is imported (not a broader set). This minimizes scope creep.
 
-**GitHub Actions example (illustrative — not yet wired):**
+**GitHub Actions (wired on the FinSys `cicd/netsuite` branch):**
 ```yaml
-- name: Deploy feature to UAT (auto-resolve deps)
-  run: ./cgeaa netsuite deploy --target CG-UAT --source CG-intQA --auto-import
+- name: Deploy feature via NDF
+  run: cgeaa netsuite deploy --target "$ENV_AUTHID" --base "$BASE_SHA"
 ```
 
-> **NDF is not currently invoked by any CI/CD pipeline.** This snippet shows how an Action *would*
-> call NDF; no committed workflow runs it today. See [TODO.md](TODO.md) "CI/CD Roadmap" (and its
-> `--base` prerequisite) for the plan to wire this up and retire the existing scripts-only
-> `file:upload` workflow.
+> NDF **is** invoked by CI. `.github/workflows/netsuite-deploy-ndf.yml` (FinSys `cicd/netsuite`) runs
+> `cgeaa netsuite deploy` on push to `qa`/`staging`/`cicd/netsuite`/`cicd/netsuite-test/**`, building NDF
+> from a pinned CGEAA commit and passing `--base ${{ github.event.before }}`. It deploys scripts **and**
+> objects (feature-scoped), gates Jest per-branch, scopes tests to the changed scripts (see "Scoped test
+> execution" below), and hard-refuses production. A companion `netsuite-jest.yml` runs the full suite on
+> every PR touching `NetSuite/`. **Not yet on `main`/production** — the prod cutover is pending approval.
+> See [TODO.md](TODO.md) "CI/CD Roadmap".
 
 By default the SuiteCloud `beforeExecuting` Jest hook configured in the project's
 `suitecloud.config.js` runs as part of the deploy. To skip it, see below.
@@ -173,6 +176,24 @@ Precedence: `--skip-tests` (per-run) OR `netsuite_run_tests=false` (persistent) 
 > Use with care: skipping tests removes a deploy guardrail. It exists for cases where the suite is
 > red for reasons unrelated to your change (e.g. pre-existing failures on the branch) and you need
 > to deploy to a **lower** environment. Production deploys are still blocked off `main` regardless.
+
+### Scoped test execution (run only related tests)
+
+When the Jest gate runs (tests not skipped), NDF scopes the run to the tests related to the scripts the
+deploy changed, rather than the whole suite:
+
+1. **NDF** exports `NDF_CHANGED_SCRIPTS` on the `suitecloud` subprocess — the feature's changed
+   SuiteScript paths (absolute, newline-joined), from the same `base..HEAD` diff it deploys. An
+   object-only change yields an empty value.
+2. **The project's `suitecloud.config.js` hook** branches on it: non-empty →
+   `run({ findRelatedTests: true, _: [<paths>] })` (only related tests); empty → skip (nothing to test);
+   absent (a non-NDF `suitecloud` call) → full suite, preserving prior behavior.
+
+Because SuiteScripts declare dependencies in AMD `define([...])` arrays that Jest's default resolver
+can't see, the FinSys project also ships a custom Jest `dependencyExtractor`
+(`NetSuite/jest-amd-dependency-extractor.js`) so `--findRelatedTests` resolves `define` edges — a change
+to a shared library (e.g. `cg_email_library_ss.js`) then correctly selects its consumers' tests too.
+Full-suite coverage still runs on every PR via `netsuite-jest.yml`.
 
 ### `cgeaa netsuite pull object <scriptId>`
 `suitecloud object:import --scriptid <scriptId> --type ALL --destinationfolder /Objects`.
@@ -228,10 +249,12 @@ is empty and deploy is a deliberate no-op. Passing `--base <pre-merge-SHA>` (the
 pointed at *before* the merge) makes the diff `before..main` = exactly the merged feature. This is
 the same value CI will pass as `${{ github.event.before }}`.
 
-> **NDF is not wired into CI/CD**, so merging to `main` does not auto-deploy — the command above is
-> the only production path, and it is intentionally manual. A production deploy also needs a valid
-> `CG-Production` auth token; if `suitecloud` falls back to browser re-authentication, refresh it
-> first with `suitecloud account:setup`. See [TODO.md](TODO.md) "User Roll-out" / "CI/CD Roadmap".
+> **Production is not yet wired into CI/CD.** The NDF CI workflow runs on the dev-cycle branches
+> (`qa`/`staging`/`cicd/netsuite*`) but deliberately omits `main` as a trigger and hard-refuses
+> `CG-Production` until the approved prod cutover — so merging to `main` does not auto-deploy, and the
+> manual command above is the only production path today. A production deploy also needs a valid
+> `CG-Production` auth token; if `suitecloud` falls back to browser re-authentication, refresh it first
+> with `suitecloud account:setup`. See [TODO.md](TODO.md) "User Roll-out" / "CI/CD Roadmap".
 
 ## How it fits into CGEAA
 

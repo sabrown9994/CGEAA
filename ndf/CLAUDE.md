@@ -84,14 +84,31 @@ so the diff is `before..main` = exactly that feature. (This shipped in the User 
 prod deploy also needs valid `CG-Production` auth — the local token was found expired on 2026-10-23,
 see TODO.md.)
 
-## NDF is not wired into CI/CD (current reality)
+## NDF in CI/CD (current reality)
 
-No GitHub Action invokes NDF. Nothing in NDF runs on a push or merge, so **merging to `main` does not
-trigger an NDF deploy** — production is reached only by the deliberate manual command above.
-(A separate, pre-existing FinSys workflow, `.github/workflows/netsuite-deploy-scripts.yml`, *does*
-auto-deploy on push to `qa`/`staging`/`main`, but it is not NDF — it `file:upload`s changed
-`SuiteScripts/**` only, no Objects/manifest/SDF deploy. Retiring it in favor of an NDF-owned pipeline
-is on the CI/CD Roadmap in TODO.md.)
+NDF is wired into CI on the FinSys **`cicd/netsuite`** branch via
+`.github/workflows/netsuite-deploy-ndf.yml`, which runs `cgeaa netsuite deploy` on push to
+`qa`/`staging`/`cicd/netsuite`/`cicd/netsuite-test/**` (building NDF from a pinned CGEAA commit). It
+feature-scopes scripts **and** objects from the git diff, enforces the production guard, and runs the
+SuiteCloud Jest hook. Gating has three layers:
+
+- **Deploy-time Jest gate, per-branch** (`RUN_TESTS`): **on** for `cicd/netsuite` + `cicd/netsuite-test/**`,
+  **deferred** (`--skip-tests`) for `qa`/`staging` until each env cuts over, and **production hard-refused**
+  (`main` is not a trigger during the dev cycle, and the `main` case exits 1 as belt-and-suspenders).
+- **Scoped test execution**: when the gate runs, NDF exports `NDF_CHANGED_SCRIPTS` (the feature's changed
+  SuiteScript paths) and the project's `suitecloud.config.js` hook runs `jest --findRelatedTests` over
+  exactly those (empty → skip). A custom `dependencyExtractor` in the FinSys repo teaches jest to resolve
+  AMD `define([...])` deps, so a shared-library change selects its consumers' tests transitively.
+- **PR gate**: a companion `netsuite-jest.yml` runs the **full** Jest suite on every PR touching
+  `NetSuite/`, independent of deploys.
+
+**Not yet on `main`/production.** This runs on the dev-cycle integration branches (FinSys
+`cicd/netsuite`, CGEAA `rollout`); the production cutover — re-add `main` as a trigger, restore the
+`CG-Production` mapping, and point the workflow's CGEAA `ref` at `main` — is deliberately pending
+approval. Until then, production is reached only by the deliberate manual `cgeaa netsuite deploy
+--target CG-Production --base <pre-merge-SHA> --allow-production`. The older scripts-only
+`netsuite-deploy-scripts.yml` (`file:upload` of changed `SuiteScripts/**`) is retained and deactivated
+per env as each cuts over to NDF.
 
 ## Dependency resolution (deploy with --source and --auto-import)
 

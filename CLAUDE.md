@@ -97,9 +97,14 @@ NetSuite support has **two layers** on the `feature/netsuite-integration` branch
 
 ## Shipping state
 
-ZDF and NDF both ship on `feature/netsuite-integration`, which is being merged to `main` via pull
-request. The matching FinSys CI change (an NDF-driven deploy workflow) lives on the FinSys repo's
-`cicd/netsuite` branch.
+ZDF and NDF are integrated on the `rollout` branch (ZDF's roll-out feedback fixes have since merged to
+`main`). NDF's CI/CD now runs on the FinSys repo's `cicd/netsuite` branch:
+`.github/workflows/netsuite-deploy-ndf.yml` deploys a feature's scripts **and** objects via
+`cgeaa netsuite deploy` on push to `qa`/`staging`/`cicd/netsuite*`, with a per-branch Jest gate,
+**scoped test execution** (NDF exports `NDF_CHANGED_SCRIPTS` → the SuiteCloud hook runs
+`jest --findRelatedTests`, plus a custom extractor for AMD `define` deps), and production hard-refused;
+a companion `netsuite-jest.yml` runs the full suite on every PR. The production/`main` cutover is
+deliberately pending approval — see `ndf/CLAUDE.md` "NDF in CI/CD" and `ndf/TODO.md` "CI/CD Roadmap".
 
 ## Salesforce bash conventions
 

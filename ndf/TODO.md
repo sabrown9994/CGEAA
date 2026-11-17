@@ -166,6 +166,16 @@ production opt-in. On `main` it uploads straight to the production account.)
     deploys run only the tests related to the changed scripts.
 - **(Later) Production cutover** — only after the above is proven and with explicit approval (guardrail 3).
 
+- **[ACTION — post-merge] Update the external-facing (Confluence) NDF docs once the CI/CD capability
+  lands on `main`.** The in-repo markdown (`ndf/CLAUDE.md` "NDF in CI/CD", `ndf/README-NDF.md`, root
+  `CLAUDE.md` "Shipping state") was updated with the new CI/CD capability on 2026-11-17. The **external**
+  docs are deliberately left until the NDF CI/CD work merges to `main` (CGEAA `rollout` → `main` **and**
+  FinSys `cicd/netsuite` → `main`), so they don't describe an unreleased state. When that merge lands,
+  refresh the Confluence **NDF Installation Guide** and **How To Use** pages (children of the NDF parent
+  page) to cover: the NDF-driven deploy workflow (`netsuite-deploy-ndf.yml`), the per-branch Jest gate,
+  **scoped test execution** (`NDF_CHANGED_SCRIPTS` → `jest --findRelatedTests` + the AMD-`define`
+  dependency extractor), the `netsuite-jest.yml` PR full-suite check, and the production cutover model.
+
 - **GitHub Action that uses NDF for script *and* object deployment; retire the existing file-upload
   workflow.** Build a CI pipeline that runs `cgeaa netsuite deploy` on merges to FinSys environment
   branches, so deploys go through NDF's feature-scoped build (scripts **and** `src/Objects/**`),
