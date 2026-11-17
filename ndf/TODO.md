@@ -50,6 +50,61 @@ production deploy, which is blocked on valid production auth (see below).
 
 **Remaining:**
 
+- **🐞 BUG / 📣 USER ROLL-OUT FEEDBACK (RCA 2026-11-17) — `project:adddependencies` lists self-provided `reportdefinition`/`financiallayout` objects as account dependencies, breaking first-time deploys of reports/layouts.**
+
+  *Surfaced by real roll-out usage:* the team's first actual environment move through NDF (FINT-17163,
+  StagingUAT→Production of two financial reports) — i.e. exactly the day-to-day manual use the roll-out
+  is meant to validate — hit this on the first `build`+`deploy`. It blocks any first-time deploy of
+  reports/financial layouts (and the eventual prod cutover of same), so it is a roll-out blocker for
+  that object class, not a corner case.
+
+  **Symptom.** Moving two financial reports (ACS I SEC Balance Sheet, ACS I SEC Income Statement)
+  StagingUAT→Production (FINT-17163): `pull object` of both `reportdefinition`s and their two
+  `financiallayout` deps, commit, `cgeaa netsuite build`, then `deploy --target CG-intQA --dry-run`
+  → **FAILED** at `PROJECT_ACCOUNT_VALIDATION` / `ACCOUNT_SETTINGS_VALIDATION` with 4 errors, all of
+  the form: *"The manifest contains a dependency on `customreport_1541_3595813_sb1_510` object, but
+  it is not in the account."* (same for the other report + both layouts). Per-object validation
+  (Steps 6–9) **passed** — the objects themselves are valid; only the manifest-dependency check fails.
+
+  **Root cause.** `runBuild` writes a feature-scoped manifest whose `<dependencies><objects>` is
+  seeded with exactly the objects being deployed (`objectIds`, `build-runner.ts:42-43`), then runs
+  `project:adddependencies` (`build-runner.ts:56`). For `reportdefinition`/`financiallayout` types,
+  SDF's `adddependencies` leaves (or re-adds) those same scriptids in `<dependencies><objects>` —
+  i.e. it declares the objects NDF is *creating* as objects that must *already exist* in the target.
+  On any account where they don't yet exist (every first-time move, and every prod cutover),
+  `project:validate`/`project:deploy` fail the account-settings step. NDF's own resolver can't help:
+  `--source` import just re-imports the same XML; NDF correctly reports *"Deploy failed with no
+  resolvable missing-object dependency."* There is no flag to skip `adddependencies`, so a pure
+  `cgeaa netsuite deploy` cannot complete for these object types.
+
+  **Evidence / proven fix (read-only, 2026-11-17).** Emptying the manifest `<objects>` dependency
+  block (the report→layout reference resolves *within* the deploy scope, so there is no genuine
+  external dependency) makes `suitecloud project:validate --server` pass **fully** against both
+  `CG-intQA` (`3595813_SB6`) **and** `CG-Production` (`3595813`) — including *"Validate Custom Objects
+  against the Account -- Success"*. No deploy was performed (validate-only). So the objects deploy
+  cleanly; the manifest dependency list is the sole blocker.
+
+  **Suggested resolution (targeted, general).** After `project:adddependencies` returns
+  (`build-runner.ts:56`), **post-process `src/manifest.xml`: remove from `<dependencies><objects>` any
+  scriptid that NDF is itself deploying** — i.e. any id in `objectIds` (already computed at line 42,
+  = objects in the feature's deploy scope / `src/Objects/`). These are project-provided, not external
+  account dependencies; SDF's `<dependencies><objects>` is meant to list *only* objects referenced-but-
+  not-shipped. This fix is type-agnostic (not special-cased to report/layout), uses data already in
+  hand, and leaves genuine external deps untouched. Add a helper in `helpers/xml.ts` (e.g.
+  `stripSelfProvidedDeps(manifestXml, objectIds)`) with Vitest coverage, and a live `CG-intQA`
+  report-deploy test (pull a report + layout, deploy, assert success, revert) per the standing dev flow.
+  - *Secondary / escape hatch:* a `--no-adddependencies` flag on `build`/`deploy` for cases where the
+    caller has already curated the manifest. Lower priority than the post-process fix, which should
+    make the common case Just Work.
+  - *Note:* the same self-dependency shape likely affects other "opaque-blob" object types SDF handles
+    this way (e.g. `savedsearch`, some `dataset`/`workbook`); the post-process fix covers them all,
+    whereas a type-allowlist would not.
+
+  **Interim workaround (until fixed).** Deploy these object types via raw `suitecloud project:deploy`
+  with a hand-corrected manifest (empty `<objects>` deps), bypassing NDF's `adddependencies` — at the
+  cost of NDF's production guard, so enforce the `main`-branch + reviewed-merge discipline manually.
+  (FINT-17163 is paused here pending the decision on this fix.)
+
 - **First live production deploy not yet verified — blocked on valid production auth.** A read-only
   connectivity check (`suitecloud object:list --type role` against `CG-Production`) on 2026-10-23
   found the local `CG-Production` auth token is **expired**: suitecloud fell back to browser-based
