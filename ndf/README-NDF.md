@@ -131,16 +131,19 @@ The imported object XML files are left in the working tree (under `src/Objects/`
 **Gating:**
 Named-only import: if SDF names a missing object ID during resolution, only that object is imported (not a broader set). This minimizes scope creep.
 
-**GitHub Actions example (illustrative — not yet wired):**
+**GitHub Actions (wired on the FinSys `cicd/netsuite` branch):**
 ```yaml
-- name: Deploy feature to UAT (auto-resolve deps)
-  run: ./cgeaa netsuite deploy --target CG-UAT --source CG-intQA --auto-import
+- name: Deploy feature via NDF
+  run: cgeaa netsuite deploy --target "$ENV_AUTHID" --base "$BASE_SHA"
 ```
 
-> **NDF is not currently invoked by any CI/CD pipeline.** This snippet shows how an Action *would*
-> call NDF; no committed workflow runs it today. See [TODO.md](TODO.md) "CI/CD Roadmap" (and its
-> `--base` prerequisite) for the plan to wire this up and retire the existing scripts-only
-> `file:upload` workflow.
+> NDF **is** invoked by CI. `.github/workflows/netsuite-deploy-ndf.yml` (FinSys `cicd/netsuite`) runs
+> `cgeaa netsuite deploy` on push to `qa`/`staging`/`cicd/netsuite`/`cicd/netsuite-test/**`, building NDF
+> from a pinned CGEAA commit and passing `--base ${{ github.event.before }}`. It deploys scripts **and**
+> objects (feature-scoped), gates Jest per-branch, scopes tests to the changed scripts (see "Scoped test
+> execution" below), and hard-refuses production. A companion `netsuite-jest.yml` runs the full suite on
+> every PR touching `NetSuite/`. **Not yet on `main`/production** — the prod cutover is pending approval.
+> See [TODO.md](TODO.md) "CI/CD Roadmap".
 
 By default the SuiteCloud `beforeExecuting` Jest hook configured in the project's
 `suitecloud.config.js` runs as part of the deploy. To skip it, see below.
@@ -173,6 +176,24 @@ Precedence: `--skip-tests` (per-run) OR `netsuite_run_tests=false` (persistent) 
 > Use with care: skipping tests removes a deploy guardrail. It exists for cases where the suite is
 > red for reasons unrelated to your change (e.g. pre-existing failures on the branch) and you need
 > to deploy to a **lower** environment. Production deploys are still blocked off `main` regardless.
+
+### Scoped test execution (run only related tests)
+
+When the Jest gate runs (tests not skipped), NDF scopes the run to the tests related to the scripts the
+deploy changed, rather than the whole suite:
+
+1. **NDF** exports `NDF_CHANGED_SCRIPTS` on the `suitecloud` subprocess — the feature's changed
+   SuiteScript paths (absolute, newline-joined), from the same `base..HEAD` diff it deploys. An
+   object-only change yields an empty value.
+2. **The project's `suitecloud.config.js` hook** branches on it: non-empty →
+   `run({ findRelatedTests: true, _: [<paths>] })` (only related tests); empty → skip (nothing to test);
+   absent (a non-NDF `suitecloud` call) → full suite, preserving prior behavior.
+
+Because SuiteScripts declare dependencies in AMD `define([...])` arrays that Jest's default resolver
+can't see, the FinSys project also ships a custom Jest `dependencyExtractor`
+(`NetSuite/jest-amd-dependency-extractor.js`) so `--findRelatedTests` resolves `define` edges — a change
+to a shared library (e.g. `cg_email_library_ss.js`) then correctly selects its consumers' tests too.
+Full-suite coverage still runs on every PR via `netsuite-jest.yml`.
 
 ### `cgeaa netsuite pull object <scriptId>`
 `suitecloud object:import --scriptid <scriptId> --type ALL --destinationfolder /Objects`.
@@ -219,7 +240,8 @@ Production deploys happen from `main` after a reviewed merge — never from a fe
 ```bash
 # on main, after the feature PR has merged:
 git checkout main && git pull
-cgeaa netsuite deploy --target CG-Production --base <pre-merge-SHA> --allow-production
+# --skip-tests is INTERIM — until the FinSys Jest suite is merged into FinSys main (see the runbook note below):
+cgeaa netsuite deploy --target CG-Production --base <pre-merge-SHA> --allow-production --skip-tests
 ```
 
 Why `--base`: `build` computes its changeset as `git diff $(git merge-base <base> HEAD)..HEAD`, with
@@ -228,10 +250,59 @@ is empty and deploy is a deliberate no-op. Passing `--base <pre-merge-SHA>` (the
 pointed at *before* the merge) makes the diff `before..main` = exactly the merged feature. This is
 the same value CI will pass as `${{ github.event.before }}`.
 
-> **NDF is not wired into CI/CD**, so merging to `main` does not auto-deploy — the command above is
-> the only production path, and it is intentionally manual. A production deploy also needs a valid
-> `CG-Production` auth token; if `suitecloud` falls back to browser re-authentication, refresh it
-> first with `suitecloud account:setup`. See [TODO.md](TODO.md) "User Roll-out" / "CI/CD Roadmap".
+> **Production is not yet wired into CI/CD.** The NDF CI workflow runs on the dev-cycle branches
+> (`qa`/`staging`/`cicd/netsuite*`) but deliberately omits `main` as a trigger and hard-refuses
+> `CG-Production` until the approved prod cutover — so merging to `main` does not auto-deploy, and the
+> manual command above is the only production path today. See [TODO.md](TODO.md) "User Roll-out" /
+> "CI/CD Roadmap".
+
+### Interim manual production deploy — runbook (current user-rollout / pre-release state)
+
+Until the production cutover is approved and CI owns prod, a production move is done **by hand from your
+machine**, mirroring what the CI Action will eventually do on merge to `main`. Full procedure:
+
+1. **Update your local CLI to the latest NDF.** The installed `cgeaa` is a built *snapshot* — running
+   `cgeaa netsuite …` does **not** pick up repo changes until you update, and the current NDF work
+   (scoped tests; the `reportdefinition`/`financiallayout` manifest-dependency fix) is on `rollout`,
+   not `main`, yet:
+   ```bash
+   cgeaa update -b rollout      # plain `cgeaa update` targets main and won't have these until rollout → main merges
+   ```
+2. **Confirm `CG-Production` auth.** A prod deploy needs a valid production token; if `suitecloud` would
+   fall back to browser re-auth, refresh it first:
+   ```bash
+   suitecloud account:setup     # interactive; use account:setup:ci with a cert/key for headless runs
+   ```
+3. **Merge the feature to `main`** via a reviewed PR — prod deploys come from `main` only (the guard
+   refuses `CG-Production` from any other branch). Note the SHA `main` pointed at *before* the merge
+   (the "pre-merge SHA").
+4. **Pre-flight — read-only (recommended).** Validate against production without writing anything:
+   ```bash
+   # from main, through NDF's full build (generates + strips the manifest, then validates — no deploy):
+   cgeaa netsuite deploy --target CG-Production --base <pre-merge-SHA> --allow-production --dry-run
+   ```
+   To validate *before* merging to `main`, bypass the branch guard with raw
+   `suitecloud project:validate --server` and `project.json` `defaultAuthId: CG-Production` (this is how
+   the report/layout fix was verified against Production, read-only).
+5. **Deploy to production** — the real write, identical to what CI will do at cutover:
+   ```bash
+   git checkout main && git pull
+   cgeaa netsuite deploy --target CG-Production --base <pre-merge-SHA> --allow-production --skip-tests
+   ```
+   Without `--base <pre-merge-SHA>` the diff is empty on `main` and the deploy is a deliberate no-op
+   (see "Why `--base`" above).
+
+   **`--skip-tests` is interim.** A deploy from `main` runs `main`'s `suitecloud.config.js` Jest hook,
+   which today runs the **full, uncurated** suite — the scoped hook and the stale-test fixes live on
+   FinSys `cicd/netsuite`, not `main`, so the gate would run known-stale tests and block the deploy.
+   `main` already honors `NDF_SKIP_TESTS`, so `--skip-tests` cleanly bypasses it. **Drop `--skip-tests`
+   once the Jest suite is merged into FinSys `main`** (then the deploy-time gate runs the real suite,
+   as on the dev-cycle branches). The `--dry-run` pre-flight in step 4 doesn't run the hook at all
+   (validate-only), so it needs no flag.
+
+This runbook is **temporary**: at the production cutover the CI workflow (with `main` re-added as a
+trigger and the `CG-Production` mapping restored) performs step 5 automatically on merge to `main`,
+and your local CLI just needs `cgeaa update` (plain, from `main`) instead of `-b rollout`.
 
 ## How it fits into CGEAA
 

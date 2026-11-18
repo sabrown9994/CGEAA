@@ -78,6 +78,78 @@ traversal), so direct OLI pull is not regularly exercised live — covered by un
 
 ## Remaining work
 
+### User roll-out feedback — product catalog pull & data-query (reported 2026-11-16)
+
+> **✅ SHIPPED + LIVE-VERIFIED 2026-11-16** on branch `zdf-feedback-fixes` (off `main`@`3900ffb`; merged
+> into `rollout`; pushed for a separate `main` PR). All four resolutions done — **A** `pull` natural-key
+> resolution (`src/helpers/catalog-resolve.ts`), **B** `list products`, **C** `create data-query` fully
+> working (body `{query, outputFormat, compression, retries, output:{target:'s3'}}` + `data`-envelope
+> response unwrap — see `CLAUDE.md` "Data Query job creation body"), **D** `list workflows --name`. 517 unit
+> tests pass; **live-verified on intQA**: `list products` shows PriceVantage (`8a369dbd…`/`PTL-EDG`),
+> `pull product PriceVantage`/`PTL-EDG` resolve→pull (the exact reported commands), and `create data-query`
+> submits→polls→`completed` (outputRows=5, dataFile returned). Docs updated (CLAUDE.md + README-ZDF.md).
+> The findings below are kept for history. **Correction note:** the first data-query fix (field rename only,
+> and a later `retries` removal) 400'd live — `retries` AND `output.target` are both required; fixed in
+> `c8fc0e3`. Remaining enhancement (low): the CLI writes the job incl. the `dataFile` URL but doesn't yet
+> download/parse the result file.
+
+Surfaced during roll-out from a use-case-3 (catalog) read attempt on intQA — pull the PriceVantage
+product + its rate plan + charges (`cgeaa zuora pull product PriceVantage`). Three distinct gaps; fix
+via the ranked path below. **All three ship via the Required development flow (top of file)** — Vitest
+tests with every change, `cd zdf && npm run build && npm test` green, and live intQA **read-only**
+verification (resolve + `pull product <SKU>` against the live sandbox; never write).
+
+**Findings**
+1. **`pull` has no natural-key resolution — it requires the internal Zuora ID.** `pull product PriceVantage`
+   and `pull product PTL-EDG` (the SKU) both fail with `Invalid object id`; `pull product-rate-plan <id>` hits
+   `GET /v1/object/product-rate-plan/{id}`, which only accepts the internal ID. This contradicts the README's
+   "natural key or internal id" claim (`README-ZDF.md:813-815`) — that only holds for `push`/`delete`, which
+   resolve the ID from the local `_zdf`/stored file. On a **first** `pull` there is no local file yet, so the
+   internal ID is the only accepted key.
+2. **Jira-recorded sandbox IDs are environment-stale.** FINT-14029's intQA rate-plan id
+   `f6e6431815f9739fdcd74165f2b2047a` now 404s (`{"size":0,"records":[]}`) — intQA was refreshed since the
+   2025 ticket. "Just use the ID from the ticket" can't be trusted → reinforces the need for live name/SKU → ID
+   resolution (fix A). (Not itself a code change; context motivating A/B.)
+3. **`create data-query` sends the wrong request body — advertised but 100% broken.**
+   `src/commands/data-queries.ts:64` posts `apiPost('/query/jobs', { queryString: sql })`. Zuora's **Data
+   Query API** expects `query` (not `queryString`), so every job fails `400 Unable to process JSON` — even
+   `SELECT Id, SKU, Name FROM Product LIMIT 5`. The field name was copied from the **synchronous** ZOQL helper
+   `apiQuery` (`src/api/client.ts:184`, `POST /v1/action/query` with `{ queryString }`) — correct for *that*
+   endpoint, but the two endpoints use different schemas.
+
+**Resolution (ranked)**
+- **A. PRIMARY — teach `pull` to resolve a natural key via the ZOQL path that already works.** `apiQuery`
+  (`src/api/client.ts:184`, `POST /v1/action/query`) is live, fast, and already trusted by dependency
+  traversal. In the catalog pull commands (`src/commands/products.ts`, `product-rate-plans.ts`,
+  `product-rate-plan-charges.ts`), before the object-GET fallback: if the arg is not a valid internal ID,
+  resolve it first —
+  - `pull product <key>` → `SELECT Id FROM Product WHERE SKU = '<key>' OR Name = '<key>'`
+  - `pull product-rate-plan <key>` → resolve by `Name`
+  - `pull product-rate-plan-charge <key>` → resolve by `Name`
+  Single-quote-escape the key (reuse the escaping in `upsert.ts` `searchByKey`); 0 rows → clear not-found; >1
+  rows → ambiguous error listing the candidate IDs. Makes the documented "natural key or internal id" claim
+  true for `pull` and directly fixes the reported command.
+- **B. Add a `list products` discovery command** (sibling to `list orders` / `list billing-templates`),
+  backed by the same `apiQuery`, printing `Id / SKU / Name / EffectiveStartDate`. Gives operators a way to find
+  the current ID without the Zuora UI and without trusting a stale ticket ID (Finding 2).
+- **C. Fix the data-query body bug regardless of A/B** (`src/commands/data-queries.ts:64`): send the Data
+  Query schema — `{ query: sql, outputFormat: 'JSON', compression: 'NONE', retries: 3 }` — and update the
+  assertion in `src/__tests__/commands/data-queries.test.ts:64` (currently pins the wrong `{ queryString }`
+  shape). NOTE: Data Query is **async** (returns a result-file URL the CLI does not currently download), so
+  it's a poor fit for a quick ID lookup anyway — hence A/B are the better primary fixes. Still worth fixing
+  since the command is advertised and currently 100% broken. (Full support later = poll the job to `completed`
+  + download/parse the result file.)
+- **D. Add a `--name <substr>` filter to the already-shipped `list workflows`** (minor enhancement; reported
+  2026-11-16 from a workflow-pull-by-name attempt on intQA). The `list workflows` discovery command itself
+  **already exists** (`src/commands/workflows.ts:263`, paginated `GET /workflows`) — the roll-out report hit
+  the gap only because the installed `cgeaa` bundle predates it (**rebuild to get it**; the same stale-bundle
+  cause as the data-query 404s). The one net-new ask is a client-side **case-insensitive substring filter on
+  the workflow name** so an operator can run `cgeaa zuora list workflows --name "CoOp Rebate"` to find the
+  current tenant workflow-definition ID, then feed it to `pull workflow <id>`. This is a *discovery filter*,
+  **not** name→ID resolution — workflow verbs stay ID-only by design (names aren't guaranteed unique; see
+  `CLAUDE.md` "Workflows API"). Ship via the ZDF dev flow with a unit test on the filter. (`list products`
+  from fix B closes the equivalent catalog gap.)
+
 ### Open item
 - **Credit/debit-memo cross-tenant create is unit + real-filesystem tested but not yet
   live-confirmed.** Reason: a live A→B run requires a subscription-billed invoice (a standalone
@@ -103,6 +175,11 @@ traversal), so direct OLI pull is not regularly exercised live — covered by un
     fall back to today's `./zdf-output`; `ZDF_OUTPUT_DIR` and `zuora_output_dir` remain explicit
     overrides that take precedence. Ship via the ZDF dev flow with unit tests pinning the full
     resolution order.
+  - **Re-reported 2026-11-16 (user roll-out):** running `cgeaa zuora` from inside the repo's `NetSuite/`
+    directory created `zdf-output` **under `NetSuite/`** — exactly the cwd-scattering this item fixes. Desired
+    behavior: ZDF always resolves to the repo's `FinTech/Zuora/zdf-output` (via the walk-up above) regardless
+    of which subdirectory the CLI is invoked from, and reads/writes state there on every session. **Still
+    pending — this is unimplemented work, NOT a stale-bundle issue** (unlike the `list workflows` report above).
 
 - **Cross-tenant sync/upsert for `workflow` and `billing-template` via the `_zdf` id-map.**
   Extend the cross-tenant push (today scoped to account/product/invoice/credit-memo/debit-memo) to

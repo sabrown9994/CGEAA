@@ -83,3 +83,42 @@ export function generateManifestXml(existingManifestPath: string, changedObjectI
   </dependencies>
 </manifest>`;
 }
+
+/**
+ * Remove self-provided objects from a manifest's `<dependencies><objects>` block.
+ *
+ * `project:adddependencies` re-adds the objects a deploy *ships* to `<dependencies><objects>`, as if
+ * they were external objects that must already exist in the target account. On a first-time deploy
+ * (every environment move / prod cutover of a new object) that fails account validation:
+ * "The manifest contains a dependency on <id> object, but it is not in the account." `<dependencies>`
+ * is meant to list only objects referenced-but-not-shipped, so any id NDF is itself deploying
+ * (`objectIds`) must be stripped. Type-agnostic — fixes reportdefinition/financiallayout and any other
+ * object SDF treats this way (savedsearch, dataset/workbook, …). Genuine external deps are untouched.
+ * (FINT-17163)
+ */
+export function stripSelfProvidedDeps(manifestXml: string, objectIds: string[]): string {
+  if (objectIds.length === 0) return manifestXml;
+  const selfProvided = new Set(objectIds.map((id) => id.trim()));
+
+  // Scope to <dependencies>…</dependencies> so a stray `<objects>`/`<object>` elsewhere (e.g. inside
+  // a comment) can't be matched or corrupted.
+  const depOpen = manifestXml.indexOf('<dependencies>');
+  const depClose = manifestXml.indexOf('</dependencies>');
+  if (depOpen === -1 || depClose === -1 || depClose <= depOpen) return manifestXml;
+  const depStart = depOpen + '<dependencies>'.length;
+  const deps = manifestXml.slice(depStart, depClose);
+
+  // Removal-only transform: delete ONLY the plain `<object>id</object>` entries whose id is
+  // self-provided (the shape SDF's `adddependencies` emits). Everything else — entries with
+  // attributes, any unexpected shape, and all surrounding formatting — is left byte-for-byte intact,
+  // so a genuine external dependency can never be dropped. (Rebuilding from a kept-allowlist would
+  // silently lose anything the parser didn't recognize.)
+  let newDeps = deps.replace(/[ \t]*<object>\s*([^<]+?)\s*<\/object>[ \t]*\n?/g, (whole, id: string) =>
+    selfProvided.has(id.trim()) ? '' : whole,
+  );
+  // Collapse a now-emptied objects block to its canonical empty form.
+  newDeps = newDeps.replace(/<objects>\s*<\/objects>/, '<objects></objects>');
+
+  if (newDeps === deps) return manifestXml;
+  return manifestXml.slice(0, depStart) + newDeps + manifestXml.slice(depClose);
+}

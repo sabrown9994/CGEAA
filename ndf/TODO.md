@@ -50,6 +50,73 @@ production deploy, which is blocked on valid production auth (see below).
 
 **Remaining:**
 
+- **✅ FIXED 2026-11-18 — NDF's manifest seeding left self-provided `reportdefinition`/`financiallayout` objects in `<dependencies><objects>`, breaking first-time deploys of reports/layouts.** (was 🐞 BUG / 📣 USER ROLL-OUT FEEDBACK, RCA 2026-11-17)
+
+  > **Resolved on CGEAA `rollout`.** Added `stripSelfProvidedDeps(manifestXml, objectIds)`
+  > (`src/helpers/xml.ts`), called by `runBuild` right after `project:adddependencies`, to remove from
+  > `<dependencies><objects>` any scriptid NDF is itself shipping. Implemented as a **removal-only**
+  > transform scoped to `<dependencies>` — an independent adversarial review caught that a naive
+  > rebuild-from-allowlist would (a) silently drop a genuine external dep carrying XML attributes and
+  > (b) corrupt the manifest on a decoy `<objects>` substring; both are avoided by deleting only the
+  > matched self-provided entries and leaving all other bytes intact. **Live-verified on CG-intQA with
+  > the FINT-17163 reports/layouts:** the pre-fix (seeded) manifest → `suitecloud project:validate`
+  > **FAILS** Step 17/18 with 4× *"dependency … not in the account"*; the fixed (stripped) manifest →
+  > **SUCCESS, 23/23 steps**. 120 NDF unit tests pass. FINT-17163 is unblocked. Full RCA + the original
+  > read-only evidence kept below.
+
+  *Surfaced by real roll-out usage:* the team's first actual environment move through NDF (FINT-17163,
+  StagingUAT→Production of two financial reports) — i.e. exactly the day-to-day manual use the roll-out
+  is meant to validate — hit this on the first `build`+`deploy`. It blocks any first-time deploy of
+  reports/financial layouts (and the eventual prod cutover of same), so it is a roll-out blocker for
+  that object class, not a corner case.
+
+  **Symptom.** Moving two financial reports (ACS I SEC Balance Sheet, ACS I SEC Income Statement)
+  StagingUAT→Production (FINT-17163): `pull object` of both `reportdefinition`s and their two
+  `financiallayout` deps, commit, `cgeaa netsuite build`, then `deploy --target CG-intQA --dry-run`
+  → **FAILED** at `PROJECT_ACCOUNT_VALIDATION` / `ACCOUNT_SETTINGS_VALIDATION` with 4 errors, all of
+  the form: *"The manifest contains a dependency on `customreport_1541_3595813_sb1_510` object, but
+  it is not in the account."* (same for the other report + both layouts). Per-object validation
+  (Steps 6–9) **passed** — the objects themselves are valid; only the manifest-dependency check fails.
+
+  **Root cause.** `runBuild` writes a feature-scoped manifest whose `<dependencies><objects>` is
+  seeded with exactly the objects being deployed (`objectIds`, `build-runner.ts:42-43`), then runs
+  `project:adddependencies` (`build-runner.ts:56`). For `reportdefinition`/`financiallayout` types,
+  SDF's `adddependencies` leaves (or re-adds) those same scriptids in `<dependencies><objects>` —
+  i.e. it declares the objects NDF is *creating* as objects that must *already exist* in the target.
+  On any account where they don't yet exist (every first-time move, and every prod cutover),
+  `project:validate`/`project:deploy` fail the account-settings step. NDF's own resolver can't help:
+  `--source` import just re-imports the same XML; NDF correctly reports *"Deploy failed with no
+  resolvable missing-object dependency."* There is no flag to skip `adddependencies`, so a pure
+  `cgeaa netsuite deploy` cannot complete for these object types.
+
+  **Evidence / proven fix (read-only, 2026-11-17).** Emptying the manifest `<objects>` dependency
+  block (the report→layout reference resolves *within* the deploy scope, so there is no genuine
+  external dependency) makes `suitecloud project:validate --server` pass **fully** against both
+  `CG-intQA` (`3595813_SB6`) **and** `CG-Production` (`3595813`) — including *"Validate Custom Objects
+  against the Account -- Success"*. No deploy was performed (validate-only). So the objects deploy
+  cleanly; the manifest dependency list is the sole blocker.
+
+  **Suggested resolution (targeted, general).** After `project:adddependencies` returns
+  (`build-runner.ts:56`), **post-process `src/manifest.xml`: remove from `<dependencies><objects>` any
+  scriptid that NDF is itself deploying** — i.e. any id in `objectIds` (already computed at line 42,
+  = objects in the feature's deploy scope / `src/Objects/`). These are project-provided, not external
+  account dependencies; SDF's `<dependencies><objects>` is meant to list *only* objects referenced-but-
+  not-shipped. This fix is type-agnostic (not special-cased to report/layout), uses data already in
+  hand, and leaves genuine external deps untouched. Add a helper in `helpers/xml.ts` (e.g.
+  `stripSelfProvidedDeps(manifestXml, objectIds)`) with Vitest coverage, and a live `CG-intQA`
+  report-deploy test (pull a report + layout, deploy, assert success, revert) per the standing dev flow.
+  - *Secondary / escape hatch:* a `--no-adddependencies` flag on `build`/`deploy` for cases where the
+    caller has already curated the manifest. Lower priority than the post-process fix, which should
+    make the common case Just Work.
+  - *Note:* the same self-dependency shape likely affects other "opaque-blob" object types SDF handles
+    this way (e.g. `savedsearch`, some `dataset`/`workbook`); the post-process fix covers them all,
+    whereas a type-allowlist would not.
+
+  **Interim workaround (until fixed).** Deploy these object types via raw `suitecloud project:deploy`
+  with a hand-corrected manifest (empty `<objects>` deps), bypassing NDF's `adddependencies` — at the
+  cost of NDF's production guard, so enforce the `main`-branch + reviewed-merge discipline manually.
+  (FINT-17163 is paused here pending the decision on this fix.)
+
 - **First live production deploy not yet verified — blocked on valid production auth.** A read-only
   connectivity check (`suitecloud object:list --type role` against `CG-Production`) on 2026-10-23
   found the local `CG-Production` auth token is **expired**: suitecloud fell back to browser-based
@@ -97,18 +164,93 @@ production opt-in. On `main` it uploads straight to the production account.)
    serves as the guiding template.
 
 **Phasing (ordered — set 2026-11-11):**
-- **Phase 1 — Prove the deploy pipeline with tests OFF.** Get the NDF workflow building and deploying
-  scripts **and** objects to the sandboxes (qa→`CG-intQA`, staging→`CG-UAT`, `cicd/netsuite-test/**`→
-  `CG-intQA`) with Jest **skipped** (`netsuite_run_tests=false` / `--skip-tests` → `NDF_SKIP_TESTS=true`).
-  Rationale: the suite barely exists (~3 tests vs ~108 scripts), so the first milestone is proving
-  build→auth→scope→deploy end-to-end **without** depending on a test gate. Prod path stays dormant.
-- **Phase 2 — Build the Jest test suite (FINT-17160).** Only after Phase 1 works: author real Jest
-  coverage (and script docs) for the SuiteScripts, keeping the `__tests__/` + relative-`require`
-  convention. See the dedicated FinSys item below.
+- **Phase 1 — Prove the deploy pipeline with tests OFF. ✅ PROVEN 2026-11-16.** Got the NDF workflow
+  building and deploying scripts **and** objects to the sandboxes (qa→`CG-intQA`, staging→`CG-UAT`,
+  `cicd/netsuite-test/**`→`CG-intQA`) with Jest **skipped** (`netsuite_run_tests=false` / `--skip-tests`
+  → `NDF_SKIP_TESTS=true`). Rationale: the suite barely exists (~3 tests vs ~108 scripts), so the first
+  milestone is proving build→auth→scope→deploy end-to-end **without** depending on a test gate. Prod
+  path stays dormant.
+  - Validated on a `cicd/netsuite-test/phase1-smoke` branch (now deleted): a one-script change deployed
+    end-to-end to `CG-intQA` — `account:setup:ci` auth ✓, `NDF_SKIP_TESTS=true` honored at both the NDF
+    layer and the `suitecloud.config.js` Jest hook ✓, `deploy.xml`/`manifest.xml` auto-generated ✓,
+    diff scoped to exactly the one changed script (`Upload file -- …/CB_JE_AMORT_MU.js`) ✓,
+    `Installation COMPLETE` ✓. Sandbox restored afterward (revert redeployed the clean file; test
+    branch deleted local+remote) per the dev-flow cleanup guardrail.
+  - Plumbing fixes shipped on `cicd/netsuite` to get there (none were NDF-logic bugs — all CI-env gaps):
+    (1) build step uses `npm install`, not `npm ci` (CGEAA gitignores `ndf/package-lock.json`);
+    (2) install SuiteCloud CLI fresh via `npm install -g --acceptSuiteCloudSDKLicense @oracle/suitecloud-cli@^3.1.2`
+    (the vendored `NetSuite/node_modules` copy lacks the postinstall-fetched SDK JAR — do NOT also add the
+    vendored `.bin` to PATH or the JAR-less copy shadows the good one); (3) base-SHA resolution falls back
+    to `HEAD~1` when `github.event.before` is all-zeros, empty, OR unreachable (force-push/rebase/gc), with
+    the `~` resolved to a plain SHA before `--base` (NDF's injection guard rejects `~`).
+- **Phase 2 — Build the Jest test suite (FINT-17160). 🔄 IN PROGRESS (started 2026-11-16).** Author real
+  Jest coverage (and script docs) for the SuiteScripts, keeping the `__tests__/` + relative-`require`
+  convention. See the dedicated FinSys item below. Progress on `cicd/netsuite`:
+  - **Investigation:** 109 SuiteScripts, 2 tested at start. Testability is **not** a blocker — nearly all
+    scripts expose SuiteScript entry points (`beforeSubmit`/`afterSubmit`/`onRequest`/`onAction`/`execute`/
+    `get`/`post`, and `getInputData/map/reduce/summarize`) that test cleanly against mocked `N/*` modules,
+    **no production-script refactoring needed**. So Phase 2 is bounded by authoring volume, not feasibility.
+  - **Stale-test fix (required for the gate):** the suite was already **red** — `cg_vendor_bill_approval_suitelet_ss.test.js`
+    asserted the pre-FINT-16833 shape (the `csv approvals` rewrite changed filters/columns/result shape and
+    `mainline` T→F but left the tests). Fixed the 3 assertions to match the shipped script. Full suite now
+    **green: 4 suites, 33 tests**.
+  - **Pilot:** added `cg_email_library_ss.test.js` (4 tests) proving the pattern replicates to an untested
+    script. Gotcha documented: `jest.clearAllMocks()` clears call records but NOT `mockImplementation` —
+    use `mockImplementationOnce` for throw-cases so they don't leak into later tests.
+  - **Archetype exemplars (step 3 — done 2026-11-16):** one clean exemplar per previously-uncovered
+    archetype — Workflow Action (`cg_journal_approval_check_ss`), RESTlet (`torii_restlet_v1`), Client
+    Script (`CG_VBJE_CS` validateLine), Scheduled (`cg_journal_entry_approver_update_ss`), User Event
+    (`cg_payment_create_jefee_ue`). Suite now **9 files / 58 tests, green**. Coverage spans suitelet,
+    map/reduce, library, workflow-action, restlet, user-event, client-script, scheduled — the pattern is
+    established for the FINT-17160 build-out.
+  - **Bug surfaced by the RESTlet exemplar (needs a FinSys fix):** `torii_restlet_v1.js` error handler calls
+    `reply({error,stack})`, but `reply` is `const`-scoped INSIDE the `try`, so every error path throws
+    `ReferenceError: reply is not defined` instead of returning the intended error object. Pinned with a
+    labeled characterization test; fix = hoist `reply` to function scope, then flip that test to assert the
+    returned error object. (A latent scheduled-script bug was also noted and avoided: `cg_vendor_update_sch.js`
+    imports `'N.log'` instead of `'N/log'`.)
+  - **Ownership (user decision 2026-11-16):** sequence is ✅ fix stale tests → ✅ get the Action green with the
+    gate on → ✅ author major-archetype exemplars → ✅ require every future PR to add tests (new
+    `netsuite-jest.yml` runs `npm test` on every PR touching `NetSuite/`; coverage grows organically,
+    enforced by the gate). The long tail is NOT a write-all-109 effort up front — the FINT-17160 build-out
+    continues from here PR-by-PR.
 - **Phase 3 — Turn the test gate on + scope it.** Stop skipping tests (unset the skip), then layer on
   the "Scoped test execution" plan (`NDF_CHANGED_SCRIPTS` → `findRelatedTests`) so deploys run only
   the tests related to the changed scripts.
+  - **Gate mechanism VALIDATED in CI 2026-11-16** (on a throwaway `cicd/netsuite-test/gate-check` branch,
+    now deleted): with `--skip-tests` removed, the `suitecloud.config.js` `beforeExecuting` hook ran the full
+    Jest suite during `project:deploy` — `Test Suites: 4 passed`, `Tests: 33 passed`, `Ran all test suites`
+    — then the deploy proceeded (`Upload file …`, `✔ Deploy complete.`). So the gate gates the deploy as
+    designed. The toolchain is present in CI because `NetSuite/node_modules` (incl. `jest` +
+    `@oracle/suitecloud-unit-testing`) is committed.
+  - **Partial cutover SHIPPED 2026-11-16 (`cicd/netsuite` @ `6dfa4025`):** the deploy workflow now gates
+    per-branch via a `RUN_TESTS` flag — **ON** (`--skip-tests` dropped) for `cicd/netsuite` +
+    `cicd/netsuite-test/**` (NDF-only sandbox path), **deferred** (`RUN_TESTS=0`) for `qa`/`staging` until
+    each is cut over to NDF and the legacy `netsuite-deploy-scripts.yml` is deactivated there. `main` stays
+    hard-gated upstream. Also added `netsuite-jest.yml` (PR-side gate, validated green on PR #173: 9 suites /
+    58 tests). **Remaining for full Phase 3:** (1) flip `RUN_TESTS=1` for `qa`/`staging` as legacy is
+    deactivated per env; (2) the "Scoped test execution" plan (`NDF_CHANGED_SCRIPTS` → `findRelatedTests`) so
+    deploys run only the tests related to the changed scripts.
 - **(Later) Production cutover** — only after the above is proven and with explicit approval (guardrail 3).
+
+- **[ACTION — post-merge] Update the external-facing (Confluence) NDF docs once the CI/CD capability
+  lands on `main`.** The in-repo markdown (`ndf/CLAUDE.md` "NDF in CI/CD", `ndf/README-NDF.md`, root
+  `CLAUDE.md` "Shipping state") was updated with the new CI/CD capability on 2026-11-17. The **external**
+  docs are deliberately left until the NDF CI/CD work merges to `main` (CGEAA `rollout` → `main` **and**
+  FinSys `cicd/netsuite` → `main`), so they don't describe an unreleased state. When that merge lands,
+  refresh the Confluence **NDF Installation Guide** and **How To Use** pages (children of the NDF parent
+  page) to cover: the NDF-driven deploy workflow (`netsuite-deploy-ndf.yml`), the per-branch Jest gate,
+  **scoped test execution** (`NDF_CHANGED_SCRIPTS` → `jest --findRelatedTests` + the AMD-`define`
+  dependency extractor), the `netsuite-jest.yml` PR full-suite check, and the production cutover model.
+
+- **[ACTION — when the FinSys Jest suite lands on `main`] Drop the interim `--skip-tests` from the
+  manual production-deploy runbook.** While the curated Jest suite (scoped hook, stale-test fixes,
+  AMD-`define` extractor) lives only on FinSys `cicd/netsuite`, the documented manual prod deploy
+  (`ndf/README-NDF.md` → "Interim manual production deploy") passes `--skip-tests` — a deploy from
+  `main` otherwise runs `main`'s full, uncurated suite (known-stale tests) and would block. `main`
+  already honors `NDF_SKIP_TESTS`, so the flag is effective. Once `cicd/netsuite` → `main` merges (so
+  `main` carries the real suite + the `NDF_CHANGED_SCRIPTS` scoped hook), **remove `--skip-tests` from
+  both prod-deploy commands in that runbook** so production runs the (scoped) gate like every other env.
 
 - **GitHub Action that uses NDF for script *and* object deployment; retire the existing file-upload
   workflow.** Build a CI pipeline that runs `cgeaa netsuite deploy` on merges to FinSys environment
@@ -121,20 +263,44 @@ production opt-in. On `main` it uploads straight to the production account.)
   `--auto-import`/`--allow-production` as appropriate. (Still deferred by decision 2026-10-22: build
   the CI pipeline only after NDF is proven safe in day-to-day manual use by the team.)
 
+- **[FinSys repo settings — ACTION REQUIRED] Add the `CGEAA_REPO_TOKEN` repository secret.** The NDF
+  workflow's "Checkout CGEAA (pinned)" step checks out `sabrown9994/CGEAA` (a separate, private repo)
+  to build the `cgeaa`/NDF tooling. The default `GITHUB_TOKEN` cannot read another repo, so a
+  **read-scoped** token (a fine-grained PAT or deploy token with read access to `sabrown9994/CGEAA`)
+  must be added as the Actions secret **`CGEAA_REPO_TOKEN`** in the FinSys repo settings. Without it,
+  every NDF workflow run fails at the CGEAA checkout step. **Prerequisite for Phase 1 end-to-end
+  testing.** The assistant cannot set repo secrets — this is a human GitHub-settings action. (Optional
+  companion: a `SUITECLOUD_CI_PASSKEY` secret; the workflow falls back to the legacy literal if unset.)
+
 - **Test the NDF CI workflow end-to-end (user roll-out validation).** The NDF-driven deploy workflow
-  exists in FinSys at `.github/workflows/netsuite-deploy-ndf.yml` on branch `cicd/netsuite` (committed,
-  not yet pushed/activated — the user pushes when ready to test). Validate before any real cutover:
-  (1) add the `CGEAA_REPO_TOKEN` secret (read access to `sabrown9994/CGEAA`); (2) push `cicd/netsuite`
-  and fork a `cicd/netsuite-test/**` branch; (3) merge a trivial script+object change and confirm the
-  run builds cgeaa, auths to `CG-intQA`, and `cgeaa netsuite deploy` scopes to exactly that change
-  (inspect generated `deploy.xml`), and deploys to the sandbox **with tests skipped**
-  (`netsuite_run_tests=false` / `--skip-tests`) — this is **Phase 1**, proving the deploy mechanism,
-  not the test gate (tests are turned on in Phase 3, after the suite exists); (4) negative test — a
-  change referencing a missing object must fail loudly; (5) cut over qa → staging (sandboxes only;
+  is on FinSys branch `cicd/netsuite` (pushed to origin 2026-11-11). Validate before any real cutover:
+  (1) ✅ `CGEAA_REPO_TOKEN` secret set (user added it 2026-11-16); (2) ✅ forked a
+  `cicd/netsuite-test/phase1-smoke` branch off `cicd/netsuite`; (3) ✅ merged a trivial script change and
+  confirmed the run builds cgeaa, auths to `CG-intQA`, and `cgeaa netsuite deploy` scopes to exactly that
+  change (one script uploaded, `deploy.xml`/`manifest.xml` auto-generated), deploying to the sandbox
+  **with tests skipped** (`NDF_SKIP_TESTS=true`) — **Phase 1 proven 2026-11-16**, deploy mechanism only,
+  not the test gate (tests turn on in Phase 3, after the suite exists); **(4) REMAINING — negative test**:
+  a change referencing a missing object must fail loudly (no silent import, since the workflow passes no
+  `--source`/`--auto-import`); **(5) REMAINING — env cutovers**: cut over qa → staging (sandboxes only;
   `main`/prod gated per guardrail 3), deactivating the legacy `netsuite-deploy-scripts.yml` per env as
-  each is proven. Repin the workflow's CGEAA `ref` to a release tag before any `main` cutover.
+  each is proven. Repin the workflow's CGEAA `ref` to a release tag (or the current `main` SHA) before any
+  `main` cutover — it is pinned to rollout HEAD `b12e503` for the dev cycle.
 
 - **Scoped test execution — run only the Jest tests related to changed scripts (deploy/CI speedup).**
+  > **✅ DONE + VERIFIED ON ACTIONS 2026-11-17.** Producer: CGEAA `rollout` `e548a22` — NDF `deploy`
+  > exports `NDF_CHANGED_SCRIPTS` (absolute, newline-joined), sourced from `runBuild`'s returned
+  > `changedScripts` (single diff computation). Consumer: FinSys `cicd/netsuite` `48417e2f`/`65539245` —
+  > `suitecloud.config.js` branches on it (`findRelatedTests` / skip-on-empty / full-suite-when-absent).
+  > **AMD-`define` gap (found by adversarial review, HIGH) fixed:** jest-haste-map's default extractor
+  > ignores `define([...])` arrays, so a changed shared library would miss its consumer tests. Added
+  > FinSys `NetSuite/jest-amd-dependency-extractor.js` (custom `dependencyExtractor`, wired in
+  > `jest.config.js`) that parses `define([...])` deps → resolved via the SuiteCloud `moduleNameMapper`.
+  > **Verified in CI:** a changed script → only its own test (`1 suite`); a changed shared lib
+  > (`cg_email_library_ss.js`) → its test **+** the define-consumer `CG_VBJE_CS.test.js` (`2 suites`,
+  > transitive); an untested/object-only change → skip. Full suite still 9 suites / 58 tests green.
+  > Remaining: turn the gate on for qa/staging as those envs cut over (the gate itself is already on for
+  > `cicd/netsuite`).
+
   Today the FinSys `suitecloud.config.js` `beforeExecuting` hook runs the **whole** Jest suite on
   every `project:deploy` (`SuiteCloudJestUnitTestRunner.run({})`). As the suite grows (see FINT-17160)
   this makes every deploy/CI run slower than it needs to be. Run only the tests related to the
@@ -198,7 +364,7 @@ production opt-in. On `main` it uploads straight to the production account.)
   the FinSys/SuiteScript side, not CGEAA/NDF — listed here only because the two CI items above depend
   on it.
 
-- **✅ DONE ([FinSys] `cicd/netsuite` db0a5ad1 — local, pending push/MR) — Pin third-party GitHub Actions to commit SHAs in `netsuite-deploy-ndf.yml`.**
+- **✅ DONE ([FinSys] `cicd/netsuite` db0a5ad1, pushed to origin) — Pin third-party GitHub Actions to commit SHAs in `netsuite-deploy-ndf.yml`.**
   Semgrep Guardian flagged (2026-11-11, after rebasing `cicd/netsuite` onto `main`) four mutable
   action-tag references in FinSys `.github/workflows/netsuite-deploy-ndf.yml` — rule
   `github-actions-mutable-action-tag` (WARNING). A floating `@v5` tag can be silently repointed by the

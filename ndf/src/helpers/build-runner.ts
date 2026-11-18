@@ -1,7 +1,7 @@
-import { writeFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { getMergeBase, getChangedFiles, getCurrentBranch } from './git.js';
-import { generateDeployXml, generateManifestXml, objectIdFromPath } from './xml.js';
+import { generateDeployXml, generateManifestXml, objectIdFromPath, stripSelfProvidedDeps } from './xml.js';
 import { runSuitecloud } from './suitecloud.js';
 import { output } from './output.js';
 
@@ -12,6 +12,11 @@ export interface BuildOptions {
   base?: string;
 }
 
+export interface BuildResult {
+  /** The feature's changed SuiteScript paths (project-relative, `src/...`), from base..HEAD. */
+  changedScripts: string[];
+}
+
 export function warnIfSharedBranch(projectDir: string, base?: string): void {
   const SHARED_BRANCHES = new Set(['main', 'master', 'qa', 'uat', 'staging']);
   const currentBranch = getCurrentBranch(projectDir);
@@ -20,7 +25,7 @@ export function warnIfSharedBranch(projectDir: string, base?: string): void {
   }
 }
 
-export async function runBuild(opts: BuildOptions): Promise<void> {
+export async function runBuild(opts: BuildOptions): Promise<BuildResult> {
   const { projectDir, dryRun } = opts;
   const mergeBase = getMergeBase(projectDir, opts.base ?? 'main');
   const changed = getChangedFiles(projectDir, mergeBase);
@@ -42,7 +47,7 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
     console.log(deployXml);
     console.log('--- manifest.xml (dry run) ---');
     console.log(manifestXml);
-    return;
+    return { changedScripts: changed.scripts };
   }
 
   writeFileSync(join(projectDir, 'src', 'deploy.xml'), deployXml, 'utf-8');
@@ -53,5 +58,14 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
     throw new Error(`project:adddependencies failed:\n${dep.output}`);
   }
 
+  // adddependencies re-lists the objects we are SHIPPING under <dependencies><objects>, which fails
+  // account validation on any target that doesn't have them yet (first-time deploy / prod cutover):
+  // "manifest contains a dependency on <id>, but it is not in the account". Strip the self-provided
+  // ids — they ship in this deploy, not external deps. Genuine external deps stay. (FINT-17163)
+  const manifestPath = join(projectDir, 'src', 'manifest.xml');
+  const stripped = stripSelfProvidedDeps(readFileSync(manifestPath, 'utf-8'), objectIds);
+  writeFileSync(manifestPath, stripped, 'utf-8');
+
   output.success('deploy.xml and manifest.xml updated — review and commit them to your feature branch.');
+  return { changedScripts: changed.scripts };
 }
