@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 const mockReadFileSync = vi.hoisted(() => vi.fn());
 vi.mock('fs', () => ({ readFileSync: mockReadFileSync }));
 
-import { generateDeployXml, generateManifestXml, objectIdFromPath } from '../../helpers/xml.js';
+import { generateDeployXml, generateManifestXml, objectIdFromPath, stripSelfProvidedDeps } from '../../helpers/xml.js';
 
 describe('objectIdFromPath', () => {
   it('strips src/Objects/ prefix and .xml suffix', () => {
@@ -154,5 +154,94 @@ describe('sdfPath defensive throw', () => {
     const xml = generateDeployXml(['src/FileCabinet/SuiteScripts/foo.js'], []);
     expect(xml).toContain('~/FileCabinet/SuiteScripts/foo.js');
     expect(xml).not.toContain('src/FileCabinet');
+  });
+});
+
+describe('stripSelfProvidedDeps', () => {
+  const MANIFEST = `<manifest projecttype="ACCOUNTCUSTOMIZATION">
+  <projectname>NetSuite</projectname>
+  <frameworkversion>1.0</frameworkversion>
+  <dependencies>
+    <features>
+      <feature required="true">SERVERSIDESCRIPTING</feature>
+    </features>
+    <objects>
+      <object>customreport_1541_3595813_sb1_510</object>
+      <object>customlayout_11815_3595813_sb1_927</object>
+      <object>custrecord_external_dep</object>
+    </objects>
+    <files>
+      <file>/SuiteScripts/foo.js</file>
+    </files>
+  </dependencies>
+</manifest>`;
+
+  it('removes objects NDF is shipping but keeps genuine external deps', () => {
+    const out = stripSelfProvidedDeps(MANIFEST, [
+      'customreport_1541_3595813_sb1_510',
+      'customlayout_11815_3595813_sb1_927',
+    ]);
+    expect(out).not.toContain('<object>customreport_1541_3595813_sb1_510</object>');
+    expect(out).not.toContain('<object>customlayout_11815_3595813_sb1_927</object>');
+    expect(out).toContain('<object>custrecord_external_dep</object>'); // external dep preserved
+    expect(out).toContain('SERVERSIDESCRIPTING');                      // features untouched
+    expect(out).toContain('/SuiteScripts/foo.js');                     // files untouched
+  });
+
+  it('empties the objects block when every dep is self-provided (the FINT-17163 case)', () => {
+    const out = stripSelfProvidedDeps(MANIFEST, [
+      'customreport_1541_3595813_sb1_510',
+      'customlayout_11815_3595813_sb1_927',
+      'custrecord_external_dep',
+    ]);
+    expect(out).toContain('<objects></objects>');
+    expect(out).not.toContain('<object>');
+    expect(out).toContain('SERVERSIDESCRIPTING'); // rest of the manifest intact
+  });
+
+  it('returns the manifest unchanged when objectIds is empty', () => {
+    expect(stripSelfProvidedDeps(MANIFEST, [])).toBe(MANIFEST);
+  });
+
+  it('is a no-op when there is no objects block', () => {
+    const noObjects = '<manifest><dependencies><features></features><files></files></dependencies></manifest>';
+    expect(stripSelfProvidedDeps(noObjects, ['customreport_x'])).toBe(noObjects);
+  });
+
+  it('leaves the block intact when the self-provided id is not present', () => {
+    const out = stripSelfProvidedDeps(MANIFEST, ['customscript_not_here']);
+    expect(out).toContain('<object>custrecord_external_dep</object>');
+    expect(out).toContain('<object>customreport_1541_3595813_sb1_510</object>');
+  });
+
+  it('preserves an <object> entry that has attributes (removal-only — no data loss)', () => {
+    const manifest = `<manifest projecttype="ACCOUNTCUSTOMIZATION">
+  <dependencies>
+    <objects>
+      <object type="customrecordtype">custrecord_external_dep</object>
+      <object>customreport_1541_3595813_sb1_510</object>
+    </objects>
+  </dependencies>
+</manifest>`;
+    const out = stripSelfProvidedDeps(manifest, ['customreport_1541_3595813_sb1_510']);
+    expect(out).not.toContain('customreport_1541_3595813_sb1_510'); // self-provided stripped
+    // the attributed external dep must survive byte-for-byte (the bug: it used to vanish)
+    expect(out).toContain('<object type="customrecordtype">custrecord_external_dep</object>');
+  });
+
+  it('ignores a decoy <objects> substring outside <dependencies> (e.g. in a comment)', () => {
+    const manifest = `<manifest projecttype="ACCOUNTCUSTOMIZATION">
+  <!-- legacy note: once had <objects> here -->
+  <dependencies>
+    <objects>
+      <object>customreport_1541_3595813_sb1_510</object>
+      <object>custrecord_external_dep</object>
+    </objects>
+  </dependencies>
+</manifest>`;
+    const out = stripSelfProvidedDeps(manifest, ['customreport_1541_3595813_sb1_510']);
+    expect(out).toContain('<!-- legacy note: once had <objects> here -->'); // comment untouched
+    expect(out).not.toContain('<object>customreport_1541_3595813_sb1_510</object>'); // stripped
+    expect(out).toContain('<object>custrecord_external_dep</object>'); // external dep kept
   });
 });

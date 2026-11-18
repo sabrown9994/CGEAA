@@ -50,7 +50,19 @@ production deploy, which is blocked on valid production auth (see below).
 
 **Remaining:**
 
-- **🐞 BUG / 📣 USER ROLL-OUT FEEDBACK (RCA 2026-11-17) — `project:adddependencies` lists self-provided `reportdefinition`/`financiallayout` objects as account dependencies, breaking first-time deploys of reports/layouts.**
+- **✅ FIXED 2026-11-18 — NDF's manifest seeding left self-provided `reportdefinition`/`financiallayout` objects in `<dependencies><objects>`, breaking first-time deploys of reports/layouts.** (was 🐞 BUG / 📣 USER ROLL-OUT FEEDBACK, RCA 2026-11-17)
+
+  > **Resolved on CGEAA `rollout`.** Added `stripSelfProvidedDeps(manifestXml, objectIds)`
+  > (`src/helpers/xml.ts`), called by `runBuild` right after `project:adddependencies`, to remove from
+  > `<dependencies><objects>` any scriptid NDF is itself shipping. Implemented as a **removal-only**
+  > transform scoped to `<dependencies>` — an independent adversarial review caught that a naive
+  > rebuild-from-allowlist would (a) silently drop a genuine external dep carrying XML attributes and
+  > (b) corrupt the manifest on a decoy `<objects>` substring; both are avoided by deleting only the
+  > matched self-provided entries and leaving all other bytes intact. **Live-verified on CG-intQA with
+  > the FINT-17163 reports/layouts:** the pre-fix (seeded) manifest → `suitecloud project:validate`
+  > **FAILS** Step 17/18 with 4× *"dependency … not in the account"*; the fixed (stripped) manifest →
+  > **SUCCESS, 23/23 steps**. 120 NDF unit tests pass. FINT-17163 is unblocked. Full RCA + the original
+  > read-only evidence kept below.
 
   *Surfaced by real roll-out usage:* the team's first actual environment move through NDF (FINT-17163,
   StagingUAT→Production of two financial reports) — i.e. exactly the day-to-day manual use the roll-out

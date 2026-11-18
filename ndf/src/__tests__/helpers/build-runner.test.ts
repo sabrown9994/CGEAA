@@ -7,7 +7,9 @@ const mockGetCurrentBranch = vi.hoisted(() => vi.fn());
 const mockGenerateDeployXml = vi.hoisted(() => vi.fn());
 const mockGenerateManifestXml = vi.hoisted(() => vi.fn());
 const mockObjectIdFromPath = vi.hoisted(() => vi.fn());
+const mockStripSelfProvidedDeps = vi.hoisted(() => vi.fn());
 const mockWriteFileSync = vi.hoisted(() => vi.fn());
+const mockReadFileSync = vi.hoisted(() => vi.fn());
 const mockRunSuitecloud = vi.hoisted(() => vi.fn());
 
 vi.mock('../../helpers/git.js', () => ({
@@ -19,8 +21,9 @@ vi.mock('../../helpers/xml.js', () => ({
   generateDeployXml: mockGenerateDeployXml,
   generateManifestXml: mockGenerateManifestXml,
   objectIdFromPath: mockObjectIdFromPath,
+  stripSelfProvidedDeps: mockStripSelfProvidedDeps,
 }));
-vi.mock('fs', () => ({ writeFileSync: mockWriteFileSync }));
+vi.mock('fs', () => ({ writeFileSync: mockWriteFileSync, readFileSync: mockReadFileSync }));
 vi.mock('../../helpers/suitecloud.js', () => ({ runSuitecloud: mockRunSuitecloud }));
 
 import { runBuild, warnIfSharedBranch } from '../../helpers/build-runner.js';
@@ -32,6 +35,8 @@ beforeEach(() => {
   mockObjectIdFromPath.mockImplementation((p: string) => p);
   mockGenerateDeployXml.mockReturnValue('<deploy/>');
   mockGenerateManifestXml.mockReturnValue('<manifest/>');
+  mockReadFileSync.mockReturnValue('<manifest/>');
+  mockStripSelfProvidedDeps.mockImplementation((xml: string) => xml);
   mockRunSuitecloud.mockReturnValue({ status: 0, output: '' });
 });
 
@@ -39,6 +44,18 @@ describe('runBuild adddependencies', () => {
   it('runs project:adddependencies after writing files (non-dry-run)', async () => {
     await runBuild({ projectDir: '/proj', dryRun: false });
     expect(mockRunSuitecloud).toHaveBeenCalledWith(['project:adddependencies'], { cwd: '/proj' });
+  });
+
+  it('re-reads the manifest after adddependencies, strips self-provided object deps, and writes it back', async () => {
+    mockGetChangedFiles.mockReturnValue({ scripts: [], objects: ['src/Objects/customreport_x.xml'] });
+    mockObjectIdFromPath.mockImplementation((p: string) => p.replace(/^src\/Objects\//, '').replace(/\.xml$/, ''));
+    mockReadFileSync.mockReturnValue('<manifest-after-adddeps/>');
+    mockStripSelfProvidedDeps.mockReturnValue('<stripped-manifest/>');
+
+    await runBuild({ projectDir: '/proj', dryRun: false });
+
+    expect(mockStripSelfProvidedDeps).toHaveBeenCalledWith('<manifest-after-adddeps/>', ['customreport_x']);
+    expect(mockWriteFileSync).toHaveBeenCalledWith(join('/proj', 'src', 'manifest.xml'), '<stripped-manifest/>', 'utf-8');
   });
 
   it('does NOT run adddependencies on dry-run', async () => {
