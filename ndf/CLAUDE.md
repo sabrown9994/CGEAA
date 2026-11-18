@@ -88,7 +88,11 @@ see TODO.md.)
 
 NDF is wired into CI on the FinSys **`cicd/netsuite`** branch via
 `.github/workflows/netsuite-deploy-ndf.yml`, which runs `cgeaa netsuite deploy` on push to
-`qa`/`staging`/`cicd/netsuite`/`cicd/netsuite-test/**` (building NDF from a pinned CGEAA commit). It
+`qa`/`staging`/`cicd/netsuite`/`cicd/netsuite-test/**`. The NDF it builds is checked out from CGEAA at
+a **branch resolved per triggering branch** (no hand-bumped SHA): the dev-cycle branches
+(`cicd/netsuite` + `cicd/netsuite-test/**`) build CGEAA **`rollout`** (always the latest NDF under
+test), while every other branch (`qa`/`staging`/`main`) builds CGEAA **`main`** HEAD (the released
+state) — so NDF changes reach the real env branches by merging `rollout` → `main`. It
 feature-scopes scripts **and** objects from the git diff, enforces the production guard, and runs the
 SuiteCloud Jest hook. Gating has three layers:
 

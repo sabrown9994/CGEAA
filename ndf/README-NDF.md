@@ -252,9 +252,48 @@ the same value CI will pass as `${{ github.event.before }}`.
 > **Production is not yet wired into CI/CD.** The NDF CI workflow runs on the dev-cycle branches
 > (`qa`/`staging`/`cicd/netsuite*`) but deliberately omits `main` as a trigger and hard-refuses
 > `CG-Production` until the approved prod cutover — so merging to `main` does not auto-deploy, and the
-> manual command above is the only production path today. A production deploy also needs a valid
-> `CG-Production` auth token; if `suitecloud` falls back to browser re-authentication, refresh it first
-> with `suitecloud account:setup`. See [TODO.md](TODO.md) "User Roll-out" / "CI/CD Roadmap".
+> manual command above is the only production path today. See [TODO.md](TODO.md) "User Roll-out" /
+> "CI/CD Roadmap".
+
+### Interim manual production deploy — runbook (current user-rollout / pre-release state)
+
+Until the production cutover is approved and CI owns prod, a production move is done **by hand from your
+machine**, mirroring what the CI Action will eventually do on merge to `main`. Full procedure:
+
+1. **Update your local CLI to the latest NDF.** The installed `cgeaa` is a built *snapshot* — running
+   `cgeaa netsuite …` does **not** pick up repo changes until you update, and the current NDF work
+   (scoped tests; the `reportdefinition`/`financiallayout` manifest-dependency fix) is on `rollout`,
+   not `main`, yet:
+   ```bash
+   cgeaa update -b rollout      # plain `cgeaa update` targets main and won't have these until rollout → main merges
+   ```
+2. **Confirm `CG-Production` auth.** A prod deploy needs a valid production token; if `suitecloud` would
+   fall back to browser re-auth, refresh it first:
+   ```bash
+   suitecloud account:setup     # interactive; use account:setup:ci with a cert/key for headless runs
+   ```
+3. **Merge the feature to `main`** via a reviewed PR — prod deploys come from `main` only (the guard
+   refuses `CG-Production` from any other branch). Note the SHA `main` pointed at *before* the merge
+   (the "pre-merge SHA").
+4. **Pre-flight — read-only (recommended).** Validate against production without writing anything:
+   ```bash
+   # from main, through NDF's full build (generates + strips the manifest, then validates — no deploy):
+   cgeaa netsuite deploy --target CG-Production --base <pre-merge-SHA> --allow-production --dry-run
+   ```
+   To validate *before* merging to `main`, bypass the branch guard with raw
+   `suitecloud project:validate --server` and `project.json` `defaultAuthId: CG-Production` (this is how
+   the report/layout fix was verified against Production, read-only).
+5. **Deploy to production** — the real write, identical to what CI will do at cutover:
+   ```bash
+   git checkout main && git pull
+   cgeaa netsuite deploy --target CG-Production --base <pre-merge-SHA> --allow-production
+   ```
+   Without `--base <pre-merge-SHA>` the diff is empty on `main` and the deploy is a deliberate no-op
+   (see "Why `--base`" above).
+
+This runbook is **temporary**: at the production cutover the CI workflow (with `main` re-added as a
+trigger and the `CG-Production` mapping restored) performs step 5 automatically on merge to `main`,
+and your local CLI just needs `cgeaa update` (plain, from `main`) instead of `-b rollout`.
 
 ## How it fits into CGEAA
 
