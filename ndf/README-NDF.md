@@ -240,7 +240,8 @@ Production deploys happen from `main` after a reviewed merge — never from a fe
 ```bash
 # on main, after the feature PR has merged:
 git checkout main && git pull
-cgeaa netsuite deploy --target CG-Production --base <pre-merge-SHA> --allow-production
+# --skip-tests is INTERIM — until the FinSys Jest suite is merged into FinSys main (see the runbook note below):
+cgeaa netsuite deploy --target CG-Production --base <pre-merge-SHA> --allow-production --skip-tests
 ```
 
 Why `--base`: `build` computes its changeset as `git diff $(git merge-base <base> HEAD)..HEAD`, with
@@ -286,10 +287,18 @@ machine**, mirroring what the CI Action will eventually do on merge to `main`. F
 5. **Deploy to production** — the real write, identical to what CI will do at cutover:
    ```bash
    git checkout main && git pull
-   cgeaa netsuite deploy --target CG-Production --base <pre-merge-SHA> --allow-production
+   cgeaa netsuite deploy --target CG-Production --base <pre-merge-SHA> --allow-production --skip-tests
    ```
    Without `--base <pre-merge-SHA>` the diff is empty on `main` and the deploy is a deliberate no-op
    (see "Why `--base`" above).
+
+   **`--skip-tests` is interim.** A deploy from `main` runs `main`'s `suitecloud.config.js` Jest hook,
+   which today runs the **full, uncurated** suite — the scoped hook and the stale-test fixes live on
+   FinSys `cicd/netsuite`, not `main`, so the gate would run known-stale tests and block the deploy.
+   `main` already honors `NDF_SKIP_TESTS`, so `--skip-tests` cleanly bypasses it. **Drop `--skip-tests`
+   once the Jest suite is merged into FinSys `main`** (then the deploy-time gate runs the real suite,
+   as on the dev-cycle branches). The `--dry-run` pre-flight in step 4 doesn't run the hook at all
+   (validate-only), so it needs no flag.
 
 This runbook is **temporary**: at the production cutover the CI workflow (with `main` re-added as a
 trigger and the `CG-Production` mapping restored) performs step 5 automatically on merge to `main`,

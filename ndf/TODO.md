@@ -243,6 +243,15 @@ production opt-in. On `main` it uploads straight to the production account.)
   **scoped test execution** (`NDF_CHANGED_SCRIPTS` → `jest --findRelatedTests` + the AMD-`define`
   dependency extractor), the `netsuite-jest.yml` PR full-suite check, and the production cutover model.
 
+- **[ACTION — when the FinSys Jest suite lands on `main`] Drop the interim `--skip-tests` from the
+  manual production-deploy runbook.** While the curated Jest suite (scoped hook, stale-test fixes,
+  AMD-`define` extractor) lives only on FinSys `cicd/netsuite`, the documented manual prod deploy
+  (`ndf/README-NDF.md` → "Interim manual production deploy") passes `--skip-tests` — a deploy from
+  `main` otherwise runs `main`'s full, uncurated suite (known-stale tests) and would block. `main`
+  already honors `NDF_SKIP_TESTS`, so the flag is effective. Once `cicd/netsuite` → `main` merges (so
+  `main` carries the real suite + the `NDF_CHANGED_SCRIPTS` scoped hook), **remove `--skip-tests` from
+  both prod-deploy commands in that runbook** so production runs the (scoped) gate like every other env.
+
 - **GitHub Action that uses NDF for script *and* object deployment; retire the existing file-upload
   workflow.** Build a CI pipeline that runs `cgeaa netsuite deploy` on merges to FinSys environment
   branches, so deploys go through NDF's feature-scoped build (scripts **and** `src/Objects/**`),
